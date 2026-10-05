@@ -14,11 +14,10 @@
 """
 Unit tests for Hartree-Fock functions.
 """
-
 # pylint: disable=too-many-arguments,too-few-public-methods
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
 from pennylane import qchem
 
@@ -78,16 +77,6 @@ def test_scf(symbols, geometry, v_fock, coeffs, fock_matrix, h_core, repulsion_t
     assert np.allclose(f, fock_matrix)
     assert np.allclose(h, h_core)
     assert np.allclose(e, repulsion_tensor)
-
-
-def test_scf_openshell_error():
-    r"""Test that scf raises an error when an open-shell molecule is provided."""
-    symbols = ["H", "H", "H"]
-    geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]], requires_grad=False)
-    mol = qchem.Molecule(symbols, geometry)
-
-    with pytest.raises(ValueError, match="Open-shell systems are not supported."):
-        qchem.scf(mol)()
 
 
 @pytest.mark.parametrize(
@@ -215,7 +204,7 @@ def test_hf_energy_gradient(symbols, geometry, g_ref):
     correct."""
     mol = qchem.Molecule(symbols, geometry)
     args = [mol.coordinates]
-    g = qp.grad(qchem.hf_energy(mol))(*args)
+    g = qml.grad(qchem.hf_energy(mol))(*args)
 
     assert np.allclose(g, g_ref)
 
@@ -269,94 +258,31 @@ def test_nuclear_energy_gradient(symbols, geometry, g_ref):
     r"""Test that nuclear energy gradients are correct."""
     mol = qchem.Molecule(symbols, geometry)
     args = [mol.coordinates]
-    g = qp.grad(qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates))(*args)
+    g = qml.grad(qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates))(*args)
     assert np.allclose(g, g_ref)
 
 
-@pytest.mark.jax
 class TestJax:
     @pytest.mark.parametrize(
-        ("symbols", "geometry", "e_ref"),
-        [
-            # e_repulsion = \sum_{ij} (q_i * q_j / r_{ij})
-            (
-                ["H", "H"],
-                np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
-                np.array([1.0]),
-            ),
-            (
-                ["H", "F"],
-                np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
-                np.array([4.5]),
-            ),
-            (
-                ["H", "O", "H"],
-                np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
-                np.array([16.707106781186546]),
-            ),
-        ],
-    )
-    def test_nuclear_energy_jax(self, symbols, geometry, e_ref):
-        r"""Test that nuclear_energy returns the correct energy when using jax."""
-        geometry = qp.math.array(geometry, like="jax")
-        mol = qchem.Molecule(symbols, geometry)
-        args = [mol.coordinates]
-        e = qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates)(*args)
-        assert qp.math.allclose(e, e_ref)
-
-    @pytest.mark.parametrize(
-        ("symbols", "geometry", "g_ref"),
-        [
-            # gradient = d(q_i * q_j / (xi - xj)) / dxi, ...
-            (
-                ["H", "H"],
-                [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-                [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]],
-            ),
-            (
-                ["H", "F"],
-                [[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
-                [[0.0, 0.0, 2.25], [0.0, 0.0, -2.25]],
-            ),
-        ],
-    )
-    def test_nuclear_energy_gradient_jax(self, symbols, geometry, g_ref):
-        r"""Test that nuclear energy gradients are correct for jax."""
-        import jax
-
-        geometry = qp.math.array(geometry, like="jax")
-        mol = qchem.Molecule(symbols, geometry)
-        args = [geometry, mol.coeff, mol.alpha]
-        g = jax.jacobian(qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates), argnums=0)(
-            *args
-        )
-        assert qp.math.allclose(g, g_ref)
-
-    @pytest.mark.parametrize(
         ("symbols", "geometry", "g_ref"),
         [
             (
                 ["H", "H"],
-                [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], requires_grad=True),
                 # HF gradient computed with pyscf using rnuc_grad_method().kernel()
-                [[0.0, 0.0, 0.3650435], [0.0, 0.0, -0.3650435]],
-            ),
-            (
-                ["H", "Li"],
-                [[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
-                # HF gradient computed with pyscf using rnuc_grad_method().kernel()
-                [[0.0, 0.0, 0.21034957], [0.0, 0.0, -0.21034957]],
+                np.array([[0.0, 0.0, 0.3650435], [0.0, 0.0, -0.3650435]]),
             ),
         ],
     )
-    def test_hf_energy_gradient_jax(self, symbols, geometry, g_ref):
+    @pytest.mark.jax
+    def test_hf_energy_gradient(self, symbols, geometry, g_ref):
         r"""Test that the gradient of the Hartree-Fock energy wrt differentiable parameters is
-        correct with jax."""
+        correct."""
         import jax
 
-        geometry = qp.math.array(geometry, like="jax")
-
         mol = qchem.Molecule(symbols, geometry)
-        args = [geometry, mol.coeff, mol.alpha]
-        g = jax.grad(qchem.hf_energy(mol), argnums=[0])(*args)[0]
-        assert qp.math.allclose(g, g_ref)
+        args = [jax.numpy.array(mol.coordinates)]
+        g = jax.grad(qchem.hf_energy(mol))(*args)
+        g_ref = jax.numpy.array(g_ref)
+
+        assert np.allclose(g, g_ref)

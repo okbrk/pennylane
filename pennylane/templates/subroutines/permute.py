@@ -15,16 +15,8 @@ r"""
 Contains the Permute template.
 """
 
-import copy
-from collections import Counter
-
-from jax import numpy as jnp
-
-from pennylane import capture
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops import SWAP, cond
-from pennylane.wires import Wires
+from pennylane.operation import Operation, AnyWires
+from pennylane.ops import SWAP
 
 
 class Permute(Operation):
@@ -44,15 +36,15 @@ class Permute(Operation):
 
     .. code-block:: python
 
-        import pennylane as qp
+        import pennylane as qml
 
-        dev = qp.device('default.qubit', wires=5)
+        dev = qml.device('default.qubit', wires=5)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def apply_perm():
             # Send contents of wire 4 to wire 0, of wire 2 to wire 1, etc.
-            qp.templates.Permute([4, 2, 0, 1, 3], wires=dev.wires)
-            return qp.expval(qp.Z(0))
+            qml.templates.Permute([4, 2, 0, 1, 3], wires=dev.wires)
+            return qml.expval(qml.Z(0))
 
     See "Usage Details" for further examples.
 
@@ -66,14 +58,14 @@ class Permute(Operation):
 
         .. code-block:: python
 
-            dev = qp.device('default.qubit', wires=4)
+            dev = qml.device('default.qubit', wires=4)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def apply_perm():
-                qp.Permute([3, 2, 0, 1], dev.wires)
-                return qp.expval(qp.Z(0))
+                qml.Permute([3, 2, 0, 1], dev.wires)
+                return qml.expval(qml.Z(0))
 
-        >>> print(qp.draw(apply_perm, level="device")())
+        >>> print(qml.draw(apply_perm, expansion_strategy="device")())
         0: ─╭SWAP─────────────┤  <Z>
         1: ─│─────╭SWAP───────┤
         2: ─│─────╰SWAP─╭SWAP─┤
@@ -86,13 +78,13 @@ class Permute(Operation):
 
         .. code-block:: python
 
-            import pennylane as qp
+            import pennylane as qml
 
-            op = qp.Permute([4, 2, 0, 1, 3], wires=[0, 1, 2, 3, 4])
-            tape = qp.tape.QuantumTape([op])
+            op = qml.Permute([4, 2, 0, 1, 3], wires=[0, 1, 2, 3, 4])
+            tape = qml.tape.QuantumTape([op])
 
-        >>> [tape_expanded], _ = qp.decompose(tape, gate_set={qp.SWAP})
-        >>> print(qp.drawer.tape_text(tape_expanded, wire_order=range(5)))
+        >>> tape_expanded = qml.tape.tape.expand_tape(tape)
+        >>> print(qml.drawer.tape_text(tape_expanded, wire_order=range(5)))
         0: ─╭SWAP───────────────────┤
         1: ─│─────╭SWAP─────────────┤
         2: ─│─────╰SWAP─╭SWAP───────┤
@@ -105,16 +97,16 @@ class Permute(Operation):
 
             wire_labels = [3, 2, "a", 0, "c"]
 
-            dev = qp.device('default.qubit', wires=wire_labels)
+            dev = qml.device('default.qubit', wires=wire_labels)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit():
-                qp.Permute(["c", 3,"a",2,0], wires=wire_labels)
-                return qp.expval(qp.Z("c"))
+                qml.Permute(["c", 3,"a",2,0], wires=wire_labels)
+                return qml.expval(qml.Z("c"))
 
         The permuted circuit is:
 
-        >>> print(qp.draw(circuit, level="device")())
+        >>> print(qml.draw(circuit, expansion_strategy="device")())
         3: ─╭SWAP─────────────┤
         2: ─│─────╭SWAP───────┤
         0: ─│─────│─────╭SWAP─┤
@@ -127,17 +119,17 @@ class Permute(Operation):
 
             wire_labels = [3, 2, "a", 0, "c"]
 
-            dev = qp.device('default.qubit', wires=wire_labels)
+            dev = qml.device('default.qubit', wires=wire_labels)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit():
                 # Only permute the order of 3 of them
-                qp.Permute(["c", 2, 0], wires=[2, 0, "c"])
-                return qp.expval(qp.Z("c"))
+                qml.Permute(["c", 2, 0], wires=[2, 0, "c"])
+                return qml.expval(qml.Z("c"))
 
         will permute only the second, third, and fifth wires as follows:
 
-        >>> print(qp.draw(circuit, level="device", show_all_wires=True)())
+        >>> print(qml.draw(circuit, expansion_strategy="device", show_all_wires=True)())
         3: ─────────────┤
         2: ─╭SWAP───────┤
         a: ─│───────────┤
@@ -147,13 +139,12 @@ class Permute(Operation):
     """
 
     def __repr__(self):
-        return f"Permute({self.hyperparameters['permutation']}, wires={self.wires})"
+        return f"Permute({self.hyperparameters['permutation']}, wires={self.wires.tolist()})"
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"wires", "permutation"}
-
-    def __init__(self, permutation, wires):
+    def __init__(self, permutation, wires, id=None):
         if len(permutation) <= 1 or len(wires) <= 1:
             raise ValueError("Permutations must involve at least 2 qubits.")
 
@@ -171,23 +162,7 @@ class Permute(Operation):
                 raise ValueError(f"Cannot permute wire {label} not present in wire set.")
 
         self._hyperparameters = {"permutation": tuple(permutation)}
-        super().__init__(wires=wires)
-
-    def map_wires(self, wire_map: dict):
-        # pylint: disable=protected-access
-        new_op = copy.deepcopy(self)
-        new_op._wires = Wires([wire_map.get(wire, wire) for wire in self.wires])
-        new_op._hyperparameters["permutation"] = tuple(
-            wire_map.get(w, w) for w in new_op._hyperparameters["permutation"]
-        )
-        return new_op
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "permutation": self.hyperparameters["permutation"],
-            "wires": self.wires,
-        }
+        super().__init__(wires=wires, id=id)
 
     @property
     def num_params(self):
@@ -231,66 +206,3 @@ class Permute(Operation):
                     working_order[idx_here],
                 )
         return op_list
-
-
-def _permute_resources(wires, permutation):
-    resources = Counter()
-    working_order = wires.tolist()
-
-    for idx_here, here in enumerate(permutation):
-        if working_order[idx_here] != here:
-            idx_there = working_order.index(permutation[idx_here])
-
-            resources[SWAP] += 1
-
-            working_order[idx_here], working_order[idx_there] = (
-                working_order[idx_there],
-                working_order[idx_here],
-            )
-
-    return dict(resources)
-
-
-@register_resources(_permute_resources)
-def _permute_decomposition(wires, permutation):
-    # Temporary storage to keep track as we permute
-    working_order = wires.tolist()
-
-    if capture.enabled():
-        # The swap index is traced inside ``cond``. JAX arrays support indexing with that
-        # tracer and the functional updates needed to carry the new order between branches.
-        wires = jnp.array(wires)
-        working_order = wires
-
-        for idx_here, here in enumerate(permutation):
-
-            def swap(order, idx_here=idx_here, here=here):
-                idx_there = jnp.argmax(order == here)
-                SWAP(wires=[wires[idx_here], wires[idx_there]])
-
-                here_value = order[idx_here]
-                order = order.at[idx_here].set(order[idx_there])
-                return order.at[idx_there].set(here_value)
-
-            working_order = cond(working_order[idx_here] != here, swap, lambda order: order)(
-                working_order
-            )
-        return
-
-    # Go through the new order and shuffle things one by one
-    for idx_here, here in enumerate(permutation):
-        if working_order[idx_here] != here:
-            # Where do we need to send the qubit at this location?
-            idx_there = working_order.index(permutation[idx_here])
-
-            # SWAP based on the labels of the wires
-            SWAP(wires=wires.subset([idx_here, idx_there]))
-
-            # Update the working order to account for the SWAP
-            working_order[idx_here], working_order[idx_there] = (
-                working_order[idx_there],
-                working_order[idx_here],
-            )
-
-
-add_decomps(Permute, _permute_decomposition)

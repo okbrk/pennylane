@@ -14,16 +14,14 @@
 """
 Unit tests for the :mod:`pennylane` kernels module.
 """
-
 # pylint: disable=import-outside-toplevel
 import math
 import sys
 from functools import partial
 
-import numpy as np
 import pytest
-
-import pennylane as qp
+import numpy as np
+import pennylane as qml
 import pennylane.kernels as kern
 from pennylane import numpy as pnp
 
@@ -33,8 +31,8 @@ def fixture_cvxpy_support():
     """Fixture to determine whether cvxpy and cvxopt are installed."""
     # pylint: disable=unused-import
     try:
-        import cvxopt
         import cvxpy
+        import cvxopt
 
         cvxpy_support = True
     except ModuleNotFoundError:
@@ -71,12 +69,12 @@ def _laplace_kernel(x1, x2, batch=None):
 
 def _diffable_kernel(x1, x2):
     """A differentiable kernel"""
-    return qp.math.exp(-((x1 - x2) ** 2))
+    return qml.math.exp(-((x1 - x2) ** 2))
 
 
 def _jacobian_of_diffable_kernel(x1, x2):
     """Analytic Jacobian of diffable_kernel"""
-    return -2 * (x1 - x2) * qp.math.exp(-((x1 - x2) ** 2))
+    return -2 * (x1 - x2) * qml.math.exp(-((x1 - x2) ** 2))
 
 
 class TestKernelMatrix:
@@ -109,15 +107,15 @@ class TestKernelMatrix:
 
         K1 = kern.square_kernel_matrix(X, partial(_mock_kernel, history=hist), True)
         assert not hist
-        assert qp.math.array_equal(K1, np.eye(1))
+        assert qml.math.array_equal(K1, np.eye(1))
         K2 = kern.square_kernel_matrix(X, partial(_mock_kernel, history=hist), False)
         assert hist == [(0.1, 0.1)]
-        assert qp.math.array_equal(K2, np.eye(1))
+        assert qml.math.array_equal(K2, np.eye(1))
         # When not using assume_normalized_kernel, also test batching
         hist = []
         K3 = kern.square_kernel_matrix(X, partial(_mock_kernel, history=hist, batch=4), False)
         assert hist == [(0.1, 0.1)]
-        assert qp.math.array_equal(K3, np.array([[[val]] for val in np.linspace(1, 5, 4)]))
+        assert qml.math.array_equal(K3, np.array([[[val]] for val in np.linspace(1, 5, 4)]))
 
     @pytest.mark.parametrize("batch", [None, 1, 4])
     def test_laplace_kernel(self, batch):
@@ -170,17 +168,17 @@ class TestKernelMatrix:
         K2 = kern.kernel_matrix(X1, X2, _diffable_kernel)
         K3 = kern.square_kernel_matrix(X1, _diffable_kernel, True)
 
-        assert qp.math.allclose(K1, self.expected_K1)
-        assert qp.math.allclose(K2, self.expected_K2)
-        assert qp.math.allclose(K3, self.expected_K3)
+        assert qml.math.allclose(K1, self.expected_K1)
+        assert qml.math.allclose(K2, self.expected_K2)
+        assert qml.math.allclose(K3, self.expected_K3)
 
-        dK1 = qp.jacobian(kern.square_kernel_matrix, argnums=0)(X1, _diffable_kernel, False)
-        assert qp.math.allclose(dK1, self.expected_dK1)
-        dK2 = qp.jacobian(kern.kernel_matrix, argnums=(0, 1))(X1, X2, _diffable_kernel)
-        assert qp.math.allclose(dK2[0], self.expected_dK2[0])
-        assert qp.math.allclose(dK2[1], self.expected_dK2[1])
-        dK3 = qp.jacobian(kern.square_kernel_matrix, argnums=0)(X1, _diffable_kernel, True)
-        assert qp.math.allclose(dK3, self.expected_dK3)
+        dK1 = qml.jacobian(kern.square_kernel_matrix, argnum=0)(X1, _diffable_kernel, False)
+        assert qml.math.allclose(dK1, self.expected_dK1)
+        dK2 = qml.jacobian(kern.kernel_matrix, argnum=(0, 1))(X1, X2, _diffable_kernel)
+        assert qml.math.allclose(dK2[0], self.expected_dK2[0])
+        assert qml.math.allclose(dK2[1], self.expected_dK2[1])
+        dK3 = qml.jacobian(kern.square_kernel_matrix, argnum=0)(X1, _diffable_kernel, True)
+        assert qml.math.allclose(dK3, self.expected_dK3)
 
     @pytest.mark.jax
     def test_jax(self):
@@ -196,17 +194,17 @@ class TestKernelMatrix:
         K2 = kern.kernel_matrix(X1, X2, _diffable_kernel)
         K3 = kern.square_kernel_matrix(X1, _diffable_kernel, True)
 
-        assert qp.math.allclose(K1, self.expected_K1)
-        assert qp.math.allclose(K2, self.expected_K2)
-        assert qp.math.allclose(K3, self.expected_K3)
+        assert qml.math.allclose(K1, self.expected_K1)
+        assert qml.math.allclose(K2, self.expected_K2)
+        assert qml.math.allclose(K3, self.expected_K3)
 
         dK1 = jax.jacobian(kern.square_kernel_matrix, argnums=0)(X1, _diffable_kernel, False)
-        assert qp.math.allclose(dK1, self.expected_dK1)
+        assert qml.math.allclose(dK1, self.expected_dK1)
         dK2 = jax.jacobian(kern.kernel_matrix, argnums=(0, 1))(X1, X2, _diffable_kernel)
-        assert qp.math.allclose(dK2[0], self.expected_dK2[0])
-        assert qp.math.allclose(dK2[1], self.expected_dK2[1])
+        assert qml.math.allclose(dK2[0], self.expected_dK2[0])
+        assert qml.math.allclose(dK2[1], self.expected_dK2[1])
         dK3 = jax.jacobian(kern.square_kernel_matrix, argnums=0)(X1, _diffable_kernel, True)
-        assert qp.math.allclose(dK3, self.expected_dK3)
+        assert qml.math.allclose(dK3, self.expected_dK3)
 
     @pytest.mark.torch
     def test_torch(self):
@@ -219,9 +217,9 @@ class TestKernelMatrix:
         K2 = kern.kernel_matrix(X1, X2, _diffable_kernel)
         K3 = kern.square_kernel_matrix(X1, _diffable_kernel, True)
 
-        assert qp.math.allclose(K1, self.expected_K1)
-        assert qp.math.allclose(K2, self.expected_K2)
-        assert qp.math.allclose(K3, self.expected_K3)
+        assert qml.math.allclose(K1, self.expected_K1)
+        assert qml.math.allclose(K2, self.expected_K2)
+        assert qml.math.allclose(K3, self.expected_K3)
 
         jac = torch.autograd.functional.jacobian
         dK1 = jac(
@@ -232,10 +230,10 @@ class TestKernelMatrix:
             ),
             X1,
         )
-        assert qp.math.allclose(dK1, self.expected_dK1)
+        assert qml.math.allclose(dK1, self.expected_dK1)
         dK2 = jac(partial(kern.kernel_matrix, kernel=_diffable_kernel), (X1, X2))
-        assert qp.math.allclose(dK2[0], self.expected_dK2[0])
-        assert qp.math.allclose(dK2[1], self.expected_dK2[1])
+        assert qml.math.allclose(dK2[0], self.expected_dK2[0])
+        assert qml.math.allclose(dK2[1], self.expected_dK2[1])
         dK3 = jac(
             partial(
                 kern.square_kernel_matrix,
@@ -244,7 +242,31 @@ class TestKernelMatrix:
             ),
             X1,
         )
-        assert qp.math.allclose(dK3, self.expected_dK3)
+        assert qml.math.allclose(dK3, self.expected_dK3)
+
+    @pytest.mark.tf
+    def test_tf(self):
+        """Test differentiability of the kernel matrix methods with Tensorflow."""
+        import tensorflow as tf
+
+        X1 = tf.Variable(self.X1)
+        X2 = tf.Variable(self.X2)
+        with tf.GradientTape(persistent=True) as tape:
+            K1 = kern.square_kernel_matrix(X1, _diffable_kernel, False)
+            K2 = kern.kernel_matrix(X1, X2, _diffable_kernel)
+            K3 = kern.square_kernel_matrix(X1, _diffable_kernel, True)
+
+        assert qml.math.allclose(K1, self.expected_K1)
+        assert qml.math.allclose(K2, self.expected_K2)
+        assert qml.math.allclose(K3, self.expected_K3)
+
+        dK1 = tape.jacobian(K1, X1)
+        assert qml.math.allclose(dK1, self.expected_dK1)
+        dK2 = tape.jacobian(K2, (X1, X2))
+        assert qml.math.allclose(dK2[0], self.expected_dK2[0])
+        assert qml.math.allclose(dK2[1], self.expected_dK2[1])
+        dK3 = tape.jacobian(K3, X1)
+        assert qml.math.allclose(dK3, self.expected_dK3)
 
 
 class TestKernelPolarity:
@@ -535,7 +557,7 @@ class TestRegularization:
         except cp.error.SolverError:
             pytest.skip(
                 "The cvxopt solver seems to not be installed on the system."
-                "It is the default solver for qp.kernels.closest_psd_matrix"
+                "It is the default solver for qml.kernels.closest_psd_matrix"
                 " and can be installed via `pip install cvxopt`."
             )
 
@@ -548,6 +570,8 @@ class TestRegularization:
 
         The small perturbation ensures that the solver does not get stuck.
         """
+        if sys.version_info.minor > 11:
+            pytest.xfail("Test does not converge with Python 3.12")
         input, fix_diagonal, expected_output = (
             np.array([[0, 1.000001], [1, 0]]),
             True,
@@ -556,14 +580,11 @@ class TestRegularization:
         try:
             import cvxpy as cp
 
-            # The feastol is more tolerant than `test_closest_psd_matrix`
-            # Because 1e-10 made the test numerically unstable and it failed when run on different Python versions
-            # or different Hardware (e.g. local machine vs CI)
-            output = kern.closest_psd_matrix(input, fix_diagonal=fix_diagonal, feastol=2e-10)
+            output = kern.closest_psd_matrix(input, fix_diagonal=fix_diagonal, feastol=1e-10)
         except cp.error.SolverError:
             pytest.skip(
                 "The cvxopt solver seems to not be installed on the system."
-                "It is the default solver for qp.kernels.closest_psd_matrix"
+                "It is the default solver for qml.kernels.closest_psd_matrix"
                 " and can be installed via `pip install cvxopt`."
             )
 
@@ -693,7 +714,7 @@ class TestErrorForNonRealistic:
         with pytest.raises(
             ValueError, match="Incorrect noise depolarization mitigation method specified"
         ):
-            qp.kernels.mitigate_depolarizing_noise(np.array([0]), 4, method="some_dummy_strat")
+            qml.kernels.mitigate_depolarizing_noise(np.array([0]), 4, method="some_dummy_strat")
 
     def test_mitigate_depolarizing_noise_average_method_error(self):
         """Test that an error is raised when using the average method for the
@@ -702,35 +723,35 @@ class TestErrorForNonRealistic:
         num_wires = 6
         wires = range(num_wires)
 
-        dev = qp.device("default.qubit", wires=num_wires)
+        dev = qml.device("default.qubit", wires=num_wires)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def kernel_circuit(x1, x2):
-            qp.templates.AngleEmbedding(x1, wires=wires)
-            qp.adjoint(qp.templates.AngleEmbedding)(x2, wires=wires)
-            return qp.probs(wires)
+            qml.templates.AngleEmbedding(x1, wires=wires)
+            qml.adjoint(qml.templates.AngleEmbedding)(x2, wires=wires)
+            return qml.probs(wires)
 
         def kernel(x1, x2):
             return kernel_circuit(x1, x2)[0]
 
         # "Training feature vectors"
-        X_train = qp.numpy.tensor(
+        X_train = qml.numpy.tensor(
             [[0.73096199, 0.19012506, 0.57223395], [0.78126872, 0.53535039, 0.31160784]],
             requires_grad=True,
         )
 
         # Create symmetric square kernel matrix (for training)
-        K = qp.kernels.square_kernel_matrix(X_train, kernel)
+        K = qml.kernels.square_kernel_matrix(X_train, kernel)
 
         # Add some (symmetric) Gaussian noise to the kernel matrix.
-        N = qp.numpy.tensor(
+        N = qml.numpy.tensor(
             [[-2.33010045, -2.22195441], [-0.40680862, 0.21785961]], requires_grad=True
         )
         K += (N + N.T) / 2
         with pytest.raises(
             ValueError, match="The average noise mitigation method cannot be applied"
         ):
-            qp.kernels.mitigate_depolarizing_noise(K, num_wires, method="average")
+            qml.kernels.mitigate_depolarizing_noise(K, num_wires, method="average")
 
     @pytest.mark.parametrize(
         "msg, method", [("single", "single"), ("split channel", "split_channel")]
@@ -742,28 +763,28 @@ class TestErrorForNonRealistic:
         num_wires = 6
         wires = range(num_wires)
 
-        dev = qp.device("default.qubit", wires=num_wires)
+        dev = qml.device("default.qubit", wires=num_wires)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def kernel_circuit(x1, x2):
-            qp.templates.AngleEmbedding(x1, wires=wires)
-            qp.adjoint(qp.templates.AngleEmbedding)(x2, wires=wires)
-            return qp.probs(wires)
+            qml.templates.AngleEmbedding(x1, wires=wires)
+            qml.adjoint(qml.templates.AngleEmbedding)(x2, wires=wires)
+            return qml.probs(wires)
 
         def kernel(x1, x2):
             return kernel_circuit(x1, x2)[0]
 
         # "Training feature vectors"
-        X_train = qp.numpy.tensor(
+        X_train = qml.numpy.tensor(
             [[0.39375865, 0.50895605, 0.30720779], [0.34389837, 0.7043728, 0.40067889]],
             requires_grad=True,
         )
 
         # Create symmetric square kernel matrix (for training)
-        K = qp.kernels.square_kernel_matrix(X_train, kernel)
+        K = qml.kernels.square_kernel_matrix(X_train, kernel)
 
         # Add some (symmetric) Gaussian noise to the kernel matrix.
-        N = qp.numpy.tensor(
+        N = qml.numpy.tensor(
             [[-1.15035284, 0.36726945], [0.26436627, -0.59287149]], requires_grad=True
         )
         K += (N + N.T) / 2
@@ -771,4 +792,4 @@ class TestErrorForNonRealistic:
         with pytest.raises(
             ValueError, match=f"The {msg} noise mitigation method cannot be applied"
         ):
-            qp.kernels.mitigate_depolarizing_noise(K, num_wires, method=method)
+            qml.kernels.mitigate_depolarizing_noise(K, num_wires, method=method)

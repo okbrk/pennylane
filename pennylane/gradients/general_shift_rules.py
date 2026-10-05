@@ -14,7 +14,6 @@
 """Contains a function for generating generalized parameter shift rules and
 helper methods for processing shift rules as well as for creating tapes with
 shifted parameters."""
-
 import functools
 import itertools
 import numbers
@@ -22,14 +21,10 @@ import warnings
 
 import numpy as np
 from scipy.linalg import solve as linalg_solve
-
-from pennylane import math
-from pennylane.core.measurements import MeasurementProcess
-from pennylane.core.qscript import QuantumScript
+import pennylane as qml
+from pennylane.measurements import MeasurementProcess
 from pennylane.ops.functions import bind_new_parameters
-
-#: Threshold for identifying singular matrices in non-equidistant shift rules.
-_SINGULAR_MATRIX_THRESHOLD = 1e-6
+from pennylane.tape import QuantumScript
 
 
 def process_shifts(rule, tol=1e-10, batch_duplicates=True):
@@ -63,7 +58,6 @@ def process_shifts(rule, tol=1e-10, batch_duplicates=True):
 
     - Finally, the terms are sorted according to the absolute value of ``shift``,
       This ensures that a zero-shift term, if it exists, is returned first.
-      For equal absolute values of two shifts, the positive shift is sorted to come first.
     """
     # set all small coefficients, multipliers if present, and shifts to zero.
     rule[np.abs(rule) < tol] = 0
@@ -83,12 +77,11 @@ def process_shifts(rule, tol=1e-10, batch_duplicates=True):
             coeffs = [np.sum(rule[slc, 0]) for slc in matches.T]
             rule = np.hstack([np.stack(coeffs)[:, np.newaxis], unique_mods])
 
-    # sort columns according to abs(shift), ties are resolved with the sign,
-    # positive shifts being returned before negative shifts.
-    return rule[np.lexsort((-np.sign(rule[:, -1]), np.abs(rule[:, -1])))]
+    # sort columns according to abs(shift)
+    return rule[np.argsort(np.abs(rule[:, -1]), kind="stable")]
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def eigvals_to_frequencies(eigvals):
     r"""Convert an eigenvalue spectrum to frequency values, defined
     as the the set of positive, unique differences of the eigenvalues in the spectrum.
@@ -109,7 +102,7 @@ def eigvals_to_frequencies(eigvals):
     return tuple({j - i for i, j in itertools.combinations(unique_eigvals, 2)})
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def frequencies_to_period(frequencies, decimals=5):
     r"""Returns the period of a Fourier series as defined
     by a set of frequencies.
@@ -143,10 +136,10 @@ def frequencies_to_period(frequencies, decimals=5):
     return 2 * np.pi / gcd
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def _get_shift_rule(frequencies, shifts=None):
     n_freqs = len(frequencies)
-    frequencies = math.sort(math.stack(frequencies))
+    frequencies = qml.math.sort(qml.math.stack(frequencies))
     freq_min = frequencies[0]
 
     if len(set(frequencies)) != n_freqs or freq_min <= 0:
@@ -160,7 +153,7 @@ def _get_shift_rule(frequencies, shifts=None):
         shifts = (2 * mu - 1) * np.pi / (2 * n_freqs * freq_min)
         equ_shifts = True
     else:
-        shifts = math.sort(math.stack(shifts))
+        shifts = qml.math.sort(qml.math.stack(shifts))
         if len(shifts) != n_freqs:
             raise ValueError(
                 f"Expected number of shifts to equal the number of frequencies ({n_freqs}), instead got {shifts}."
@@ -180,7 +173,7 @@ def _get_shift_rule(frequencies, shifts=None):
     else:  # non-equidistant case
         sin_matrix = -4 * np.sin(np.outer(shifts, frequencies))
         det_sin_matrix = np.linalg.det(sin_matrix)
-        if abs(det_sin_matrix) < _SINGULAR_MATRIX_THRESHOLD:
+        if abs(det_sin_matrix) < 1e-6:
             warnings.warn(
                 f"Solving linear problem with near zero determinant ({det_sin_matrix}) "
                 "may give unstable results for the parameter shift rules."
@@ -189,7 +182,7 @@ def _get_shift_rule(frequencies, shifts=None):
         coeffs = -2 * linalg_solve(sin_matrix.T, frequencies)
 
     coeffs = np.concatenate((coeffs, -coeffs))
-    shifts = np.concatenate((shifts, -shifts))
+    shifts = np.concatenate((shifts, -shifts))  # pylint: disable=invalid-unary-operand-type
     return np.stack([coeffs, shifts]).T
 
 
@@ -201,7 +194,7 @@ def _iterate_shift_rule_with_multipliers(rule, order, period):
     for partial_rules in itertools.product(rule, repeat=order):
         c, m, s = np.stack(partial_rules).T
         cumul_shift = 0.0
-        for _m, _s in zip(m, s, strict=True):
+        for _m, _s in zip(m, s):
             cumul_shift *= _m
             cumul_shift += _s
         if period is not None:
@@ -210,7 +203,7 @@ def _iterate_shift_rule_with_multipliers(rule, order, period):
 
     # combine all terms in the linear combination into a single
     # array, with column order (coefficients, multipliers, shifts)
-    return math.stack(combined_rules)
+    return qml.math.stack(combined_rules)
 
 
 def _iterate_shift_rule(rule, order, period=None):
@@ -230,7 +223,7 @@ def _iterate_shift_rule(rule, order, period=None):
     if period is not None:
         # if a period is provided, make sure the shift value is within [-period/2, period/2)
         shifts = np.mod(shifts + 0.5 * period, period) - 0.5 * period
-    return math.stack([coeffs, shifts]).T
+    return qml.math.stack([coeffs, shifts]).T
 
 
 def _combine_shift_rules(rules):
@@ -246,7 +239,7 @@ def _combine_shift_rules(rules):
     return np.stack(combined_rules)
 
 
-@functools.lru_cache
+@functools.lru_cache()
 def generate_shift_rule(frequencies, shifts=None, order=1):
     r"""Computes the parameter shift rule for a unitary based on its generator's eigenvalue
     frequency spectrum.
@@ -317,7 +310,7 @@ def generate_shift_rule(frequencies, shifts=None, order=1):
            [ 0.5       , -3.14159265]])
 
     This corresponds to the shift rule
-    :math:`\frac{\partial^2 f}{\partial \phi^2} = \frac{1}{2} \left[f(\phi) - f(\phi-\pi)\right]`.
+    :math:`\frac{\partial^2 f}{\partial phi^2} = \frac{1}{2} \left[f(\phi) - f(\phi-\pi)\right]`.
     """
     frequencies = tuple(f for f in frequencies if f > 0)
     rule = _get_shift_rule(frequencies, shifts=shifts)
@@ -375,18 +368,15 @@ def generate_multi_shift_rule(frequencies, shifts=None, orders=None):
 
     .. math::
 
-        \begin{align*}
         \frac{\partial^2 f}{\partial x\partial y} &= \frac{1}{4}
-        [f(x+\pi/2, y+\pi/2) - f(x+\pi/2, y-\pi/2)\\
-        &\phantom{\frac{1}{4}[}-f(x-\pi/2, y+\pi/2) + f(x-\pi/2, y-\pi/2) ].
-        \end{align*}
-
+        \left[f(x+\pi/2, y+\pi/2) - f(x+\pi/2, y-\pi/2)\\
+        &~~~- f(x-\pi/2, y+\pi/2) + f(x-\pi/2, y-\pi/2) \right].
     """
     rules = []
     shifts = shifts or [None] * len(frequencies)
     orders = orders or [1] * len(frequencies)
 
-    for f, s, o in zip(frequencies, shifts, orders, strict=True):
+    for f, s, o in zip(frequencies, shifts, orders):
         rule = generate_shift_rule(f, shifts=s, order=o)
         rules.append(process_shifts(rule))
 
@@ -398,7 +388,7 @@ def _copy_and_shift_params(tape, indices, shifts, multipliers, cast=False):
     rescaled and shifted as indicated by ``indices``, ``multipliers`` and ``shifts``."""
     all_ops = tape.circuit
 
-    for idx, shift, multiplier in zip(indices, shifts, multipliers, strict=True):
+    for idx, shift, multiplier in zip(indices, shifts, multipliers):
         _, op_idx, p_idx = tape.get_operation(idx)
         op = (
             all_ops[op_idx].obs
@@ -409,15 +399,15 @@ def _copy_and_shift_params(tape, indices, shifts, multipliers, cast=False):
         # Shift copied parameter
         new_params = list(op.data)
         if not isinstance(new_params[p_idx], numbers.Integral):
-            multiplier = math.convert_like(multiplier, new_params[p_idx])
-            multiplier = math.cast_like(multiplier, new_params[p_idx])
-            shift = math.convert_like(shift, new_params[p_idx])
-            shift = math.cast_like(shift, new_params[p_idx])
+            multiplier = qml.math.convert_like(multiplier, new_params[p_idx])
+            multiplier = qml.math.cast_like(multiplier, new_params[p_idx])
+            shift = qml.math.convert_like(shift, new_params[p_idx])
+            shift = qml.math.cast_like(shift, new_params[p_idx])
         new_params[p_idx] = new_params[p_idx] * multiplier
         new_params[p_idx] = new_params[p_idx] + shift
         if cast:
             dtype = getattr(new_params[p_idx], "dtype", float)
-            new_params[p_idx] = math.cast(new_params[p_idx], dtype)
+            new_params[p_idx] = qml.math.cast(new_params[p_idx], dtype)
 
         # Create operator with shifted parameter and put into shifted tape
         shifted_op = bind_new_parameters(op, new_params)
@@ -427,6 +417,7 @@ def _copy_and_shift_params(tape, indices, shifts, multipliers, cast=False):
             mp = all_ops[op_idx].__class__
             all_ops[op_idx] = mp(obs=shifted_op)
 
+    # pylint: disable=protected-access
     ops = all_ops[: len(tape.operations)]
     meas = all_ops[len(tape.operations) :]
     return QuantumScript(ops=ops, measurements=meas, shots=tape.shots)
@@ -457,9 +448,6 @@ def generate_shifted_tapes(tape, index, shifts, multipliers=None, broadcast=Fals
             the ``batch_size`` of the returned tape matches the length of ``shifts``.
     """
 
-    if len(shifts) == 0:
-        return tuple()
-
     if multipliers is None:
         multipliers = np.ones_like(shifts)
 
@@ -468,7 +456,7 @@ def generate_shifted_tapes(tape, index, shifts, multipliers=None, broadcast=Fals
 
     return tuple(
         _copy_and_shift_params(tape, [index], [shift], [multiplier])
-        for shift, multiplier in zip(shifts, multipliers, strict=True)
+        for shift, multiplier in zip(shifts, multipliers)
     )
 
 
@@ -499,7 +487,7 @@ def generate_multishifted_tapes(tape, indices, shifts, multipliers=None):
 
     tapes = [
         _copy_and_shift_params(tape, indices, _shifts, _multipliers, cast=True)
-        for _shifts, _multipliers in zip(shifts, multipliers, strict=True)
+        for _shifts, _multipliers in zip(shifts, multipliers)
     ]
 
     return tapes

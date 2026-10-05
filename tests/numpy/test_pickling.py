@@ -17,16 +17,16 @@ Unit tests for ensuring that objects that are pickled/unpickled are identical to
 
 import pickle
 
-import pennylane as qp
+import pennylane as qml
 
 
 def test_unpickling_tensor():
-    """Tests whether qp.numpy.tensor objects are pickleable."""
+    """Tests whether qml.numpy.tensor objects are pickleable."""
 
-    x = qp.numpy.random.random(15)
+    x = qml.numpy.random.random(15)
     x_str = pickle.dumps(x)
     x_reloaded = pickle.loads(x_str)
 
-    assert qp.numpy.allclose(x, x_reloaded)
+    assert qml.numpy.allclose(x, x_reloaded)
     assert x.__dict__ == x_reloaded.__dict__
     assert hasattr(x_reloaded, "requires_grad")

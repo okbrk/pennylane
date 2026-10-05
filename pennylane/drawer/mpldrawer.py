@@ -14,19 +14,17 @@
 """
 This module contains the MPLDrawer class for creating circuit diagrams with matplotlib
 """
-
+from collections.abc import Iterable
 import warnings
-from collections.abc import Iterable, Sequence
+from typing import Sequence
 
 has_mpl = True
 try:
-    import matplotlib.patheffects as path_effects
     import matplotlib.pyplot as plt
     from matplotlib import patches
+    import matplotlib.patheffects as path_effects
 except (ModuleNotFoundError, ImportError) as e:  # pragma: no cover
     has_mpl = False
-
-# pylint: disable=too-many-positional-arguments
 
 
 def _to_tuple(a):
@@ -60,28 +58,26 @@ def _open_circ_options_process(options):
     return new_options
 
 
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-instance-attributes, too-many-arguments
 class MPLDrawer:
     r"""Allows easy creation of graphics representing circuits with matplotlib
 
     Args:
         n_layers (int): the number of layers
-        wire_map (dict): the wires to be drawn. A dict mapping wire label to index (from top to bottom) in the figure
+        n_wires (int): the number of wires
 
     Keyword Args:
         c_wires=0 (int): the number of classical wires to leave space for.
         wire_options=None (dict): matplotlib configuration options for drawing the wire lines
         figsize=None (Iterable): Allows users to specify the size of the figure manually. Defaults
-            to scale with the size of the circuit via ``n_layers`` and ``len(wire_map)``.
+            to scale with the size of the circuit via ``n_layers`` and ``n_wires``.
         fig=None (matplotlib Figure): Allows users to specify the figure window to plot to.
-        starting_dots=False (bool): Adds dots after the wire labels. Can be used to denote this plot
-            follows after another one.
 
     **Example**
 
     .. code-block:: python
 
-        drawer = qp.drawer.MPLDrawer(wire_map={i: i for i in range(5)}, n_layers=6)
+        drawer = qml.drawer.MPLDrawer(n_wires=5, n_layers=6)
 
         drawer.label(["0", "a", r"$|\Psi\rangle$", r"$|\theta\rangle$", "aux"])
 
@@ -125,12 +121,12 @@ class MPLDrawer:
     **Formatting**
 
     PennyLane has inbuilt styles for controlling the appearance of the circuit drawings.
-    All available styles can be determined by evaluating ``qp.drawer.available_styles()``.
-    Any available string can then be passed to ``qp.drawer.use_style``.
+    All available styles can be determined by evaluating ``qml.drawer.available_styles()``.
+    Any available string can then be passed to ``qml.drawer.use_style``.
 
     .. code-block:: python
 
-        qp.drawer.use_style('black_white')
+        qml.drawer.use_style('black_white')
 
     .. figure:: ../../_static/drawer/black_white_style.png
             :align: center
@@ -170,7 +166,7 @@ class MPLDrawer:
     .. code-block:: python
 
         wire_options = {"color": "indigo", "linewidth": 4}
-        drawer = MPLDrawer(wire_map={0: 0, 1: 1}, n_layers=4, wire_options=wire_options)
+        drawer = MPLDrawer(n_wires=2, n_layers=4, wire_options=wire_options)
 
         label_options = {"fontsize": "x-large", 'color': 'indigo'}
         drawer.label(["0", "a"], text_options=label_options)
@@ -208,7 +204,7 @@ class MPLDrawer:
 
     .. code-block:: python
 
-        drawer = MPLDrawer(2, {0:0, 1:1})
+        drawer = MPLDrawer(2, 2)
         drawer.box_gate(layer=0, wires=1, text="X")
         drawer.box_gate(layer=1, wires=1, text="Y")
 
@@ -242,7 +238,7 @@ class MPLDrawer:
     _pad = 0.2
     """Padding for FancyBboxPatch objects."""
 
-    _boxstyle = f"round, pad={_pad}"
+    _boxstyle = "round, pad=0.2"
     """Style for FancyBboxPatch objects."""
 
     _notch_width = 0.04
@@ -251,10 +247,7 @@ class MPLDrawer:
     _notch_height = 0.25
     """The height of active wire notches."""
 
-    _notch_pad = 0.05
-    """The padding for the FancyBboxPatch of a notch."""
-
-    _notch_style = f"round, pad={_notch_pad}"
+    _notch_style = "round, pad=0.05"
     """Box style for active wire notches."""
 
     _cond_shift = 0.03
@@ -263,17 +256,7 @@ class MPLDrawer:
     _cwire_scaling = 0.25
     """The distance between successive control wires."""
 
-    def __init__(
-        self,
-        n_layers,
-        wire_map,
-        c_wires=0,
-        *,
-        wire_options=None,
-        figsize=None,
-        fig=None,
-        starting_dots: bool = False,
-    ):
+    def __init__(self, n_layers, n_wires, c_wires=0, wire_options=None, figsize=None, fig=None):
         if not has_mpl:  # pragma: no cover
             raise ImportError(
                 "Module matplotlib is required for ``MPLDrawer`` class. "
@@ -281,8 +264,7 @@ class MPLDrawer:
             )
 
         self.n_layers = n_layers
-        self.n_wires = len(wire_map)
-        self._starting_dots = starting_dots
+        self.n_wires = n_wires
 
         ## Creating figure and ax
 
@@ -300,7 +282,7 @@ class MPLDrawer:
 
         self._ax = self._fig.add_axes(
             [0, 0, 1, 1],
-            xlim=(-2.5 if starting_dots else -2, self.n_layers + 1),
+            xlim=(-2, self.n_layers + 1),
             ylim=(-1, self.n_wires + self._cwire_scaling * c_wires + 0.5 * (c_wires > 0)),
             xticks=[],
             yticks=[],
@@ -313,25 +295,11 @@ class MPLDrawer:
         if wire_options is None:
             wire_options = {}
 
-        # Separate global options from per wire options
-        global_options = {k: v for k, v in wire_options.items() if not isinstance(v, dict)}
-        wire_specific_options = {k: v for k, v in wire_options.items() if isinstance(v, dict)}
-
-        # Adding wire lines with individual styles based on wire_options
-        self._wire_lines = []
-        for wire_label, idx in wire_map.items():
-            specific_options = wire_specific_options.get(wire_label, {})
-            line_options = {**global_options, **specific_options}
-
-            # Create Line2D with the combined options
-            line = plt.Line2D(
-                (-1, self.n_layers),
-                (idx, idx),
-                zorder=1,
-                **line_options,
-            )
-            self._wire_lines.append(line)
-
+        # adding wire lines
+        self._wire_lines = [
+            plt.Line2D((-1, self.n_layers), (wire, wire), zorder=1, **wire_options)
+            for wire in range(self.n_wires)
+        ]
         for line in self._wire_lines:
             self._ax.add_line(line)
 
@@ -368,7 +336,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=1)
+            drawer = MPLDrawer(n_wires=2, n_layers=1)
             drawer.label(["a", "b"])
 
         .. figure:: ../../_static/drawer/labels.png
@@ -382,7 +350,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=1)
+            drawer = MPLDrawer(n_wires=2, n_layers=1)
             drawer.label(["a", "b"], text_options={"color": "indigo", "fontsize": "xx-large"})
 
         .. figure:: ../../_static/drawer/labels_formatted.png
@@ -395,18 +363,7 @@ class MPLDrawer:
             text_options = {"ha": "center", "va": "center", "fontsize": self.fontsize}
 
         for wire, ii_label in enumerate(labels):
-            self._ax.text(-1.5 - 0.5 * self._starting_dots, wire, ii_label, **text_options)
-
-        if self._starting_dots:
-            for wire in range(self.n_wires):
-                self.ax.text(
-                    -1.5,
-                    wire,
-                    s="···",
-                    ha="center",
-                    va="center_baseline",
-                    fontsize=21,
-                )
+            self._ax.text(-1.5, wire, ii_label, **text_options)
 
     def erase_wire(self, layer: int, wire: int, length: int) -> None:
         """Erases a portion of a wire by adding a rectangle that matches the background.
@@ -449,7 +406,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=1)
+            drawer = MPLDrawer(n_wires=2, n_layers=1)
 
             drawer.box_gate(layer=0, wires=(0, 1), text="CY")
 
@@ -471,7 +428,7 @@ class MPLDrawer:
             box_options = {'facecolor': 'lightcoral', 'edgecolor': 'maroon', 'linewidth': 5}
             text_options = {'fontsize': 'xx-large', 'color': 'maroon'}
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=1)
+            drawer = MPLDrawer(n_wires=2, n_layers=1)
 
             drawer.box_gate(layer=0, wires=(0, 1), text="CY",
                 box_options=box_options, text_options=text_options)
@@ -481,12 +438,12 @@ class MPLDrawer:
             :width: 60%
             :target: javascript:void(0);
 
-        By default, text is rotated and/or shrunk to fit within the box. This behaviour can be turned off
+        By default, text is rotated and/or shrunk to fit within the box. This behavior can be turned off
         with the ``autosize=False`` keyword.
 
         .. code-block:: python
 
-            drawer = MPLDrawer(n_layers=4, wire_map={0:0, 1:1})
+            drawer = MPLDrawer(n_layers=4, n_wires=2)
 
             drawer.box_gate(layer=0, wires=0, text="A longer label")
             drawer.box_gate(layer=0, wires=1, text="Label")
@@ -534,7 +491,12 @@ class MPLDrawer:
         )
         self._ax.add_patch(box)
 
-        text_obj = self._ax.text(layer, box_center, text, **new_text_options)
+        text_obj = self._ax.text(
+            layer,
+            box_center,
+            text,
+            **new_text_options,
+        )
 
         if active_wire_notches and (len(wires) != (box_max - box_min + 1)):
             notch_options = box_options.copy()
@@ -640,7 +602,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=3)
+            drawer = MPLDrawer(n_wires=2, n_layers=3)
 
             drawer.ctrl(layer=0, wires=0, wires_target=1)
             drawer.ctrl(layer=1, wires=(0, 1), control_values=[0, 1])
@@ -684,7 +646,7 @@ class MPLDrawer:
         else:
             if len(control_values) != len(wires_ctrl):
                 raise ValueError("`control_values` must be the same length as `wires`")
-            for wire, control_on in zip(wires_ctrl, control_values, strict=True):
+            for wire, control_on in zip(wires_ctrl, control_values):
                 if control_on:
                     self._ctrl_circ(layer, wire, options=options)
                 else:
@@ -739,7 +701,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=2)
+            drawer = MPLDrawer(n_wires=2, n_layers=2)
 
             drawer.CNOT(0, (0, 1))
 
@@ -803,7 +765,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=2)
+            drawer = MPLDrawer(n_wires=2, n_layers=2)
 
             drawer.SWAP(0, (0, 1))
 
@@ -873,7 +835,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1}, n_layers=1)
+            drawer = MPLDrawer(n_wires=2, n_layers=1)
             drawer.measure(layer=0, wires=0)
 
             measure_box = {'facecolor': 'white', 'edgecolor': 'indigo'}
@@ -950,96 +912,6 @@ class MPLDrawer:
                 fontsize=(self.fontsize - 2),
             )
 
-    def pauli_measure(self, layer, pauli_word, wires, postselect=None, **kwargs):
-        """Draw a PauliMeasure at the designated layer."""
-
-        box_options = kwargs.get("box_options", {})
-        user_text_options = kwargs.get("text_options", {})
-        lines_options = kwargs.get("lines_options", {})
-        wires = _to_tuple(wires)
-        main_box_ratio = 4 / 5  # the main box has to be narrower to fit eveything
-        notch_box_ratio = 1 - main_box_ratio
-
-        box_min = min(wires)
-        box_max = max(wires)
-        box_center = (box_min + box_max) / 2
-
-        main_box_width = self._box_length * main_box_ratio - 2 * self._pad
-        main_box_height = box_max - box_min + self._box_length - 2 * self._pad
-        notch_width = self._box_length * notch_box_ratio - 2 * self._notch_pad
-        notch_height = self._box_length / 3 - 2 * self._notch_pad
-
-        main_box_x = layer - self._box_length / 2 + self._pad
-        main_box_y = box_min - self._box_length / 2 + self._pad
-        notch_x = main_box_x + main_box_width + self._pad
-        notch_y = box_center - notch_height / 2
-
-        main_box = patches.FancyBboxPatch(
-            (main_box_x, main_box_y),
-            main_box_width,
-            main_box_height,
-            boxstyle=self._boxstyle,
-            **box_options,
-        )
-
-        notch_box = patches.FancyBboxPatch(
-            (notch_x, notch_y),
-            notch_width,
-            notch_height,
-            boxstyle=self._boxstyle,
-            **box_options,
-        )
-
-        self._ax.add_patch(notch_box)
-        self._ax.add_patch(main_box)
-
-        text_options = {
-            "zorder": 3,
-            "ha": "center",
-            "va": "center",
-            "fontsize": self.fontsize if isinstance(self.fontsize, str) else self.fontsize * 1.1,
-        }
-        text_options.update(user_text_options)
-        text_x = main_box_x + main_box_width / 2
-        for symbol, wire in zip(pauli_word, wires, strict=True):
-            self._ax.text(text_x, wire, symbol, **text_options)
-
-        measure_icon_x, measure_icon_y = notch_x + notch_width / 2 + self._notch_pad, box_center
-        if "zorder" not in lines_options:
-            lines_options["zorder"] = 3
-        lines_options["linewidth"] = 1.5
-        arc = patches.Arc(
-            (measure_icon_x, measure_icon_y),
-            notch_width + self._notch_pad * 2,
-            notch_height + self._notch_pad * 2,
-            theta1=270 if postselect is None else 320,
-            theta2=90,
-            **lines_options,
-        )
-        self._ax.add_patch(arc)
-
-        if postselect is not None:
-            self._ax.text(
-                measure_icon_x - self._notch_pad / 2,
-                measure_icon_y - notch_height / 2,
-                str(postselect),
-                fontsize=self.fontsize * 0.7,
-            )
-
-        self.ax.arrow(
-            measure_icon_x,
-            measure_icon_y,
-            notch_width + self._notch_pad,
-            notch_height / 2,
-            head_width=notch_width / 6,
-            **lines_options,
-        )
-
-    @property
-    def ppm_offset(self) -> float:
-        """Gets the x-offset for drawing the control wire of a PauliMeasure."""
-        return self._box_length / 10
-
     def _y(self, wire):
         """Used for determining the correct y coordinate for classical wires.
         Classical wires should be enumerated starting at the number of quantum wires the drawer has.
@@ -1111,7 +983,7 @@ class MPLDrawer:
 
         .. code-block:: python
 
-            drawer = MPLDrawer(wire_map={0:0, 1:1, 2:2}, n_layers=4)
+            drawer = MPLDrawer(n_wires=3, n_layers=4)
 
             drawer.cond(layer=1, measured_layer=0, wires=[0], wires_target=[1])
 
@@ -1241,10 +1113,3 @@ class MPLDrawer:
 
         for line in lines:
             self._ax.add_line(line)
-
-    def crop_wire_labels(self):
-        """Crop away the wire labels and resize figure accordingly."""
-        xlim = self._ax.get_xlim()
-        self._ax.set_xlim((-1, xlim[1]))
-        factor = (self.n_layers + 2) / (self.n_layers + 3)
-        self._fig.set_figwidth(self._fig.get_figwidth() * factor)

@@ -14,41 +14,23 @@
 """
 This submodule contains the templates for the Hilbert-Schmidt tests.
 """
-
-import copy
-from collections import defaultdict
-from collections.abc import Iterable
-
-from pennylane import capture, math
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation, Operator, Operator2, abstractify
-from pennylane.core.queuing import QueuingManager, apply
-from pennylane.decomposition import (
-    CompressedResourceOp,
-    add_decomps,
-    register_resources,
-)
-from pennylane.math import is_abstract
-from pennylane.ops import CNOT, Hadamard, QubitUnitary
-from pennylane.typing import Complex, TensorLike, Wire
-from pennylane.wires import Wires
+# pylint: disable-msg=too-many-arguments
+import pennylane as qml
+from pennylane.operation import AnyWires, Operation
 
 
 class HilbertSchmidt(Operation):
     r"""Create a Hilbert-Schmidt template that can be used to compute the Hilbert-Schmidt Test (HST).
 
-    The HST is a useful quantity to compile a target unitary `U` with an approximate unitary `V`. The HST
-    is used as a distance between `U` and `V`. The result of executing the HST is 0 if and only if `V` is equal to
-    `U` (up to a global phase). As suggested in [1], we can define a cost function using the Hilbert-Schmidt inner product
-    between the unitaries `U` and `V` as follows:
+    The HST is a useful quantity used when we want to compile an unitary `U` with an approximate unitary `V`. The HST
+    is used as a distance between `U` and `V`, the result of executing the HST is 0 if and only if `V` is equal to
+    `U` (up to a global phase). Therefore we can define a cost by:
 
     .. math::
         C_{HST} = 1 - \frac{1}{d^2} \left|Tr(V^{\dagger}U)\right|^2,
 
-    where `d` is the dimension of the space in which the unitaries `U` and `V` act.
-    The quantity :math:`\frac{1}{d^2} \left|Tr(V^{\dagger}U)\right|^2` is obtained by executing the Hilbert-Schmidt Test.
-
-    It is equivalent to taking the outcome probability of the state :math:`|0 ... 0\rangle`
+    where the quantity :math:`\frac{1}{d^2} \left|Tr(V^{\dagger}U)\right|^2` is obtained by executing the
+    Hilbert-Schmidt Test. It is equivalent to taking the outcome probability of the state :math:`|0 ... 0\rangle`
     for the following circuit:
 
     .. figure:: ../../_static/templates/subroutines/hst.png
@@ -59,14 +41,17 @@ class HilbertSchmidt(Operation):
     It defines our decomposition for the Hilbert-Schmidt Test template.
 
     Args:
-        V (Operator or Iterable[Operator]): The operators that represent the unitary `V`.
-        U (Operator or Iterable[Operator]): The operators that represent the unitary `U`.
+        *params (array): Parameters for the quantum function `V`.
+        v_function (callable): Quantum function that represents the approximate compiled unitary `V`.
+        v_wires (int or Iterable[Number, str]]): The wire(s) the approximate compiled unitary act on.
+        u_tape (.QuantumTape): `U`, the unitary to be compiled as a ``qml.tape.QuantumTape``.
 
     Raises:
-        ValueError: ``V`` is not an Operator or an iterable of Operators.
-        ValueError: ``U`` is not an Operator or an iterable of Operators.
-        ValueError: ``U`` and ``V`` do not have the same number of wires.
-        ValueError: Operators in ``U`` must act on distinct wires from those in ``v_wires``.
+        QuantumFunctionError: The argument ``u_tape`` must be a ``QuantumTape``.
+        QuantumFunctionError: ``v_function`` is not a valid quantum function.
+        QuantumFunctionError: ``U`` and ``V`` do not have the same number of wires.
+        QuantumFunctionError: The wires ``v_wires`` are a subset of ``V`` wires.
+        QuantumFunctionError: ``u_tape`` and ``v_tape`` must act on distinct wires.
 
     **Reference**
 
@@ -80,207 +65,127 @@ class HilbertSchmidt(Operation):
         :title: Usage Details
 
         Consider that we want to evaluate the Hilbert-Schmidt Test cost between the unitary ``U`` and an approximate
-        unitary ``V``. If the approximate unitary has fewer wires than the target unitary, a placeholder identity can be included.
-        We need to define some functions where it is possible to use the :class:`~.HilbertSchmidt`
-        template. In the example below, the considered unitary is ``Hadamard`` and we try to compute the cost for the approximate
-        unitary ``RZ``. For an angle that is equal to ``0`` (``Identity``), we have the maximal cost, which is ``1``.
+        unitary ``V``. We need to define some functions where it is possible to use the :class:`~.HilbertSchmidt`
+        template. Here the considered unitary is ``Hadamard`` and we try to compute the cost for the approximate
+        unitary ``RZ``. For an angle that is equal to ``0`` (``Identity``), we have the maximal cost which is ``1``.
 
         .. code-block:: python
 
-            U = qp.Hadamard(0)
-            V = qp.RZ(0, wires=1)
+            with qml.QueuingManager.stop_recording():
+                u_tape = qml.tape.QuantumTape([qml.Hadamard(0)])
 
-            dev = qp.device("default.qubit", wires=2)
+            def v_function(params):
+                qml.RZ(params[0], wires=1)
 
-            @qp.qnode(dev)
-            def hilbert_test(V, U):
-                qp.HilbertSchmidt(V, U)
-                return qp.probs()
+            dev = qml.device("default.qubit", wires=2)
 
-            def cost_hst(V, U):
-                return 1 - hilbert_test(V, U)[0]
+            @qml.qnode(dev)
+            def hilbert_test(v_params, v_function, v_wires, u_tape):
+                qml.HilbertSchmidt(v_params, v_function=v_function, v_wires=v_wires, u_tape=u_tape)
+                return qml.probs(u_tape.wires + v_wires)
 
-        Now that the cost function has been defined it can be called as follows:
+            def cost_hst(parameters, v_function, v_wires, u_tape):
+                return (1 - hilbert_test(v_params=parameters, v_function=v_function, v_wires=v_wires, u_tape=u_tape)[0])
 
-        >>> cost_hst(V, U)
-        np.float64(1.0)
+        Now that the cost function has been defined it can be called for specific parameters:
+
+        >>> cost_hst([0], v_function = v_function, v_wires = [1], u_tape = u_tape)
+        1
 
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"num_wires", "u_reps", "v_wires"}
-
-    @classmethod
-    def _primitive_bind_call(cls, V, U, **kwargs):  # kwarg is id
-        # pylint: disable=arguments-differ
-        U = (U,) if isinstance(U, Operator) or is_abstract(U) else U
-        V = (V,) if isinstance(V, Operator) or is_abstract(V) else V
-
-        def _get_tracer(op):
-            if isinstance(op, Operator2):
-                if op.tracer is None:
-                    # pylint: disable-next=protected-access
-                    op._bind_primitive()
-                return op.tracer if op.tracer is not None else op
-            return op
-
-        V = tuple(_get_tracer(op) for op in V)
-        U = tuple(_get_tracer(op) for op in U)
-        num_v_ops = len(V)
-        return cls._primitive.bind(*V, *U, num_v_ops=num_v_ops, **kwargs)
-
     def _flatten(self):
-        data = (self.hyperparameters["V"], self.hyperparameters["U"])
-        return data, tuple()
+        metadata = (
+            ("v_function", self.hyperparameters["v_function"]),
+            ("v_wires", self.hyperparameters["v_wires"]),
+            ("u_tape", self.hyperparameters["u_tape"]),
+        )
+        return self.data, metadata
 
     @classmethod
-    def _unflatten(cls, data, _) -> "HilbertSchmidt":
-        return cls(*data)
+    def _unflatten(cls, data, metadata):
+        return cls(*data, **dict(metadata))
 
-    @property
-    def resource_params(self) -> dict:
-        u_ops = self.hyperparameters["U"]
-        v_ops = self.hyperparameters["V"]
-        return {
-            "num_wires": len(self.wires),
-            "u_reps": [abstractify(op_u) for op_u in u_ops],
-            "v_wires": [len(op_v.wires) for op_v in v_ops],
-        }
+    def __init__(self, *params, v_function, v_wires, u_tape, id=None):
+        self._num_params = len(params)
 
-    def __init__(
-        self,
-        V: Operator | Iterable[Operator],
-        U: Operator | Iterable[Operator],
-    ) -> None:
-        u_ops = (U,) if isinstance(U, Operator) else tuple(U)
-        if not all(isinstance(op, Operator) for op in u_ops):
-            raise ValueError("The argument 'U' must be an Operator or an iterable of Operators.")
-        u_wires = Wires.all_wires([op.wires for op in u_ops])
+        if not isinstance(u_tape, qml.tape.QuantumScript):
+            raise qml.QuantumFunctionError("The argument u_tape must be a QuantumTape.")
 
-        v_ops = (V,) if isinstance(V, Operator) else tuple(V)
-        if not all(isinstance(op, Operator) for op in v_ops):
-            raise ValueError("The argument 'V' must be an Operator or an iterable of Operators.")
-        v_wires = Wires.all_wires([op.wires for op in v_ops])
+        u_wires = u_tape.wires
+        self.hyperparameters["u_tape"] = u_tape
 
-        self._hyperparameters = {
-            "U": u_ops,
-            "V": v_ops,
-        }
+        if not callable(v_function):
+            raise qml.QuantumFunctionError(
+                "The argument v_function must be a callable quantum function."
+            )
+
+        self.hyperparameters["v_function"] = v_function
+
+        v_tape = qml.tape.make_qscript(v_function)(*params)
+        self.hyperparameters["v_tape"] = v_tape
+        self.hyperparameters["v_wires"] = qml.wires.Wires(v_wires)
 
         if len(u_wires) != len(v_wires):
-            raise ValueError("U and V must have the same number of wires.")
+            raise qml.QuantumFunctionError("U and V must have the same number of wires.")
 
-        if len(Wires.shared_wires([u_wires, v_wires])) != 0:
-            raise ValueError("Operators in U and V must act on distinct wires.")
+        if not qml.wires.Wires(v_wires).contains_wires(v_tape.wires):
+            raise qml.QuantumFunctionError("All wires in v_tape must be in v_wires.")
 
-        total_wires = Wires(u_wires + v_wires)
-        super().__init__(wires=total_wires)
+        # Intersection of wires
+        if len(qml.wires.Wires.shared_wires([u_tape.wires, v_tape.wires])) != 0:
+            raise qml.QuantumFunctionError("u_tape and v_tape must act on distinct wires.")
 
-    def map_wires(self, wire_map: dict):
-        raise NotImplementedError("Mapping the wires of HilbertSchmidt is not implemented.")
+        wires = qml.wires.Wires(u_wires + v_wires)
 
-    @property
-    def data(self):
-        r"""Flattened list of operator data in this HilbertSchmidt operation."""
-        return tuple(datum for op in self._operators for datum in op.data)
-
-    def __copy__(self):
-        # Override Operator.__copy__() to avoid setting the "data" property before the new instance
-        # is assigned hyper-parameters since HilbertSchmidt data is derived from the hyper-parameters.
-        clone = HilbertSchmidt.__new__(HilbertSchmidt)
-
-        # Ensure the operators in the hyper-parameters are copied instead of aliased.
-        clone._hyperparameters = {
-            "U": list(map(copy.copy, self._hyperparameters["U"])),
-            "V": list(map(copy.copy, self._hyperparameters["V"])),
-        }
-
-        for attr, value in vars(self).items():
-            if attr != "_hyperparameters":
-                setattr(clone, attr, value)
-
-        return clone
+        super().__init__(*params, wires=wires, id=id)
 
     @property
-    def _operators(self) -> list[Operator]:
-        """Flattened list of operators that compose this HilbertSchmidt operation."""
-        return [*self._hyperparameters["V"], *self._hyperparameters["U"]]
-
-    def queue(self, context=QueuingManager) -> "HilbertSchmidt":
-        for op in self._hyperparameters["V"]:
-            context.remove(op)
-        for op in self._hyperparameters["U"]:
-            context.remove(op)
-        context.append(self)
-        return self
+    def num_params(self):
+        return self._num_params
 
     @staticmethod
     def compute_decomposition(
-        *params: TensorLike,
-        wires: int | Iterable[int | str] | Wires,
-        U: Operator | Iterable[Operator],
-        V: Operator | Iterable[Operator],
-    ) -> list[Operator]:
-        # pylint: disable=arguments-differ
+        params, wires, u_tape, v_tape, v_function=None, v_wires=None
+    ):  # pylint: disable=arguments-differ,unused-argument
         r"""Representation of the operator as a product of other operators."""
-
-        u_ops = (U,) if isinstance(U, Operator) else tuple(U)
-        v_ops = (V,) if isinstance(V, Operator) else tuple(V)
-        u_wires = Wires.all_wires([op.wires for op in u_ops])
-        v_wires = Wires.all_wires([op.wires for op in v_ops])
-
-        n_wires = len(u_wires + v_wires)
+        n_wires = len(u_tape.wires + v_tape.wires)
         first_range = range(n_wires // 2)
         second_range = range(n_wires // 2, n_wires)
 
-        # Hadamard first layer
-        decomp_ops = [Hadamard(wires[i]) for i in first_range]
+        decomp_ops = [qml.Hadamard(wires[i]) for i in first_range]
         # CNOT first layer
         decomp_ops.extend(
-            CNOT(wires=[wires[i], wires[j]]) for i, j in zip(first_range, second_range, strict=True)
+            qml.CNOT(wires=[wires[i], wires[j]]) for i, j in zip(first_range, second_range)
         )
 
         # Unitary U
-        for op_u in u_ops:
-            # The operation has been defined outside of this function, to queue it we call qp.apply.
-            if QueuingManager.recording():
-                apply(op_u)
+        for op_u in u_tape.operations:
+            # The operation has been defined outside of this function, to queue it we call qml.apply.
+            if qml.QueuingManager.recording():
+                qml.apply(op_u)
             decomp_ops.append(op_u)
 
         # Unitary V conjugate
-        # Since we don't currently have an easy way to apply the complex conjugate of a tape, we manually
-        # apply the complex conjugate of each operator in the V tape and append it to the decomposition
-        # using the QubitUnitary operation.
-        for op_v in v_ops:
-            mat = op_v.matrix().conjugate()
-            decomp_ops.append(QubitUnitary(mat, wires=op_v.wires))
-
+        decomp_ops.extend(qml.adjoint(op_v, lazy=False) for op_v in v_tape.operations)
         # CNOT second layer
         decomp_ops.extend(
-            CNOT(wires=[wires[i], wires[j]])
-            for i, j in zip(reversed(first_range), reversed(second_range), strict=True)
+            qml.CNOT(wires=[wires[i], wires[j]])
+            for i, j in zip(reversed(first_range), reversed(second_range))
         )
+
         # Hadamard second layer
-        decomp_ops.extend(Hadamard(wires[i]) for i in first_range)
+        decomp_ops.extend(qml.Hadamard(wires[i]) for i in first_range)
         return decomp_ops
 
 
-# pylint: disable=protected-access
-
-
-@HilbertSchmidt._primitive.def_impl
-def _hilbert_schmidt_impl(*ops, num_v_ops, **kwargs):
-    V = ops[:num_v_ops]
-    U = ops[num_v_ops:]
-    return type.__call__(HilbertSchmidt, V, U, **kwargs)
-
-
 class LocalHilbertSchmidt(HilbertSchmidt):
-    r"""Create a Local Hilbert-Schmidt template that can be used to compute the Local Hilbert-Schmidt Test (LHST).
-
-    The result of the LHST is a useful quantity for compiling a unitary `U` with an approximate unitary `V`. The
-    LHST is used as a distance between `U` and `V`. It is similar to the Hilbert-Schmidt test, but the measurement is
+    r"""Create a Local Hilbert-Schmidt template that can be used to compute the  Local Hilbert-Schmidt Test (LHST).
+    The result of the LHST is a useful quantity for compiling a unitary ``U`` with an approximate unitary ``V``. The
+    LHST is used as a distance between `U` and `V`, it is similar to the Hilbert-Schmidt test, but the measurement is
     made only on one qubit at the end of the circuit. The LHST cost is always smaller than the HST cost and is useful
     for large unitaries.
 
@@ -290,14 +195,17 @@ class LocalHilbertSchmidt(HilbertSchmidt):
         :target: javascript:void(0);
 
     Args:
-        V (Operator or Iterable[Operator]): The operators that represent the approximate compiled unitary `V`.
-        U (Operator or Iterable[Operator]): The operators that represent the unitary `U`.
+        params (array): Parameters for the quantum function `V`.
+        v_function (Callable): Quantum function that represents the approximate compiled unitary `V`.
+        v_wires (int or Iterable[Number, str]]): the wire(s) the approximate compiled unitary act on.
+        u_tape (.QuantumTape): `U`, the unitary to be compiled as a ``qml.tape.QuantumTape``.
 
     Raises:
-        ValueError: ``V`` is not an Operator or an iterable of Operators.
-        ValueError: ``U`` is not an Operator or an iterable of Operators.
-        ValueError: ``U`` and ``V`` do not have the same number of wires.
-        ValueError: Operators in ``U`` must act on distinct wires from those in ``v_wires``.
+        QuantumFunctionError: The argument u_tape must be a QuantumTape
+        QuantumFunctionError: ``v_function`` is not a valid Quantum function.
+        QuantumFunctionError: `U` and `V` do not have the same number of wires.
+        QuantumFunctionError: The wires ``v_wires`` are a subset of `V` wires.
+        QuantumFunctionError: u_tape and v_tape must act on distinct wires.
 
     **Reference**
 
@@ -319,249 +227,56 @@ class LocalHilbertSchmidt(HilbertSchmidt):
 
             import numpy as np
 
-            params = [3 * np.pi / 2, 3 * np.pi / 2, np.pi / 2]
+            with qml.QueuingManager.stop_recording():
+                u_tape = qml.tape.QuantumTape([qml.CZ(wires=(0,1))])
 
-            U = qp.CZ(wires=(0, 1))
+            def v_function(params):
+                qml.RZ(params[0], wires=2)
+                qml.RZ(params[1], wires=3)
+                qml.CNOT(wires=[2, 3])
+                qml.RZ(params[2], wires=3)
+                qml.CNOT(wires=[2, 3])
 
-            V = [qp.RZ(params[0], wires=2),
-                qp.RZ(params[1], wires=3),
-                qp.CNOT(wires=[2, 3]),
-                qp.RZ(params[2], wires=3),
-                qp.CNOT(wires=[2, 3])]
+            dev = qml.device("default.qubit", wires=4)
 
-            dev = qp.device("default.qubit", wires=4)
+            @qml.qnode(dev)
+            def local_hilbert_test(v_params, v_function, v_wires, u_tape):
+                qml.LocalHilbertSchmidt(v_params, v_function=v_function, v_wires=v_wires, u_tape=u_tape)
+                return qml.probs(u_tape.wires + v_wires)
 
-            @qp.qnode(dev)
-            def local_hilbert_test(V, U):
-                qp.LocalHilbertSchmidt(V, U)
-                return qp.probs()
-
-            def cost_lhst(V, U):
-                return 1 - local_hilbert_test(V, U)[0]
+            def cost_lhst(parameters, v_function, v_wires, u_tape):
+                return (1 - local_hilbert_test(v_params=parameters, v_function=v_function, v_wires=v_wires, u_tape=u_tape)[0])
 
         Now that the cost function has been defined it can be called for specific parameters:
 
-        >>> cost_lhst(V, U)
-        np.float64(0.5...)
+        >>> cost_lhst([3*np.pi/2, 3*np.pi/2, np.pi/2], v_function = v_function, v_wires = [2,3], u_tape = u_tape)
+        0.5
     """
-
-    resource_keys = {"num_wires", "u_reps", "v_wires"}
 
     @staticmethod
     def compute_decomposition(
-        *params: TensorLike,
-        wires: int | Iterable[int | str] | Wires,
-        U: Operator | Iterable[Operator],
-        V: Operator | Iterable[Operator],
-    ) -> list[Operator]:
+        params, wires, u_tape, v_tape, v_function=None, v_wires=None
+    ):  # pylint: disable=arguments-differ,unused-argument
         r"""Representation of the operator as a product of other operators (static method)."""
-
-        u_ops = (U,) if isinstance(U, Operator) else tuple(U)
-        v_ops = (V,) if isinstance(V, Operator) else tuple(V)
-        u_wires = Wires.all_wires([op.wires for op in u_ops])
-        v_wires = Wires.all_wires([op.wires for op in v_ops])
-
-        n_wires = len(u_wires + v_wires)
+        n_wires = len(u_tape.wires + v_tape.wires)
         first_range = range(n_wires // 2)
         second_range = range(n_wires // 2, n_wires)
 
-        # Hadamard first layer
-        decomp_ops = [Hadamard(wires[i]) for i in first_range]
+        decomp_ops = [qml.Hadamard(wires[i]) for i in first_range]
         # CNOT first layer
         decomp_ops.extend(
-            CNOT(wires=[wires[i], wires[j]]) for i, j in zip(first_range, second_range, strict=True)
+            qml.CNOT(wires=[wires[i], wires[j]]) for i, j in zip(first_range, second_range)
         )
 
         # Unitary U
-        if QueuingManager.recording():
-            decomp_ops.extend(apply(op_u) for op_u in u_ops)
+        if qml.QueuingManager.recording():
+            decomp_ops.extend(qml.apply(op_u) for op_u in u_tape.operations)
         else:
-            decomp_ops.extend(u_ops)
+            decomp_ops.extend(u_tape.operations)
 
         # Unitary V conjugate
-        # Since we don't currently have an easy way to apply the complex conjugate of a tape, we manually
-        # apply the complex conjugate of each operation in the V tape and append it to the decomposition
-        # using the QubitUnitary operation.
-        decomp_ops.extend(
-            QubitUnitary(op_v.matrix().conjugate(), wires=op_v.wires) for op_v in v_ops
-        )
-        # Single qubit measurement
-        decomp_ops.extend((CNOT(wires=[wires[0], wires[n_wires // 2]]), Hadamard(wires[0])))
+        decomp_ops.extend(qml.adjoint(qml.apply, lazy=False)(op_v) for op_v in v_tape.operations)
+
+        decomp_ops.extend((qml.CNOT(wires=[wires[0], wires[n_wires // 2]]), qml.Hadamard(wires[0])))
 
         return decomp_ops
-
-    @property
-    def resource_params(self) -> dict:
-        u_ops = self.hyperparameters["U"]
-        v_ops = self.hyperparameters["V"]
-        return {
-            "num_wires": len(self.wires),
-            "u_reps": [abstractify(op_u) for op_u in u_ops],
-            "v_wires": [len(op_v.wires) for op_v in v_ops],
-        }
-
-    def __copy__(self):
-        clone = LocalHilbertSchmidt.__new__(LocalHilbertSchmidt)
-        clone._hyperparameters = {
-            "U": list(map(copy.copy, self._hyperparameters["U"])),
-            "V": list(map(copy.copy, self._hyperparameters["V"])),
-        }
-        for attr, value in vars(self).items():
-            if attr != "_hyperparameters":
-                setattr(clone, attr, value)
-        return clone
-
-
-# pylint: disable=protected-access
-
-
-@LocalHilbertSchmidt._primitive.def_impl
-def _local_hilbert_schmidt_impl(*ops, num_v_ops, **kwargs):
-    V = ops[:num_v_ops]
-    U = ops[num_v_ops:]
-    return type.__call__(LocalHilbertSchmidt, V, U, **kwargs)
-
-
-def _hilbert_schmidt_resources(
-    num_wires: int, u_reps: list[CompressedResourceOp], v_wires: list[int]
-):
-    num_first_range = num_wires // 2
-    num_second_range = num_wires - num_first_range
-
-    resources = defaultdict(int)
-
-    resources.update(
-        {Hadamard: num_first_range * 2, CNOT: min(num_first_range, num_second_range) * 2}
-    )
-
-    for op_rep in u_reps:
-        resources[op_rep] += 1
-
-    for n_wires in v_wires:
-        resources[QubitUnitary(Complex[2**n_wires, 2**n_wires], wires=Wire[n_wires])] += 1
-
-    return resources
-
-
-def _local_hilbert_schmidt_resources(
-    num_wires: int, u_reps: list[CompressedResourceOp], v_wires: list[int]
-):
-    num_first_range = num_wires // 2
-    num_second_range = num_wires - num_first_range
-
-    resources = defaultdict(int)
-
-    resources.update(
-        {Hadamard: num_first_range + 1, CNOT: min(num_first_range, num_second_range) + 1}
-    )
-
-    for op_rep in u_reps:
-        resources[op_rep] += 1
-
-    for n_wires in v_wires:
-        resources[QubitUnitary(Complex[2**n_wires, 2**n_wires], wires=Wire[n_wires])] += 1
-
-    return resources
-
-
-def _up_to_last_layer(
-    wires: int | Iterable[int | str] | Wires,
-    U: Operator | Iterable[Operator],
-    V: Operator | Iterable[Operator],
-) -> tuple[int, Iterable, Iterable, list[int]]:
-    u_ops = (U,) if isinstance(U, Operator) else tuple(U)
-    v_ops = (V,) if isinstance(V, Operator) else tuple(V)
-
-    def collect_wires_in_order(ops):
-        accumulator = []
-        for operator in ops:
-            for wire_index in range(  # pylint: disable=consider-using-enumerate
-                len(operator.wires)
-            ):
-                if capture.enabled() and isinstance(operator.wires, Wires):
-                    wire = operator.wires.labels[wire_index]
-                else:
-                    wire = operator.wires[wire_index]
-
-                if wire not in accumulator:
-                    accumulator.append(wire)
-
-        return accumulator
-
-    u_wires = collect_wires_in_order(u_ops)
-    v_wires = collect_wires_in_order(v_ops)
-
-    n_wires = len(u_wires + v_wires)
-    first_range = range(n_wires // 2)
-    second_range = range(n_wires // 2, n_wires)
-
-    if capture.enabled():
-        if isinstance(wires, Wires):
-            wires = wires.labels
-        wires, u_wires, v_wires, first_range, second_range = (
-            math.array(wires, like="jax"),
-            math.array(u_wires, like="jax"),
-            math.array(v_wires, like="jax"),
-            math.array(first_range, like="jax"),
-            math.array(second_range, like="jax"),
-        )
-
-    @for_loop(len(first_range))
-    def layer_hadamards(i):
-        Hadamard(wires[i])
-
-    layer_hadamards()  # pylint: disable=no-value-for-parameter
-
-    @for_loop(min(len(first_range), len(second_range)))
-    def layer_cnots(j):
-        CNOT(wires=[wires[first_range[j]], wires[second_range[j]]])
-
-    layer_cnots()  # pylint: disable=no-value-for-parameter
-
-    for op_u in u_ops:
-        apply(op_u)
-
-    for op_v in v_ops:
-        mat = op_v.matrix().conjugate()
-        QubitUnitary(mat, wires=op_v.wires)
-
-    return n_wires, first_range, second_range, wires
-
-
-@register_resources(_hilbert_schmidt_resources)
-def _hilbert_schmidt_decomposition(
-    *params: TensorLike,
-    wires: int | Iterable[int | str] | Wires,
-    U: Operator | Iterable[Operator],
-    V: Operator | Iterable[Operator],
-):  # pylint: disable=unused-argument
-    _, first_range, second_range, wires = _up_to_last_layer(wires, U, V)
-
-    @for_loop(min(len(first_range), len(second_range)))
-    def layer_cnots(j):
-        CNOT(wires=[wires[first_range[j]], wires[second_range[j]]])
-
-    layer_cnots()  # pylint: disable=no-value-for-parameter
-
-    @for_loop(len(first_range))
-    def layer_hadamards(i):
-        Hadamard(wires[i])
-
-    layer_hadamards()  # pylint: disable=no-value-for-parameter
-
-
-@register_resources(_local_hilbert_schmidt_resources)
-def _local_hilbert_schmidt_decomposition(
-    *params: TensorLike,
-    wires: int | Iterable[int | str] | Wires,
-    U: Operator | Iterable[Operator],
-    V: Operator | Iterable[Operator],
-):  # pylint: disable=unused-argument
-    n_wires, _, _, wires = _up_to_last_layer(wires, U, V)
-
-    CNOT(wires=[wires[0], wires[n_wires // 2]])
-    Hadamard(wires[0])
-
-
-add_decomps(HilbertSchmidt, _hilbert_schmidt_decomposition)
-add_decomps(LocalHilbertSchmidt, _local_hilbert_schmidt_decomposition)

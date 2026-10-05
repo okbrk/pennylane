@@ -14,13 +14,10 @@
 """
 Unit tests for the SparseHamiltonian observable.
 """
-
-import numpy as np
 import pytest
-from scipy.sparse import coo_matrix, csc_matrix, csr_matrix, lil_matrix
-
-import pennylane as qp
-from pennylane.exceptions import QuantumFunctionError
+import numpy as np
+from scipy.sparse import coo_matrix, csr_matrix
+import pennylane as qml
 
 SPARSEHAMILTONIAN_TEST_MATRIX = np.array(
     [
@@ -108,12 +105,6 @@ SPARSEHAMILTONIAN_TEST_MATRIX = np.array(
 )
 
 SPARSE_HAMILTONIAN_TEST_DATA = [(np.array([[1, 0], [-1.5, 0]])), (np.eye(4))]
-SPARSE_MATRIX_FORMATS = [
-    ("coo", coo_matrix),
-    ("csr", csr_matrix),
-    ("lil", lil_matrix),
-    ("csc", csc_matrix),
-]
 
 H_row = np.array([0, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8, 9, 9, 10, 11, 12, 12, 13, 14, 15])
 H_col = np.array([0, 1, 2, 3, 12, 4, 5, 6, 9, 7, 8, 6, 9, 10, 11, 3, 12, 13, 14, 15])
@@ -149,7 +140,7 @@ class TestSparse:
 
     def test_label(self):
         """Test label method returns 𝓗"""
-        H = qp.SparseHamiltonian(csr_matrix(np.array([[1, 0], [-1.5, 0]])), 1)
+        H = qml.SparseHamiltonian(csr_matrix(np.array([[1, 0], [-1.5, 0]])), 1)
         assert H.label() == "𝓗"
 
     def test_valueeror_shape(self):
@@ -158,7 +149,7 @@ class TestSparse:
         with pytest.raises(
             ValueError, match=r"Sparse Matrix must be of shape \(4, 4\). Got \(2, 2\)."
         ):
-            qp.SparseHamiltonian(mat, wires=(0, 1))
+            qml.SparseHamiltonian(mat, wires=(0, 1))
 
     @pytest.mark.parametrize("sparse_hamiltonian", SPARSE_HAMILTONIAN_TEST_DATA)
     def test_sparse_typeerror(self, sparse_hamiltonian):
@@ -167,41 +158,29 @@ class TestSparse:
         sparse_hamiltonian = coo_matrix(mat)
 
         with pytest.raises(TypeError, match="Observable must be a scipy sparse csr_matrix"):
-            qp.SparseHamiltonian(sparse_hamiltonian, wires=0)
+            qml.SparseHamiltonian(sparse_hamiltonian, wires=0)
 
     @pytest.mark.parametrize("sparse_hamiltonian", SPARSE_HAMILTONIAN_TEST_DATA)
     def test_sparse_matrix(self, sparse_hamiltonian, tol):
         """Test that the matrix property of the SparseHamiltonian class returns the correct matrix."""
         num_wires = int(np.log2(len(sparse_hamiltonian[0])))
         sparse_hamiltonian_csr = csr_matrix(sparse_hamiltonian)
-        res_dynamic = qp.SparseHamiltonian(sparse_hamiltonian_csr, range(num_wires)).sparse_matrix()
-        res_static = qp.SparseHamiltonian.compute_sparse_matrix(sparse_hamiltonian_csr)
+        res_dynamic = qml.SparseHamiltonian(
+            sparse_hamiltonian_csr, range(num_wires)
+        ).sparse_matrix()
+        res_static = qml.SparseHamiltonian.compute_sparse_matrix(sparse_hamiltonian_csr)
         assert isinstance(res_dynamic, csr_matrix)
         assert isinstance(res_static, csr_matrix)
         assert np.allclose(res_dynamic.toarray(), sparse_hamiltonian, atol=tol, rtol=0)
         assert np.allclose(res_static.toarray(), sparse_hamiltonian, atol=tol, rtol=0)
-
-    @pytest.mark.parametrize("sparse_matrix_format", SPARSE_MATRIX_FORMATS)
-    @pytest.mark.parametrize("sparse_hamiltonian", SPARSE_HAMILTONIAN_TEST_DATA)
-    def test_sparse_matrix_format(self, sparse_matrix_format, sparse_hamiltonian, tol):
-        """Test that the sparse matrix accepts the format parameter."""
-        format, expected_type = sparse_matrix_format
-
-        num_wires = int(np.log2(len(sparse_hamiltonian[0])))
-        sparse_hamiltonian_csr = csr_matrix(sparse_hamiltonian)
-        res_dynamic = qp.SparseHamiltonian(sparse_hamiltonian_csr, range(num_wires)).sparse_matrix(
-            format=format
-        )
-        assert isinstance(res_dynamic, expected_type)
-        assert np.allclose(res_dynamic.toarray(), sparse_hamiltonian, atol=tol, rtol=0)
 
     @pytest.mark.parametrize("sparse_hamiltonian", SPARSE_HAMILTONIAN_TEST_DATA)
     def test_matrix(self, sparse_hamiltonian, tol):
         """Test that the matrix property of the SparseHamiltonian class returns the correct matrix."""
         num_wires = int(np.log2(len(sparse_hamiltonian[0])))
         sparse_hamiltonian_csr = csr_matrix(sparse_hamiltonian)
-        res_dynamic = qp.SparseHamiltonian(sparse_hamiltonian_csr, range(num_wires)).matrix()
-        res_static = qp.SparseHamiltonian.compute_matrix(sparse_hamiltonian_csr)
+        res_dynamic = qml.SparseHamiltonian(sparse_hamiltonian_csr, range(num_wires)).matrix()
+        res_static = qml.SparseHamiltonian.compute_matrix(sparse_hamiltonian_csr)
         assert isinstance(res_dynamic, np.ndarray)
         assert isinstance(res_static, np.ndarray)
         assert np.allclose(res_dynamic, sparse_hamiltonian, atol=tol, rtol=0)
@@ -210,53 +189,54 @@ class TestSparse:
     def test_sparse_diffmethod_error(self):
         """Test that an error is raised when the observable is SparseHamiltonian and the
         differentiation method is not parameter-shift."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2, shots=None)
 
-        @qp.qnode(dev, diff_method="backprop")
+        @qml.qnode(dev, diff_method="backprop")
         def circuit(param):
-            qp.RX(param, wires=0)
-            return qp.expval(qp.SparseHamiltonian(csr_matrix(np.eye(4)), [0, 1]))
+            qml.RX(param, wires=0)
+            return qml.expval(qml.SparseHamiltonian(csr_matrix(np.eye(4)), [0, 1]))
 
         with pytest.raises(
-            QuantumFunctionError, match="does not support backprop with requested circuit."
+            qml.QuantumFunctionError,
+            match="does not support backprop with requested circuit.",
         ):
-            qp.grad(circuit, argnums=0)(0.5)
+            qml.grad(circuit, argnum=0)([0.5])
 
     @pytest.mark.parametrize("qubits, hamiltonian, expected_output", [(4, H_hydrogen, -0.18092703)])
     def test_sparse_gradient(self, qubits, hamiltonian, expected_output, tol):
         """Tests that gradients are computed correctly for a SparseHamiltonian observable."""
-        dev = qp.device("default.qubit", wires=qubits)
+        dev = qml.device("default.qubit", wires=qubits, shots=None)
 
         hamiltonian = csr_matrix(hamiltonian)
 
-        @qp.qnode(dev, diff_method="parameter-shift")
+        @qml.qnode(dev, diff_method="parameter-shift")
         def circuit(param):
-            qp.PauliX(0)
-            qp.PauliX(1)
-            qp.DoubleExcitation(param, wires=[0, 1, 2, 3])
-            return qp.expval(qp.SparseHamiltonian(hamiltonian, wires=range(qubits)))
+            qml.PauliX(0)
+            qml.PauliX(1)
+            qml.DoubleExcitation(param, wires=[0, 1, 2, 3])
+            return qml.expval(qml.SparseHamiltonian(hamiltonian, wires=range(qubits)))
 
-        assert np.allclose(qp.grad(circuit, argnums=0)(0.0), expected_output, atol=tol, rtol=0)
+        assert np.allclose(qml.grad(circuit, argnum=0)(0.0), expected_output, atol=tol, rtol=0)
 
     def test_sparse_no_all_wires_error(self, tol):
         """Tests that SparseHamiltonian can be used as expected when the operator wires don't cover
         all device wires."""
-        dev = qp.device("default.qubit", wires=6)
+        dev = qml.device("default.qubit", wires=6, shots=None)
 
-        hamiltonian = qp.SparseHamiltonian(csr_matrix(H_hydrogen), wires=range(4))
+        hamiltonian = qml.SparseHamiltonian(csr_matrix(H_hydrogen), wires=range(4))
 
-        @qp.qnode(dev, diff_method="parameter-shift")
+        @qml.qnode(dev, diff_method="parameter-shift")
         def circuit():
-            qp.PauliX(0)
-            qp.PauliX(1)
-            qp.PauliZ(1)
-            return qp.expval(hamiltonian)
+            qml.PauliX(0)
+            qml.PauliX(1)
+            qml.PauliZ(1)
+            return qml.expval(hamiltonian)
 
         expected_state = np.zeros((64, 1))
         expected_state[48, 0] = -1
 
         expected = (
-            expected_state.conj().T @ qp.matrix(hamiltonian, wire_order=range(6)) @ expected_state
+            expected_state.conj().T @ qml.matrix(hamiltonian, wire_order=range(6)) @ expected_state
         )
         assert np.allclose(circuit(), expected, atol=tol, rtol=0)
 
@@ -266,7 +246,7 @@ class TestSparse:
             (1, [], np.array([[1.0, 0.0], [0.0, 1.0]]), 1.0),
             (
                 2,
-                [qp.PauliX(0), qp.PauliY(1)],
+                [qml.PauliX(0), qml.PauliY(1)],
                 np.array(
                     [
                         [1.0, 0.0, 0.0, 0.0],
@@ -280,24 +260,12 @@ class TestSparse:
             (
                 4,
                 [
-                    qp.PauliX(0),
-                    qp.PauliX(1),
-                    qp.DoubleExcitation(0.22350048065138242, wires=[0, 1, 2, 3]),
+                    qml.PauliX(0),
+                    qml.PauliX(1),
+                    qml.DoubleExcitation(0.22350048065138242, wires=[0, 1, 2, 3]),
                 ],
                 H_hydrogen,
                 -1.1373060481,
-            ),
-            (
-                4,
-                [
-                    qp.PauliX(0),
-                    qp.PauliX(1),
-                    qp.DoubleExcitation(
-                        [0.22350048065138242, 0.22350048065138242], wires=[0, 1, 2, 3]
-                    ),
-                ],
-                H_hydrogen,
-                [-1.1373060481, -1.1373060481],
             ),
         ],
     )
@@ -307,9 +275,9 @@ class TestSparse:
 
         hamiltonian = csr_matrix(hamiltonian)
 
-        dev = qp.device("default.qubit", wires=qubits)
-        qs = qp.tape.QuantumScript(
-            operations, [qp.expval(qp.SparseHamiltonian(hamiltonian, range(qubits)))]
+        dev = qml.device("default.qubit", wires=qubits, shots=None)
+        qs = qml.tape.QuantumScript(
+            operations, [qml.expval((qml.SparseHamiltonian(hamiltonian, range(qubits))))]
         )
         expval = dev.execute(qs)
 
@@ -320,12 +288,12 @@ class TestSparse:
         shots is requested."""
         hamiltonian = csr_matrix(np.array([[1.0, 0.0], [0.0, 1.0]]))
 
-        dev = qp.device("default.qubit", wires=1)
-        qs = qp.tape.QuantumScript(
-            measurements=[qp.expval(qp.SparseHamiltonian(hamiltonian, [0]))], shots=1
+        dev = qml.device("default.qubit", wires=1)
+        qs = qml.tape.QuantumScript(
+            measurements=[qml.expval(qml.SparseHamiltonian(hamiltonian, [0]))], shots=1
         )
 
-        with pytest.raises(qp.operation.DiagGatesUndefinedError):
+        with pytest.raises(qml.operation.DiagGatesUndefinedError):
             dev.execute(qs)
 
     @pytest.mark.parametrize("sparse_hamiltonian", SPARSEHAMILTONIAN_TEST_MATRIX)
@@ -337,9 +305,9 @@ class TestSparse:
         H = csr_matrix(SPARSEHAMILTONIAN_TEST_MATRIX)
         H_multiplied = csr_matrix(SPARSEHAMILTONIAN_TEST_MATRIX * value)
 
-        H_sparse_mul_method = qp.SparseHamiltonian(H, wires=range(num_wires)) * value
+        H_sparse_mul_method = qml.SparseHamiltonian(H, wires=range(num_wires)) * value
         H_sparse_mul_method = H_sparse_mul_method.sparse_matrix()
-        H_sparse_multiplied_before = qp.SparseHamiltonian(
+        H_sparse_multiplied_before = qml.SparseHamiltonian(
             H_multiplied, wires=range(num_wires)
         ).sparse_matrix()
 
@@ -355,4 +323,4 @@ class TestSparse:
         with pytest.raises(
             TypeError, match="Scalar value must be an int or float. Got <class 'list'>"
         ):
-            _ = qp.SparseHamiltonian(H, wires=range(num_wires)) * value
+            _ = qml.SparseHamiltonian(H, wires=range(num_wires)) * value

@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests that a device gives the correct output for multiple measurement."""
-
-# pylint: disable=no-self-use
+# pylint: disable=no-self-use,no-member,redefined-outer-name
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np  # Import from PennyLane to mirror the standard approach in demos
 
 pytestmark = pytest.mark.skip_unsupported
@@ -26,8 +25,8 @@ wires = [2, 3, 4]
 
 def qubit_ansatz(x):
     """Qfunc ansatz"""
-    qp.Hadamard(wires=[0])
-    qp.CRX(x, wires=[0, 1])
+    qml.Hadamard(wires=[0])
+    qml.CRX(x, wires=[0, 1])
 
 
 class TestIntegrationMultipleReturns:
@@ -35,23 +34,20 @@ class TestIntegrationMultipleReturns:
     measurements.
     """
 
-    def test_multiple_expval(self, device, shots):
+    def test_multiple_expval(self, device):
         """Return multiple expvals."""
         n_wires = 2
         dev = device(n_wires)
 
-        if hasattr(dev, "observables") and "Projector" not in dev.observables:
-            pytest.skip("Skipped because device does not support the Projector observable.")
-
-        obs1 = qp.Projector([0], wires=0)
-        obs2 = qp.Z(1)
+        obs1 = qml.Projector([0], wires=0)
+        obs2 = qml.Z(1)
         func = qubit_ansatz
 
         def circuit(x):
             func(x)
-            return qp.expval(obs1), qp.expval(obs2)
+            return qml.expval(obs1), qml.expval(obs2)
 
-        qnode = qp.QNode(circuit, dev, shots=shots, diff_method=None)
+        qnode = qml.QNode(circuit, dev, diff_method=None)
         res = qnode(0.5)
 
         assert isinstance(res, tuple)
@@ -61,24 +57,20 @@ class TestIntegrationMultipleReturns:
 
         assert isinstance(res[1], (float, np.ndarray))
 
-    def test_multiple_var(self, device, shots):
+    def test_multiple_var(self, device):
         """Return multiple vars."""
-
         n_wires = 2
         dev = device(n_wires)
 
-        if hasattr(dev, "observables") and "Projector" not in dev.observables:
-            pytest.skip("Skipped because device does not support the Projector observable.")
-
-        obs1 = qp.Projector([0], wires=0)
-        obs2 = qp.Z(1)
+        obs1 = qml.Projector([0], wires=0)
+        obs2 = qml.Z(1)
         func = qubit_ansatz
 
         def circuit(x):
             func(x)
-            return qp.var(obs1), qp.var(obs2)
+            return qml.var(obs1), qml.var(obs2)
 
-        qnode = qp.QNode(circuit, dev, shots=shots, diff_method=None)
+        qnode = qml.QNode(circuit, dev, diff_method=None)
         res = qnode(0.5)
 
         assert isinstance(res, tuple)
@@ -88,7 +80,7 @@ class TestIntegrationMultipleReturns:
 
         assert isinstance(res[1], (float, np.ndarray))
 
-    def test_multiple_prob(self, device, shots):
+    def test_multiple_prob(self, device):
         """Return multiple probs."""
 
         n_wires = 2
@@ -96,9 +88,9 @@ class TestIntegrationMultipleReturns:
 
         def circuit(x):
             qubit_ansatz(x)
-            return qp.probs(op=qp.Z(0)), qp.probs(op=qp.Y(1))
+            return qml.probs(op=qml.Z(0)), qml.probs(op=qml.Y(1))
 
-        qnode = qp.QNode(circuit, dev, shots=shots, diff_method=None)
+        qnode = qml.QNode(circuit, dev, diff_method=None)
         res = qnode(0.5)
 
         assert isinstance(res, tuple)
@@ -110,7 +102,7 @@ class TestIntegrationMultipleReturns:
         assert isinstance(res[1], np.ndarray)
         assert res[1].shape == (2**1,)
 
-    def test_mix_meas(self, device, shots):
+    def test_mix_meas(self, device):
         """Return multiple different measurements."""
         n_wires = 2
         dev = device(n_wires)
@@ -118,13 +110,13 @@ class TestIntegrationMultipleReturns:
         def circuit(x):
             qubit_ansatz(x)
             return (
-                qp.probs(wires=0),
-                qp.expval(qp.Z(0)),
-                qp.probs(op=qp.Y(1)),
-                qp.expval(qp.Y(1)),
+                qml.probs(wires=0),
+                qml.expval(qml.Z(0)),
+                qml.probs(op=qml.Y(1)),
+                qml.expval(qml.Y(1)),
             )
 
-        qnode = qp.QNode(circuit, dev, shots=shots, diff_method=None)
+        qnode = qml.QNode(circuit, dev, diff_method=None)
         res = qnode(0.5)
 
         assert isinstance(res, tuple)

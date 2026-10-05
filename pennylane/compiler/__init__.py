@@ -22,12 +22,14 @@ function execution. Subsequent calls to the compiled function will execute
 the previously-compiled binary, resulting in significant
 performance improvements.
 
-PennyLane uses the
+Currently, PennyLane supports the
 `Catalyst <https://github.com/pennylaneai/catalyst>`__ hybrid compiler
-by default with the :func:`~.qjit` decorator. A significant benefit of Catalyst
-is the ability to preserve complex control flow around quantum operations — such
-as if statements and for loops, and including measurement feedback — during
-compilation, while continuing to support end-to-end autodifferentiation.
+and the CUDA Quantum compiler
+with the :func:`~.qjit` decorator. A significant benefit of Catalyst
+is the ability to preserve complex control flow around quantum
+operations — such as if statements and for loops, and including measurement
+feedback — during compilation, while continuing to support end-to-end
+autodifferentiation.
 
 .. note::
 
@@ -45,6 +47,8 @@ other compiler-specific decorators and functions:
     :toctree: api
 
     ~qjit
+    ~for_loop
+    ~while_loop
     ~jvp
     ~vjp
 
@@ -78,9 +82,9 @@ The compiler module provides the infrastructure to integrate external
 hybrid quantum-classical compilers with PennyLane, but does not provide
 a built-in compiler.
 
-The default and best-supported compiler is the
-`Catalyst <https://github.com/pennylaneai/catalyst>`__ hybrid compiler. Other compiler
-packages can integrate with PennyLane through the experimental compiler API described below.
+Currently, only the `Catalyst <https://github.com/pennylaneai/catalyst>`__
+hybrid compiler and CUDA Quantum compiler toolchains are supported with PennyLane,
+however there are plans to incorporate additional compilers in the near future.
 
 .. note::
 
@@ -98,11 +102,12 @@ Basic usage
 
 .. note::
 
-    Supported backend devices for Catalyst include
-    ``lightning.qubit``, ``lightning.kokkos``, ``lightning.gpu``, and ``braket.aws.qubit``,
-    but **not** ``default.qubit``.
+    Catalyst supports compiling QNodes that use ``lightning.qubit``,
+    ``lightning.kokkos``, ``braket.local.qubit``, and ``braket.aws.qubit``
+    devices. It does not support ``default.qubit``.
 
-    For a full list of supported devices, please see :doc:`catalyst:dev/devices`.
+    See the :doc:`Catalyst documentation <catalyst:index>` for more details on supported
+    devices, operations, and measurements.
 
 When using just-in-time (JIT) compilation, the compilation is triggered at the call site the
 first time the quantum function is executed. For example, ``circuit`` is
@@ -110,15 +115,15 @@ compiled in the first call.
 
 .. code-block:: python
 
-    dev = qp.device("lightning.qubit", wires=2)
+    dev = qml.device("lightning.qubit", wires=2)
 
-    @qp.qjit
-    @qp.qnode(dev)
+    @qml.qjit
+    @qml.qnode(dev)
     def circuit(theta):
-        qp.Hadamard(wires=0)
-        qp.RX(theta, wires=1)
-        qp.CNOT(wires=[0,1])
-        return qp.expval(qp.Z(1))
+        qml.Hadamard(wires=0)
+        qml.RX(theta, wires=1)
+        qml.CNOT(wires=[0,1])
+        return qml.expval(qml.Z(1))
 
 >>> circuit(0.5)  # the first call, compilation occurs here
 array(0.)
@@ -132,13 +137,13 @@ can occur 'ahead of time' when the function is decorated.
 
     from jax.core import ShapedArray
 
-    @qp.qjit  # compilation happens at definition
-    @qp.qnode(dev)
+    @qml.qjit  # compilation happens at definition
+    @qml.qnode(dev)
     def circuit(x: complex, z: ShapedArray(shape=(3,), dtype=jnp.float64)):
         theta = jnp.abs(x)
-        qp.RY(theta, wires=0)
-        qp.Rot(z[0], z[1], z[2], wires=0)
-        return qp.state()
+        qml.RY(theta, wires=0)
+        qml.Rot(z[0], z[1], z[2], wires=0)
+        return qml.state()
 
 >>> circuit(0.2j, jnp.array([0.3, 0.6, 0.9]))  # calls precompiled function
 array([0.75634905-0.52801002j, 0. +0.j,
@@ -151,16 +156,16 @@ rather than in Python at compile time. You can enable this feature via the
 
 .. code-block:: python
 
-    @qp.qjit(autograph=True)
-    @qp.qnode(dev)
+    @qml.qjit(autograph=True)
+    @qml.qnode(dev)
     def circuit(x: int):
 
         if x < 5:
-            qp.Hadamard(wires=0)
+            qml.Hadamard(wires=0)
         else:
-            qp.T(wires=0)
+            qml.T(wires=0)
 
-        return qp.expval(qp.Z(0))
+        return qml.expval(qml.Z(0))
 
 >>> circuit(3)
 array(0.)
@@ -216,11 +221,11 @@ For example:
 
 .. code-block:: python
 
-    @qp.qjit(compiler="catalyst")
+    @qml.qjit(compiler="catalyst")
     def function(x, y):
         ...
 
-    @qp.qjit(compiler="compiler_name")
+    @qml.qjit(compiler="compiler_name")
     def function(x, y):
         ...
 
@@ -228,11 +233,11 @@ In order to support applying the ``qjit`` decorator with and without arguments,
 
 .. code-block:: python
 
-    @qp.qjit
+    @qml.qjit
     def function(x, y):
         ...
 
-    @qp.qjit(verbose=True, additional_args, ...)
+    @qml.qjit(verbose=True, additional_args, ...)
     def function(x, y):
         ...
 
@@ -252,5 +257,6 @@ if no function is provided:
 
 """
 
-from .compiler import active, active_compiler, available, available_compilers
-from .qjit_api import qjit
+from .compiler import available_compilers, available, active_compiler, active
+
+from .qjit_api import qjit, while_loop, for_loop

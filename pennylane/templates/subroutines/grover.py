@@ -14,16 +14,10 @@
 """
 Contains the Grover Operation template.
 """
-
 import numpy as np
-
-from pennylane import capture, math
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops import GlobalPhase, Hadamard, MultiControlledX, PauliZ
-from pennylane.typing import Wire
-from pennylane.wires import Wires, WiresLike
+from pennylane.operation import AnyWires, Operation
+from pennylane.ops import Hadamard, PauliZ, MultiControlledX, GlobalPhase
+from pennylane.wires import Wires
 
 
 class GroverOperator(Operation):
@@ -71,30 +65,32 @@ class GroverOperator(Operation):
         wires = list(range(n_wires))
 
         def oracle():
-            qp.Hadamard(wires[-1])
-            qp.Toffoli(wires=wires)
-            qp.Hadamard(wires[-1])
+            qml.Hadamard(wires[-1])
+            qml.Toffoli(wires=wires)
+            qml.Hadamard(wires[-1])
 
     We can then implement the entire Grover Search Algorithm for ``num_iterations`` iterations by alternating calls to the oracle and the diffusion operator:
 
     .. code-block:: python
 
-        dev = qp.device('default.qubit', wires=wires)
+        dev = qml.device('default.qubit', wires=wires)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def GroverSearch(num_iterations=1):
             for wire in wires:
-                qp.Hadamard(wire)
+                qml.Hadamard(wire)
 
             for _ in range(num_iterations):
                 oracle()
-                qp.templates.GroverOperator(wires=wires)
-            return qp.probs(wires)
+                qml.templates.GroverOperator(wires=wires)
+            return qml.probs(wires)
 
-    >>> GroverSearch(num_iterations=1) # doctest: +SKIP
-    array([0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.7812])
-    >>> GroverSearch(num_iterations=2) # doctest: +SKIP
-    array([0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.9453])
+    >>> GroverSearch(num_iterations=1)
+    tensor([0.03125, 0.03125, 0.03125, 0.03125, 0.03125, 0.03125, 0.03125,
+            0.78125], requires_grad=True)
+    >>> GroverSearch(num_iterations=2)
+    tensor([0.0078125, 0.0078125, 0.0078125, 0.0078125, 0.0078125, 0.0078125,
+        0.0078125, 0.9453125], requires_grad=True)
 
     We can see that the marked :math:`|111\rangle` state has the greatest probability amplitude.
 
@@ -102,44 +98,26 @@ class GroverOperator(Operation):
 
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"num_wires", "num_work_wires"}
-
     def __repr__(self):
-        return (
-            f"GroverOperator(wires={self.wires}, work_wires={self.hyperparameters['work_wires']})"
-        )
+        return f"GroverOperator(wires={self.wires.tolist()}, work_wires={self.hyperparameters['work_wires'].tolist()})"
 
     def _flatten(self):
         hyperparameters = (("work_wires", self.hyperparameters["work_wires"]),)
         return tuple(), (self.wires, hyperparameters)
 
-    def __init__(self, wires: WiresLike, work_wires: WiresLike = ()):
-        wires = Wires(wires)
-        work_wires = Wires(() if work_wires is None else work_wires)
-
-        if len(wires) < 2:
+    def __init__(self, wires=None, work_wires=None, id=None):
+        if (not hasattr(wires, "__len__")) or (len(wires) < 2):
             raise ValueError("GroverOperator must have at least two wires provided.")
 
         self._hyperparameters = {
             "n_wires": len(wires),
-            "work_wires": work_wires,
+            "work_wires": Wires(work_wires) if work_wires is not None else Wires([]),
         }
 
-        super().__init__(wires=wires)
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "num_wires": self.hyperparameters["n_wires"],
-            "num_work_wires": len(self.hyperparameters["work_wires"]),
-        }
-
-    @property
-    def work_wires(self):
-        """Additional auxiliary wires that can be used in the decomposition of :class:`~.MultiControlledX`."""
-        return self.hyperparameters["work_wires"]
+        super().__init__(wires=wires, id=id)
 
     @property
     def num_params(self):
@@ -147,7 +125,7 @@ class GroverOperator(Operation):
 
     @staticmethod
     def compute_decomposition(
-        wires: WiresLike, work_wires: WiresLike, **kwargs
+        wires, work_wires, **kwargs
     ):  # pylint: disable=arguments-differ,unused-argument
         r"""Representation of the operator as a product of other operators.
 
@@ -186,7 +164,7 @@ class GroverOperator(Operation):
         for wire in wires[:-1]:
             op_list.append(Hadamard(wire))
 
-        op_list.append(GlobalPhase(np.pi))
+        op_list.append(GlobalPhase(np.pi, wires))
 
         return op_list
 
@@ -198,7 +176,7 @@ class GroverOperator(Operation):
         The canonical matrix is the textbook matrix representation that does not consider wires.
         Implicitly, this assumes that the wires of the operator correspond to the global wire order.
 
-        .. seealso:: :meth:`.GroverOperator.matrix` and :func:`qp.matrix() <pennylane.matrix>`
+        .. seealso:: :meth:`.GroverOperator.matrix` and :func:`qml.matrix() <pennylane.matrix>`
 
         Args:
             n_wires (int): Number of wires the ``GroverOperator`` acts on
@@ -217,41 +195,3 @@ class GroverOperator(Operation):
         # Grover diffusion operator. Realize the all-ones entry via broadcasting when subtracting
         # the second term.
         return 2 / dim - np.eye(dim)
-
-
-def _grover_operator_resources(num_wires, num_work_wires):
-    return {
-        Hadamard: (num_wires - 1) * 2,
-        PauliZ: 2,
-        GlobalPhase: 1,
-        MultiControlledX(Wire[num_wires], work_wires=Wire[num_work_wires]): 1,
-    }
-
-
-@register_resources(_grover_operator_resources)
-def _grover_decomposition(wires, work_wires, n_wires):
-    ctrl_values = [0] * (n_wires - 1)
-
-    if capture.enabled():
-        wires = math.array(wires, like="jax")
-
-    @for_loop(len(wires) - 1)
-    def apply_hadamards(i):
-        Hadamard(wires[i])
-
-    apply_hadamards()  # pylint: disable=no-value-for-parameter
-
-    PauliZ(wires[-1])
-    MultiControlledX(
-        control_values=ctrl_values,
-        wires=wires,
-        work_wires=work_wires,
-    )
-    PauliZ(wires[-1])
-
-    apply_hadamards()  # pylint: disable=no-value-for-parameter
-
-    GlobalPhase(np.pi)
-
-
-add_decomps(GroverOperator, _grover_decomposition)

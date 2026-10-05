@@ -14,15 +14,15 @@
 """
 Unit tests for functions needed for computing the dipole.
 """
-
 # pylint: disable=too-many-arguments
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import PauliX, PauliY, PauliZ
 from pennylane import numpy as np
 from pennylane import qchem
 from pennylane.fermi import from_string
+from pennylane.operation import disable_new_opmath, enable_new_opmath
 
 
 @pytest.mark.parametrize(
@@ -188,19 +188,21 @@ def test_dipole_moment(symbols, geometry, core, charge, active, coeffs, ops):
     mol = qchem.Molecule(symbols, geometry, charge=charge)
     args = [p for p in [geometry] if p.requires_grad]
     d = qchem.dipole_moment(mol, core=core, active=active, cutoff=1.0e-8)(*args)[0]
-    dops = list(map(qp.simplify, ops))
-    d_ref = qp.Hamiltonian(coeffs, dops)
+    d_ref = qml.Hamiltonian(coeffs, ops)
 
-    d_coeff, d_ops = d.terms()
-    dref_coeff, dref_ops = d_ref.terms()
-
-    assert np.allclose(sorted(d_coeff), sorted(dref_coeff))
-    assert qp.Hamiltonian(np.ones(len(d_coeff)), d_ops) == (
-        qp.Hamiltonian(np.ones(len(dref_coeff)), dref_ops)
+    assert np.allclose(sorted(d.coeffs), sorted(d_ref.coeffs))
+    assert qml.Hamiltonian(np.ones(len(d.coeffs)), d.ops).compare(
+        qml.Hamiltonian(np.ones(len(d_ref.coeffs)), d_ref.ops)
     )
+
+    enable_new_opmath()
+    d_op_math = qchem.dipole_moment(mol, core=core, active=active, cutoff=1.0e-8)(*args)[0]
+    disable_new_opmath()
+    d_ref_op_math = qml.dot(coeffs, ops)
+
     assert np.allclose(
-        qp.matrix(d, wire_order=[0, 1, 2, 3]),
-        qp.matrix(d_ref, wire_order=[0, 1, 2, 3]),
+        qml.matrix(d_op_math, wire_order=[0, 1, 2, 3]),
+        qml.matrix(d_ref_op_math, wire_order=[0, 1, 2, 3]),
     )
 
 
@@ -224,10 +226,11 @@ def test_dipole_moment_631g_basis(symbols, geometry, core, active):
         np.array([18.73113696, 2.82539437, 0.64012169], requires_grad=True),
         np.array([0.16127776], requires_grad=True),
     ]
-    mol = qp.qchem.Molecule(symbols, geometry, alpha=alpha, basis_name="6-31g")
+    mol = qml.qchem.Molecule(symbols, geometry, alpha=alpha, basis_name="6-31g")
     args = [alpha]
     d = qchem.dipole_moment(mol, core=core, active=active, cutoff=1.0e-8)(*args)[0]
-    assert isinstance(d, (qp.Hamiltonian, qp.ops.Sum))
+
+    assert isinstance(d, qml.Hamiltonian)
 
 
 @pytest.mark.parametrize(
@@ -247,17 +250,17 @@ def test_expvalD(symbols, geometry, charge, d_ref):
     r"""Test that expval(D) is correct."""
     mol = qchem.Molecule(symbols, geometry, charge=charge)
     args = []
-    dev = qp.device("default.qubit", wires=6)
+    dev = qml.device("default.qubit", wires=6)
 
     def dipole(mol, idx):
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(*args):
-            qp.PauliX(0)
-            qp.PauliX(1)
-            qp.DoubleExcitation(0.0, wires=[0, 1, 2, 3])
-            qp.DoubleExcitation(0.0, wires=[0, 1, 4, 5])
+            qml.PauliX(0)
+            qml.PauliX(1)
+            qml.DoubleExcitation(0.0, wires=[0, 1, 2, 3])
+            qml.DoubleExcitation(0.0, wires=[0, 1, 4, 5])
             d_qubit = qchem.dipole_moment(mol)(*args)[idx]
-            return qp.expval(d_qubit)
+            return qml.expval(d_qubit)
 
         return circuit
 
@@ -267,7 +270,7 @@ def test_expvalD(symbols, geometry, charge, d_ref):
 
 
 def test_gradient_expvalD():
-    r"""Test that the gradient of expval(D) computed with ``qp.grad`` is equal to the value
+    r"""Test that the gradient of expval(D) computed with ``qml.grad`` is equal to the value
     obtained with the finite difference method."""
     symbols = ["H", "H", "H"]
     geometry = np.array([[0.0, 0.0, 0.0], [1.0, 1.7, 0.0], [2.0, 0.0, 0.0]], requires_grad=False)
@@ -282,21 +285,21 @@ def test_gradient_expvalD():
 
     mol = qchem.Molecule(symbols, geometry, charge=1, alpha=alpha)
     args = [mol.alpha]
-    dev = qp.device("default.qubit", wires=6)
+    dev = qml.device("default.qubit", wires=6)
 
     def dipole(mol):
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(*args):
-            qp.PauliX(0)
-            qp.PauliX(1)
-            qp.DoubleExcitation(0.0, wires=[0, 1, 2, 3])
-            qp.DoubleExcitation(0.0, wires=[0, 1, 4, 5])
+            qml.PauliX(0)
+            qml.PauliX(1)
+            qml.DoubleExcitation(0.0, wires=[0, 1, 2, 3])
+            qml.DoubleExcitation(0.0, wires=[0, 1, 4, 5])
             d_qubit = qchem.dipole_moment(mol)(*args)
-            return qp.expval(d_qubit[0])
+            return qml.expval(d_qubit[0])
 
         return circuit
 
-    grad_qp = qp.grad(dipole(mol))(*args)
+    grad_qml = qml.grad(dipole(mol))(*args)
 
     alpha_1 = np.array(
         [
@@ -321,15 +324,4 @@ def test_gradient_expvalD():
 
     grad_finitediff = (d_2 - d_1) / 0.0002
 
-    assert np.allclose(grad_qp[0][0], grad_finitediff)
-
-
-def test_molecular_dipole_error():
-    """Test that an error is raised if the shape of the coordinates does not match the number of atoms in the molecule."""
-
-    m = qp.qchem.Molecule(["H"], np.array([1.0, 2.0]))
-    with pytest.raises(
-        ValueError,
-        match="The shape of the coordinates does not match the number of atoms in the molecule.",
-    ):
-        qp.qchem.molecular_dipole(m)
+    assert np.allclose(grad_qml[0][0], grad_finitediff)

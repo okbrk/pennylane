@@ -14,21 +14,22 @@
 """
 A transform to obtain the commutation DAG of a quantum circuit.
 """
-
 import heapq
 from collections import OrderedDict
 from functools import partial
+from typing import Sequence, Callable
 
-import pennylane as qp
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.ops.op_math import Controlled
-from pennylane.transforms import transform
-from pennylane.typing import PostprocessingFn
+import networkx as nx
+from networkx.drawing.nx_pydot import to_pydot
+
+import pennylane as qml
+from pennylane.tape import QuantumTape
 from pennylane.wires import Wires
+from pennylane.transforms import transform
 
 
 @partial(transform, is_informative=True)
-def commutation_dag(tape: QuantumScript) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def commutation_dag(tape: QuantumTape) -> (Sequence[QuantumTape], Callable):
     r"""Construct the pairwise-commutation DAG (directed acyclic graph) representation of a quantum circuit.
 
     In the DAG, each node represents a quantum operation, and edges represent
@@ -43,25 +44,25 @@ def commutation_dag(tape: QuantumScript) -> tuple[QuantumScriptBatch, Postproces
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]:
 
-        The transformed circuit as described in :func:`qp.transform <pennylane.transform>`. Executing this circuit
+        The transformed circuit as described in :func:`qml.transform <pennylane.transform>`. Executing this circuit
         will provide the commutation DAG.
 
     **Example**
 
-    >>> dev = qp.device("default.qubit")
+    >>> dev = qml.device("default.qubit")
 
     .. code-block:: python
 
-        @qp.qnode(device=dev)
+        @qml.qnode(device=dev)
         def circuit(x, y, z):
-            qp.RX(x, wires=0)
-            qp.RX(y, wires=0)
-            qp.CNOT(wires=[1, 2])
-            qp.RY(y, wires=1)
-            qp.Hadamard(wires=2)
-            qp.CRZ(z, wires=[2, 0])
-            qp.RY(-y, wires=1)
-            return qp.expval(qp.Z(0))
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            qml.CNOT(wires=[1, 2])
+            qml.RY(y, wires=1)
+            qml.Hadamard(wires=2)
+            qml.CRZ(z, wires=[2, 0])
+            qml.RY(-y, wires=1)
+            return qml.expval(qml.Z(0))
 
     The commutation dag can be returned by using the following code:
 
@@ -73,7 +74,7 @@ def commutation_dag(tape: QuantumScript) -> tuple[QuantumScriptBatch, Postproces
 
     >>> nodes = dag.get_nodes()
     >>> nodes
-    NodeDataView({0: <pennylane.transforms.commutation_dag.CommutationDAGNode object at ...>, ...}, data='node')
+    NodeDataView({0: <pennylane.transforms.commutation_dag.CommutationDAGNode object at 0x7f461c4bb580>, ...}, data='node')
 
     You can also access specific nodes (of type :class:`~.CommutationDAGNode`) by using the :meth:`~.get_node`
     method. See :class:`~.CommutationDAGNode` for a list of available
@@ -81,7 +82,7 @@ def commutation_dag(tape: QuantumScript) -> tuple[QuantumScriptBatch, Postproces
 
     >>> second_node = dag.get_node(2)
     >>> second_node
-    <pennylane.transforms.commutation_dag.CommutationDAGNode object at ...>
+    <pennylane.transforms.commutation_dag.CommutationDAGNode object at 0x136f8c4c0>
     >>> second_node.op
     CNOT(wires=[1, 2])
     >>> second_node.successors
@@ -182,7 +183,7 @@ class CommutationDAGNode:
 class CommutationDAG:
     r"""Class to represent a quantum circuit as a directed acyclic graph (DAG). This class is useful to build the
     commutation DAG and set up all nodes attributes. The construction of the DAG should be used through the
-    transform :class:`qp.transforms.commutation_dag`.
+    transform :class:`qml.transforms.commutation_dag`.
 
     Args:
         tape (.QuantumTape): PennyLane quantum tape representing a quantum circuit.
@@ -195,23 +196,21 @@ class CommutationDAG:
 
     """
 
-    def __init__(self, tape: QuantumScript):
+    def __init__(self, tape: QuantumTape):
         self.num_wires = len(tape.wires)
         self.node_id = -1
-        import networkx as nx  # pylint: disable=import-outside-toplevel
-
         self._multi_graph = nx.MultiDiGraph()
 
         consecutive_wires = Wires(range(len(tape.wires)))
-        wires_map = OrderedDict(zip(tape.wires, consecutive_wires, strict=True))
+        wires_map = OrderedDict(zip(tape.wires, consecutive_wires))
 
         for operation in tape.operations:
-            operation = qp.map_wires(operation, wire_map=wires_map)
+            operation = qml.map_wires(operation, wire_map=wires_map)
             self.add_node(operation)
 
         self._add_successors()
 
-        self.observables = [qp.map_wires(obs, wire_map=wires_map) for obs in tape.observables]
+        self.observables = [qml.map_wires(obs, wire_map=wires_map) for obs in tape.observables]
 
     def _add_node(self, node):
         self.node_id += 1
@@ -222,19 +221,15 @@ class CommutationDAG:
         """Add the operation as a node in the DAG and updates the edges.
 
         Args:
-            operation (qp.operation): PennyLane quantum operation to add to the DAG.
+            operation (qml.operation): PennyLane quantum operation to add to the DAG.
         """
-        if isinstance(operation, Controlled):
-            control_wires = operation.control_wires
-        else:
-            control_wires = Wires([])
-        target_wires = [w for w in operation.wires if w not in control_wires]
+        target_wires = [w for w in operation.wires if w not in operation.control_wires]
 
         new_node = CommutationDAGNode(
             op=operation,
             wires=operation.wires.tolist(),
             target_wires=target_wires,
-            control_wires=control_wires.tolist(),
+            control_wires=operation.control_wires.tolist(),
             successors=[],
             predecessors=[],
         )
@@ -315,8 +310,6 @@ class CommutationDAG:
         Returns:
             list[int]: List of the predecessors of the given node.
         """
-        import networkx as nx  # pylint: disable=import-outside-toplevel
-
         pred = list(nx.ancestors(self._multi_graph, node_id))
         pred.sort()
         return pred
@@ -343,8 +336,6 @@ class CommutationDAG:
         Returns:
             list[int]: List of the successors of the given node.
         """
-        import networkx as nx  # pylint: disable=import-outside-toplevel
-
         succ = list(nx.descendants(self._multi_graph, node_id))
         succ.sort()
         return succ
@@ -374,8 +365,6 @@ class CommutationDAG:
         Args:
             filename (str): The file name which is in PNG format. Default = 'dag.png'
         """
-        import networkx as nx  # pylint: disable=import-outside-toplevel
-
         draw_graph = nx.MultiDiGraph()
 
         for node in self.get_nodes():
@@ -397,9 +386,6 @@ class CommutationDAG:
 
         for edge in self.get_edges():
             draw_graph.add_edge(edge[0], edge[1])
-
-        # pylint: disable=import-outside-toplevel
-        from networkx.drawing.nx_pydot import to_pydot
 
         dot = to_pydot(draw_graph)
         dot.write_png(filename)
@@ -435,7 +421,7 @@ class CommutationDAG:
             self.get_node(current_node_id).reachable = True
 
         for prev_node_id in range(max_node_id - 1, -1, -1):
-            if self.get_node(prev_node_id).reachable and not qp.is_commuting(
+            if self.get_node(prev_node_id).reachable and not qml.is_commuting(
                 self.get_node(prev_node_id).op, max_node
             ):
                 self.add_edge(prev_node_id, max_node_id)

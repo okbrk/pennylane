@@ -14,16 +14,13 @@
 """
 This module contains the tests for the clifford simulator based on stim
 """
-
-import numpy as np
+import os
 import pytest
+import numpy as np
 import scipy as sp
-from dummy_debugger import Debugger
+import pennylane as qml
 
-import pennylane as qp
-from pennylane.core.operator import Operator1
 from pennylane.devices.default_clifford import _pl_op_to_stim
-from pennylane.exceptions import DecompositionWarning, DeviceError, QuantumFunctionError
 
 stim = pytest.importorskip("stim")
 
@@ -32,81 +29,73 @@ pytestmark = pytest.mark.external
 
 # pylint: disable=protected-access
 def test_applied_modifiers():
-    """Test that default qubit has the `single_tape_support` and `simulator_tracking`
+    """Test that defualt qubit has the `single_tape_support` and `simulator_tracking`
     modifiers applied.
     """
-    dev = qp.device("default.clifford")
+    dev = qml.device("default.clifford")
     assert dev._applied_modifiers == [
-        qp.devices.modifiers.single_tape_support,
-        qp.devices.modifiers.simulator_tracking,
+        qml.devices.modifiers.single_tape_support,
+        qml.devices.modifiers.simulator_tracking,
     ]
 
 
 def circuit_1():
     """Circuit 1 with Clifford gates."""
-    qp.GlobalPhase(np.pi)
-    qp.CNOT(wires=[0, 1])
-    qp.PauliX(wires=[1])
-    qp.Barrier()
-    qp.ISWAP(wires=[0, 1])
-    qp.Hadamard(wires=[0])
+    qml.GlobalPhase(np.pi)
+    qml.CNOT(wires=[0, 1])
+    qml.PauliX(wires=[1])
+    qml.Barrier()
+    qml.ISWAP(wires=[0, 1])
+    qml.Hadamard(wires=[0])
 
 
 def circuit_2():
     """Circuit 2 with error channels."""
-    qp.GlobalPhase(np.pi)
-    qp.CNOT(wires=[0, 1])
-    qp.PauliX(wires=[1])
-    qp.PauliError("YZ", 0.2, wires=[0, 1])
-    qp.Barrier()
-    qp.BitFlip(0.01, wires=[0])
-    qp.PhaseFlip(0.01, wires=[0])
-    qp.Barrier()
-    qp.Hadamard(wires=[0])
-    qp.DepolarizingChannel(0.2, wires=[0])
+    qml.GlobalPhase(np.pi)
+    qml.CNOT(wires=[0, 1])
+    qml.PauliX(wires=[1])
+    qml.PauliError("YZ", 0.2, wires=[0, 1])
+    qml.Barrier()
+    qml.BitFlip(0.01, wires=[0])
+    qml.PhaseFlip(0.01, wires=[0])
+    qml.Barrier()
+    qml.Hadamard(wires=[0])
+    qml.DepolarizingChannel(0.2, wires=[0])
 
 
 @pytest.mark.parametrize("circuit", [circuit_1])
 @pytest.mark.parametrize(
     "expec_op",
     [
-        qp.PauliZ(0),
-        qp.PauliZ(0) @ qp.PauliX(1),
-        qp.Hamiltonian([0.42], [qp.PauliZ(0) @ qp.PauliX(1)]),
+        qml.PauliZ(0),
+        qml.PauliZ(0) @ qml.PauliX(1),
+        qml.Hamiltonian([0.42], [qml.PauliZ(0) @ qml.PauliX(1)]),
     ],
 )
 def test_expectation_clifford(circuit, expec_op):
     """Test that execution of default.clifford is possible and agrees with default.qubit."""
-    dev_c = qp.device("default.clifford")
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford")
+    dev_q = qml.device("default.qubit")
 
     def circuit_fn():
         circuit()
-        return qp.expval(expec_op)
+        return qml.expval(expec_op)
 
-    qnode_clfrd = qp.QNode(circuit_fn, dev_c)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
     assert np.allclose(qnode_clfrd(), qnode_qubit())
-
-
-def test_execution_with_no_execution_config():
-    """Test execution of a tape with no execution config."""
-    dev = qp.device("default.clifford")
-    qs = qp.tape.QuantumScript([qp.X(0)], [qp.expval(qp.PauliZ(0))])
-    result = dev.execute(qs)
-    assert qp.math.allclose(result, -1.0)
 
 
 @pytest.mark.parametrize("circuit", [circuit_1])
 @pytest.mark.parametrize("tableau", [True, False])
 def test_state_clifford(circuit, tableau):
     """Test that state computation with default.clifford is possible and agrees with default.qubit."""
-    dev_c = qp.device("default.clifford", tableau=tableau, wires=2)
-    dev_q = qp.device("default.qubit", wires=2)
+    dev_c = qml.device("default.clifford", tableau=tableau, wires=2)
+    dev_q = qml.device("default.qubit", wires=2)
 
     def circuit_fn():
         circuit()
-        return qp.state()
+        return qml.state()
 
     # Tableau for the circuit define above
     circuit_tableau = np.array(
@@ -118,129 +107,129 @@ def test_state_clifford(circuit, tableau):
         ]
     )
 
-    qnode_clfrd = qp.QNode(circuit_fn, dev_c)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     if not tableau:
         st1, st2 = qnode_clfrd(), qnode_qubit()
-        phase = qp.math.divide(
-            st1, st2, out=qp.math.zeros_like(st1, dtype=complex), where=st1 != 0
-        )[qp.math.nonzero(np.round(st1, 10))]
-        if not qp.math.allclose(phase, 0.0):
-            assert qp.math.allclose(phase / phase[0], qp.math.ones(len(phase)))
+        phase = qml.math.divide(
+            st1, st2, out=qml.math.zeros_like(st1, dtype=complex), where=st1 != 0
+        )[qml.math.nonzero(np.round(st1, 10))]
+        if not qml.math.allclose(phase, 0.0):
+            assert qml.math.allclose(phase / phase[0], qml.math.ones(len(phase)))
     else:
-        assert qp.math.allclose(circuit_tableau, qnode_clfrd())
+        assert qml.math.allclose(circuit_tableau, qnode_clfrd())
 
-    dev_c = qp.device("default.clifford", tableau=tableau, wires=1)
+    dev_c = qml.device("default.clifford", tableau=tableau, wires=1)
 
-    @qp.qnode(dev_c)
+    @qml.qnode(dev_c)
     def circuit_empty():
-        return qp.state()
+        return qml.state()
 
     # Tableau for the circuit define above
     circuit_tableau = np.array([[1, 0, 0], [0, 1, 0]])
     if not tableau:
-        assert qp.math.allclose(circuit_empty(), qp.math.array([1.0, 0.0]))
+        assert qml.math.allclose(circuit_empty(), qml.math.array([1.0, 0.0]))
     else:
-        assert qp.math.allclose(circuit_empty(), circuit_tableau)
+        assert qml.math.allclose(circuit_empty(), circuit_tableau)
 
 
 @pytest.mark.parametrize(
     "meas_op",
     [
-        qp.density_matrix([1]),
-        qp.density_matrix([1, 2]),
-        qp.density_matrix([0, 2]),
-        qp.purity([1]),
-        qp.purity([0, 2]),
-        qp.purity([1, 2]),
-        qp.purity([0, 1, 2]),
-        qp.vn_entropy([1]),
-        qp.vn_entropy([0, 2]),
-        qp.vn_entropy([0, 1, 2]),
-        qp.mutual_info([0], [1]),
-        qp.mutual_info([1], [0, 2]),
-        qp.mutual_info([0], [1, 2]),
+        qml.density_matrix([1]),
+        qml.density_matrix([1, 2]),
+        qml.density_matrix([0, 2]),
+        qml.purity([1]),
+        qml.purity([0, 2]),
+        qml.purity([1, 2]),
+        qml.purity([0, 1, 2]),
+        qml.vn_entropy([1]),
+        qml.vn_entropy([0, 2]),
+        qml.vn_entropy([0, 1, 2]),
+        qml.mutual_info([0], [1]),
+        qml.mutual_info([1], [0, 2]),
+        qml.mutual_info([0], [1, 2]),
     ],
 )
 def test_meas_qinfo_clifford(meas_op):
     """Test that quantum information measurements with `default.clifford` is possible
     and agrees with `default.qubit`."""
-    dev_c = qp.device("default.clifford")
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford")
+    dev_q = qml.device("default.qubit")
 
     def circuit_fn():
         circuit_1()
-        qp.PauliX(wires=[2])
-        qp.Hadamard(wires=[2])
-        qp.CNOT(wires=[1, 2])
-        return qp.apply(meas_op)
+        qml.PauliX(wires=[2])
+        qml.Hadamard(wires=[2])
+        qml.CNOT(wires=[1, 2])
+        return qml.apply(meas_op)
 
-    qnode_clfrd = qp.QNode(circuit_fn, dev_c)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     assert np.allclose(qnode_clfrd(), qnode_qubit())
 
 
-@pytest.mark.parametrize("shots", [None, 100_000])
+@pytest.mark.parametrize("shots", [None, int(1e6)])
 @pytest.mark.parametrize(
     "ops",
     [
-        qp.PauliX(0),
-        qp.PauliX(0) @ qp.PauliY(1),
-        qp.Hamiltonian([3.0, 2.0], [qp.PauliX(0), qp.PauliY(1)]),
-        qp.Hamiltonian([0.42], [qp.PauliZ(0) @ qp.PauliX(1)]),
-        qp.sum(qp.PauliX(0), qp.PauliY(1)),
-        qp.prod(qp.PauliX(0), qp.PauliY(1)),
-        qp.s_prod(3.0, qp.PauliX(0)),
-        qp.sum(qp.PauliX(0), qp.s_prod(2.0, qp.PauliY(1))),
-        qp.prod(qp.sum(qp.PauliZ(0), qp.PauliY(1)), qp.s_prod(3, qp.PauliX(2))),
-        qp.Hermitian(qp.sum(qp.PauliX(0), qp.PauliY(1)).matrix(), [0, 1]),
-        qp.Projector([1, 0], [0, 1]),
+        qml.PauliX(0),
+        qml.PauliX(0) @ qml.PauliY(1),
+        qml.Hamiltonian([3.0, 2.0], [qml.PauliX(0), qml.PauliY(1)]),
+        qml.Hamiltonian([0.42], [qml.PauliZ(0) @ qml.PauliX(1)]),
+        qml.sum(qml.PauliX(0), qml.PauliY(1)),
+        qml.prod(qml.PauliX(0), qml.PauliY(1)),
+        qml.s_prod(3.0, qml.PauliX(0)),
+        qml.sum(qml.PauliX(0), qml.s_prod(2.0, qml.PauliY(1))),
+        qml.prod(qml.sum(qml.PauliZ(0), qml.PauliY(1)), qml.s_prod(3, qml.PauliX(2))),
+        qml.Hermitian(qml.sum(qml.PauliX(0), qml.PauliY(1)).matrix(), [0, 1]),
+        qml.Projector([1, 0], [0, 1]),
     ],
 )
-def test_meas_expval(shots, ops, seed):
+def test_meas_expval(shots, ops):
     """Test that expectation value measurements with `default.clifford` is possible
     and agrees with `default.qubit`."""
-    dev_c = qp.device("default.clifford", seed=seed)
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford", shots=shots, seed=24)
+    dev_q = qml.device("default.qubit")
 
     def circuit_fn():
         circuit_1()
-        return qp.expval(ops)
+        return qml.expval(ops)
 
-    qnode_clfrd = qp.set_shots(qp.QNode(circuit_fn, dev_c), shots=shots)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     assert np.allclose(qnode_clfrd(), qnode_qubit(), atol=1e-2 if shots else 1e-8)
 
 
-@pytest.mark.parametrize("shots", [None, 200_000])
+@pytest.mark.parametrize("shots", [None, int(2e6)])
 @pytest.mark.parametrize(
     "ops",
     [
-        qp.PauliZ(0),
-        qp.PauliZ(0) @ qp.PauliY(1),
-        qp.sum(qp.PauliZ(0), qp.PauliY(1)),
-        qp.prod(qp.PauliZ(0), qp.PauliY(1)),
-        qp.s_prod(3.0, qp.PauliX(0)),
-        qp.sum(qp.PauliZ(0), qp.s_prod(2.0, qp.PauliY(1))),
+        qml.PauliZ(0),
+        qml.PauliZ(0) @ qml.PauliY(1),
+        qml.sum(qml.PauliZ(0), qml.PauliY(1)),
+        qml.prod(qml.PauliZ(0), qml.PauliY(1)),
+        qml.s_prod(3.0, qml.PauliX(0)),
+        qml.sum(qml.PauliZ(0), qml.s_prod(2.0, qml.PauliY(1))),
     ],
 )
-def test_meas_var(shots, ops, seed):
+def test_meas_var(shots, ops):
     """Test that variance measurements with `default.clifford` is possible
     and agrees with `default.qubit`."""
-    dev_c = qp.device("default.clifford", seed=seed)
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford", shots=shots)
+    dev_q = qml.device("default.qubit")
 
     def circuit_fn():
         circuit_1()
-        return qp.var(ops)
+        return qml.var(ops)
 
-    qnode_clfrd = qp.set_shots(qp.QNode(circuit_fn, dev_c), shots=shots)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
-    assert np.allclose(qnode_clfrd(), qnode_qubit(), atol=5e-2 if shots else 1e-8)
+    assert np.allclose(qnode_clfrd(), qnode_qubit(), atol=1e-2 if shots else 1e-8)
 
 
 @pytest.mark.parametrize("circuit", [circuit_1, circuit_2])
@@ -248,21 +237,21 @@ def test_meas_var(shots, ops, seed):
 def test_meas_samples(circuit, shots):
     """Test if samples are returned with shots given in the clifford device."""
 
-    @qp.qnode(qp.device("default.clifford"), shots=shots)
+    @qml.qnode(qml.device("default.clifford", shots=shots))
     def circuit_fn():
-        qp.BasisState(np.array([1, 1]), wires=range(2))
+        qml.BasisState(np.array([1, 1]), wires=range(2))
         circuit()
         return [
-            qp.sample(wires=[1]),
-            qp.sample(qp.PauliZ(0)),
-            qp.sample(qp.PauliX(0) @ qp.PauliY(1)),
+            qml.sample(wires=[1]),
+            qml.sample(qml.PauliZ(0)),
+            qml.sample(qml.PauliX(0) @ qml.PauliY(1)),
         ]
 
     samples = circuit_fn()
     assert len(samples) == 3
-    assert qp.math.shape(samples[0]) == (shots,)
-    assert qp.math.shape(samples[1]) == (shots,)
-    assert qp.math.shape(samples[2]) == (shots,)
+    assert qml.math.shape(samples[0]) == (shots,)
+    assert qml.math.shape(samples[1]) == (shots,)
+    assert qml.math.shape(samples[2]) == (shots,)
 
 
 @pytest.mark.parametrize("tableau", [True, False])
@@ -271,75 +260,77 @@ def test_meas_samples(circuit, shots):
     "ops",
     [
         None,
-        qp.PauliY(0),
-        qp.PauliX(0) @ qp.PauliY(1),
-        qp.PauliX(0) @ qp.PauliY(1) @ qp.PauliZ(2),
-        qp.Projector([0, 1], wires=[0, 1]),
+        qml.PauliY(0),
+        qml.PauliX(0) @ qml.PauliY(1),
+        qml.PauliX(0) @ qml.PauliY(1) @ qml.PauliZ(2),
+        qml.Projector([0, 1], wires=[0, 1]),
     ],
 )
-def test_meas_probs(tableau, shots, ops, seed):
+def test_meas_probs(tableau, shots, ops):
     """Test if probabilities are returned in the clifford device."""
 
-    dev_c = qp.device("default.clifford", tableau=tableau, seed=seed)
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford", tableau=tableau, shots=shots, seed=24)
+    dev_q = qml.device("default.qubit")
 
     def circuit_fn():
         for wire in range(3):
-            qp.PauliX(wire)
-            qp.PauliY(wire)
-            qp.PauliZ(wire)
-        return qp.probs(op=ops) if ops else qp.probs(wires=[0, 1])
+            qml.PauliX(wire)
+            qml.PauliY(wire)
+            qml.PauliZ(wire)
+        return qml.probs(op=ops) if ops else qml.probs(wires=[0, 1])
 
-    qnode_clfrd = qp.set_shots(qp.QNode(circuit_fn, dev_c), shots=shots)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     gotten_probs, target_probs = qnode_clfrd(), qnode_qubit()
 
-    assert qp.math.allclose(gotten_probs, target_probs, atol=5e-2 if shots else 1e-8)
+    assert qml.math.allclose(gotten_probs, target_probs, atol=1e-2 if shots else 1e-8)
 
 
-def test_meas_probs_large(seed):
+def test_meas_probs_large():
     """Test if probabilities are returned in the clifford device with target basis states"""
 
+    dev_c = qml.device("default.clifford", seed=24)
+
     def single_op(idx):
-        return [qp.PauliX, qp.PauliY, qp.Hadamard, qp.PauliZ][idx]
+        return [qml.PauliX, qml.PauliY, qml.Hadamard, qml.PauliZ][idx]
 
     def circuit_fn2(meas):
         for wire in range(16):
             single_op(wire % 4)(wires=wire)
-            qp.CNOT([wire, wire + 1])
-        return qp.apply(meas)
+            qml.CNOT([wire, wire + 1])
+        return qml.apply(meas)
 
-    dev_c = qp.device("default.clifford", seed=seed)
-    qnode_clfrd = qp.QNode(circuit_fn2, dev_c)
+    dev_c = qml.device("default.clifford", seed=24)
+    qnode_clfrd = qml.QNode(circuit_fn2, dev_c)
 
-    meas1 = qp.probs(op=qp.Projector([1, 1, 0], wires=[0, 6, 14]))
+    meas1 = qml.probs(op=qml.Projector([1, 1, 0], wires=[0, 6, 14]))
     assert qnode_clfrd(meas1).shape == (8,)
-    assert qp.math.allclose(qnode_clfrd(meas1), [0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25])
+    assert qml.math.allclose(qnode_clfrd(meas1), [0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25])
 
     for basis_state in np.array([[1, 0, 1], [0, 0, 1], [0, 1, 1], [1, 1, 1]]):
-        meas_b = qp.expval(op=qp.Projector(basis_state, wires=[0, 6, 14]))
+        meas_b = qml.expval(op=qml.Projector(basis_state, wires=[0, 6, 14]))
         assert qnode_clfrd(meas_b) == [0.0, 0.25][basis_state[0]]
 
 
 @pytest.mark.parametrize("shots", [1024, 4096])
 @pytest.mark.parametrize(
     "ops",
-    [None, qp.PauliY(0), qp.PauliX(0) @ qp.PauliY(1)],
+    [None, qml.PauliY(0), qml.PauliX(0) @ qml.PauliY(1)],
 )
-def test_meas_counts(shots, ops, seed):
+def test_meas_counts(shots, ops):
     """Test if counts are returned with shots given in the clifford device."""
 
-    dev_c = qp.device("default.clifford", seed=seed)
-    dev_q = qp.device("default.qubit", seed=seed)
+    dev_c = qml.device("default.clifford", shots=shots, seed=24)
+    dev_q = qml.device("default.qubit", shots=shots, seed=24)
 
     def circuit_fn():
-        qp.PauliX(0)
-        qp.PauliX(1)
-        return qp.counts(op=ops) if ops else qp.counts(wires=[0, 1])
+        qml.PauliX(0)
+        qml.PauliX(1)
+        return qml.counts(op=ops) if ops else qml.counts(wires=[0, 1])
 
-    qnode_clfrd = qp.set_shots(qp.QNode(circuit_fn, dev_c), shots=shots)
-    qnode_qubit = qp.set_shots(qp.QNode(circuit_fn, dev_q), shots=shots)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     counts_clfrd = qnode_clfrd()
     counts_qubit = qnode_qubit()
@@ -347,36 +338,36 @@ def test_meas_counts(shots, ops, seed):
     assert list(counts_clfrd.keys()) == list(counts_qubit.keys())
 
     for k1, k2 in zip(counts_clfrd, counts_clfrd):
-        assert qp.math.abs(counts_clfrd[k1] - counts_qubit[k2]) / shots < 0.1  # 10% threshold
+        assert qml.math.abs(counts_clfrd[k1] - counts_qubit[k2]) / shots < 0.1  # 10% threshold
 
 
 @pytest.mark.parametrize("shots", [1024, 10240])
 @pytest.mark.parametrize(
     "ops",
     [
-        qp.PauliZ(0),
-        qp.PauliZ(0) @ qp.PauliY(1),
+        qml.PauliZ(0),
+        qml.PauliZ(0) @ qml.PauliY(1),
     ],
 )
-def test_meas_classical_shadows(shots, ops, seed):
+def test_meas_classical_shadows(shots, ops):
     """Test if classical shadows measurements are returned with shots
     given in the clifford device."""
 
     def circuit():
-        qp.PauliX(0)
-        qp.PauliX(1)
-        qp.Hadamard(0)
-        qp.CNOT((0, 1))
+        qml.PauliX(0)
+        qml.PauliX(1)
+        qml.Hadamard(0)
+        qml.CNOT((0, 1))
 
-    dev_c = qp.device("default.clifford")
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford", shots=shots)
+    dev_q = qml.device("default.qubit", shots=shots)
 
     def circuit_shadow():
         circuit()
-        return qp.classical_shadow(wires=[0, 1], seed=seed)
+        return qml.classical_shadow(wires=[0, 1], seed=13)
 
-    qnode_clfrd_shadow = qp.set_shots(qp.QNode(circuit_shadow, dev_c), shots=shots)
-    qnode_qubit_shadow = qp.set_shots(qp.QNode(circuit_shadow, dev_q), shots=shots)
+    qnode_clfrd_shadow = qml.QNode(circuit_shadow, dev_c)
+    qnode_qubit_shadow = qml.QNode(circuit_shadow, dev_q)
 
     bits1, recipes1 = qnode_clfrd_shadow()
     bits2, recipes2 = qnode_qubit_shadow()
@@ -387,9 +378,9 @@ def test_meas_classical_shadows(shots, ops, seed):
 
     def circuit_expval():
         circuit()
-        return qp.shadow_expval(ops, seed=seed)
+        return qml.shadow_expval(ops, seed=13)
 
-    qnode_clfrd_expval = qp.set_shots(qp.QNode(circuit_expval, dev_c), shots=shots)
+    qnode_clfrd_expval = qml.QNode(circuit_expval, dev_c)
     expval = qnode_clfrd_expval()
 
     assert -1.0 <= expval <= 1.0
@@ -398,17 +389,17 @@ def test_meas_classical_shadows(shots, ops, seed):
 @pytest.mark.parametrize("circuit", [circuit_1])
 def test_prep_snap_clifford(circuit):
     """Test that state preparation with default.clifford is possible and agrees with default.qubit."""
-    dev_c = qp.device("default.clifford", wires=2, check_clifford=False)
-    dev_q = qp.device("default.qubit", wires=2)
+    dev_c = qml.device("default.clifford", wires=2, check_clifford=False)
+    dev_q = qml.device("default.qubit", wires=2)
 
     def circuit_fn():
-        qp.BasisState(np.array([1, 1]), wires=range(2))
+        qml.BasisState(np.array([1, 1]), wires=range(2))
         circuit()
-        qp.Snapshot(tag="cliffy")
-        return qp.expval(qp.PauliZ(0))
+        qml.Snapshot(tag="cliffy")
+        return qml.expval(qml.PauliZ(0))
 
-    qnode_clfrd = qp.QNode(circuit_fn, dev_c)
-    qnode_qubit = qp.QNode(circuit_fn, dev_q)
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_qubit = qml.QNode(circuit_fn, dev_q)
 
     assert np.allclose(qnode_clfrd(), qnode_qubit())
 
@@ -416,12 +407,12 @@ def test_prep_snap_clifford(circuit):
 @pytest.mark.parametrize(
     "pl_op,stim_op",
     [
-        (qp.PauliX(0), ("X", [0])),
-        (qp.CNOT(["a", "b"]), ("CNOT", ["a", "b"])),
-        (qp.GlobalPhase(1.0), (None, [])),
-        (qp.Snapshot(), (None, [])),
-        (qp.DepolarizingChannel(0.2, [2]), ("DEPOLARIZE1(0.2)", [2])),
-        (qp.PauliError("XYZ", 0.2, [0, 1, 2]), ("CORRELATED_ERROR(0.2)", ["X0", "Y1", "Z2"])),
+        (qml.PauliX(0), ("X", [0])),
+        (qml.CNOT(["a", "b"]), ("CNOT", ["a", "b"])),
+        (qml.GlobalPhase(1.0), (None, [])),
+        (qml.Snapshot(), (None, [])),
+        (qml.DepolarizingChannel(0.2, [2]), ("DEPOLARIZE1(0.2)", [2])),
+        (qml.PauliError("XYZ", 0.2, [0, 1, 2]), ("CORRELATED_ERROR(0.2)", ["X0", "Y1", "Z2"])),
     ],
 )
 def test_pl_to_stim(pl_op, stim_op):
@@ -431,70 +422,23 @@ def test_pl_to_stim(pl_op, stim_op):
     assert wires == " ".join(map(str, stim_op[1]))
 
 
-@pytest.mark.parametrize(
-    ["measurement", "tag"],
-    [
-        (qp.expval(op=qp.Z(1)), None),
-        (qp.expval(op=qp.Y(0) @ qp.X(1)), "expval"),
-        (qp.var(op=qp.X(0)), None),
-        (qp.var(op=qp.X(0) @ qp.Z(1)), "var"),
-        (qp.density_matrix(wires=[1]), None),
-        (qp.density_matrix(wires=[0, 1]), "dm"),
-        (qp.probs(op=qp.Y(0)), None),
-        (qp.probs(op=qp.X(0) @ qp.Y(1)), "probs"),
-        (qp.vn_entropy(wires=[0]), None),
-        (qp.vn_entropy(wires=[1]), "vn_entropy"),
-        (qp.mutual_info(wires0=[1], wires1=[0]), None),
-        (qp.mutual_info(wires0=[0], wires1=[1]), "mi"),
-        (qp.purity(wires=[0]), None),
-        (qp.purity(wires=[1]), "purity"),
-    ],
-)
-def test_snapshot_supported(measurement, tag):
-    """Tests that applying snapshot of measurements is done correctly"""
-
-    def circuit():
-        """Snapshot circuit"""
-        qp.Hadamard(wires=0)
-        qp.Hadamard(wires=1)
-        qp.Snapshot(measurement=qp.expval(qp.Z(0) @ qp.Z(1)))
-        qp.CNOT(wires=[0, 1])
-        qp.Snapshot(measurement=measurement, tag=tag)
-        qp.CZ(wires=[1, 0])
-        qp.Snapshot("meas2", measurement=measurement)
-        return qp.probs(op=qp.Y(1) @ qp.Z(0))
-
-    dev_qubit = qp.device("default.qubit", wires=2)
-    dev_clifford = qp.device("default.clifford", wires=2)
-
-    qnode_qubit = qp.QNode(circuit, device=dev_qubit)
-    qnode_clifford = qp.QNode(circuit, device=dev_clifford)
-
-    snaps_qubit = qp.snapshots(qnode_qubit)()
-    snaps_clifford = qp.snapshots(qnode_clifford)()
-
-    assert len(snaps_qubit) == len(snaps_clifford)
-    for key1, key2 in zip(snaps_qubit, snaps_clifford):
-        assert key1 == key2
-        assert qp.math.allclose(snaps_qubit[key1], snaps_clifford[key2])
-
-
-def test_max_worker_clifford(monkeypatch):
+def test_max_worker_clifford():
     """Test that the execution of multiple tapes is possible with multiprocessing on this device."""
 
-    monkeypatch.setenv("OMP_NUM_THREADS", "4")
-    dev_c = qp.device("default.clifford", max_workers=2)
-    dev_q = qp.device("default.qubit", max_workers=2)
+    os.environ["OMP_NUM_THREADS"] = "4"
 
-    qscript = qp.tape.QuantumScript(
-        [qp.Hadamard(wires=[0]), qp.CNOT(wires=[0, 1])],
-        [qp.expval(qp.PauliX(0))],
+    dev_c = qml.device("default.clifford", max_workers=2)
+    dev_q = qml.device("default.qubit", max_workers=2)
+
+    qscript = qml.tape.QuantumScript(
+        [qml.Hadamard(wires=[0]), qml.CNOT(wires=[0, 1])],
+        [qml.expval(qml.PauliX(0))],
     )
     tapes = (qscript, qscript)
 
-    conf_d = dev_c.setup_execution_config()
+    _, conf_d = dev_c.preprocess()
     res_c = dev_c.execute(tapes, conf_d)
-    conf_q = dev_q.setup_execution_config()
+    _, conf_q = dev_q.preprocess()
     res_q = dev_q.execute(tapes, conf_q)
     assert np.allclose(res_q, res_c)
 
@@ -502,19 +446,19 @@ def test_max_worker_clifford(monkeypatch):
 def test_tracker():
     """Test that the tracker works for this device."""
 
-    dev_c = qp.device("default.clifford")
-    dev_q = qp.device("default.qubit")
+    dev_c = qml.device("default.clifford")
+    dev_q = qml.device("default.qubit")
 
-    qscript = qp.tape.QuantumScript(
-        [qp.Hadamard(wires=[0]), qp.CNOT([0, 1])],
-        [qp.expval(qp.PauliZ(0))],
+    qscript = qml.tape.QuantumScript(
+        [qml.Hadamard(wires=[0]), qml.CNOT([0, 1])],
+        [qml.expval(qml.PauliZ(0))],
     )
     tapes = tuple([qscript])
 
-    with qp.Tracker(dev_c) as tracker:
-        conf_d = dev_c.setup_execution_config()
+    with qml.Tracker(dev_c) as tracker:
+        _, conf_d = dev_c.preprocess()
         res_c = dev_c.execute(tapes, conf_d)
-        conf_q = dev_q.setup_execution_config()
+        _, conf_q = dev_q.preprocess()
         res_q = dev_q.execute(tapes, conf_q)
         assert np.allclose(res_q, res_c)
 
@@ -528,11 +472,12 @@ def test_tracker():
         "results": 0.0,
     }
     assert np.allclose(tracker.history.pop("results")[0], 0.0)
-    assert tracker.history.pop("resources")[0] == qp.resource.SpecsResources(
+    assert tracker.history.pop("resources")[0] == qml.resource.Resources(
         num_wires=2,
-        counts={"Hadamard": 1, "CNOT": 1},
-        measurement_processes={"expval(PauliZ)": 1},
-        circuit_depth=2,
+        num_gates=2,
+        gate_types={"Hadamard": 1, "CNOT": 1},
+        gate_sizes={1: 1, 2: 1},
+        depth=2,
     )
     assert tracker.history == {
         "batches": [1, 1],
@@ -544,9 +489,17 @@ def test_tracker():
 def test_debugger():
     """Test that the debugger works for a simple circuit."""
 
-    dev = qp.device("default.clifford")
-    ops = [qp.Snapshot(), qp.Hadamard(wires=0), qp.Snapshot("final_state")]
-    qs = qp.tape.QuantumScript(ops, [qp.expval(qp.PauliX(0)), qp.expval(qp.PauliZ(0))])
+    # pylint: disable=too-few-public-methods
+    class Debugger:
+        """A dummy debugger class"""
+
+        def __init__(self):
+            self.active = True
+            self.snapshots = {}
+
+    dev = qml.device("default.clifford")
+    ops = [qml.Snapshot(), qml.Hadamard(wires=0), qml.Snapshot("final_state")]
+    qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliX(0)), qml.expval(qml.PauliZ(0))])
 
     debugger = Debugger()
     result = dev.simulate(qs, debugger=debugger)
@@ -555,37 +508,37 @@ def test_debugger():
     assert len(result) == 2
 
     assert list(debugger.snapshots.keys()) == [0, "final_state"]
-    assert qp.math.allclose(
-        debugger.snapshots[0], qp.math.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert qml.math.allclose(
+        debugger.snapshots[0], qml.math.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     )
-    assert qp.math.allclose(
-        debugger.snapshots["final_state"], qp.math.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+    assert qml.math.allclose(
+        debugger.snapshots["final_state"], qml.math.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
     )
 
-    assert qp.math.allclose(result[0], 1.0)
-    assert qp.math.allclose(result[1], 0.0)
+    assert qml.math.allclose(result[0], 1.0)
+    assert qml.math.allclose(result[1], 0.0)
 
-    dev2 = qp.device("default.clifford", wires=1)
+    dev2 = qml.device("default.clifford", wires=1)
     result = dev2.simulate(qs, debugger=debugger)
-    assert qp.math.allclose(
-        debugger.snapshots[0], qp.math.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert qml.math.allclose(
+        debugger.snapshots[0], qml.math.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     )
 
-    dev = qp.device("default.clifford", tableau=False)
+    dev = qml.device("default.clifford", tableau=False)
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def circuit():
         for op in ops:
-            qp.apply(op)
-        return [qp.expval(qp.PauliX(0)), qp.expval(qp.PauliZ(0))]
+            qml.apply(op)
+        return [qml.expval(qml.PauliX(0)), qml.expval(qml.PauliZ(0))]
 
     assert getattr(dev, "_debugger") is None
 
-    result = qp.snapshots(circuit)()
+    result = qml.snapshots(circuit)()
     expected = {
-        0: qp.math.array([1, 0]),
-        "final_state": qp.math.array([1, 1]) / qp.math.sqrt(2),
-        "execution_results": [qp.math.array(1.0), qp.math.array(0.0)],
+        0: qml.math.array([1, 0]),
+        "final_state": qml.math.array([1, 1]) / qml.math.sqrt(2),
+        "execution_results": [qml.math.array(1.0), qml.math.array(0.0)],
     }
 
     assert all(k1 == k2 for k1, k2 in zip(result.keys(), expected.keys()))
@@ -595,19 +548,19 @@ def test_debugger():
 @pytest.mark.parametrize("circuit", [circuit_1])
 def test_grad_error(circuit):
     """Test that computing gradients with `default.clifford` raises error."""
-    dev_c = qp.device("default.clifford")
+    dev_c = qml.device("default.clifford")
     assert not dev_c.supports_derivatives()
     assert not dev_c.supports_jvp()
     assert not dev_c.supports_vjp()
 
     def circuit_fn():
         circuit()
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
-    qnode_clfrd = qp.QNode(circuit_fn, dev_c)
-    tape = qp.workflow.construct_tape(qnode_clfrd)()
+    qnode_clfrd = qml.QNode(circuit_fn, dev_c)
+    qnode_clfrd()
 
-    conf_c, tape_c = dev_c.setup_execution_config(), tape
+    conf_c, tape_c = dev_c.preprocess()[1], qnode_clfrd.tape
 
     with pytest.raises(
         NotImplementedError,
@@ -625,10 +578,10 @@ def test_grad_error(circuit):
 def test_meas_error():
     """Test if an NotImplementedError is raised when taking expectation value of op_math objects."""
 
-    @qp.qnode(qp.device("default.clifford"))
+    @qml.qnode(qml.device("default.clifford"))
     def circuit_exp():
-        qp.BasisState(np.array([1, 1]), wires=range(2))
-        return qp.expval(qp.sum(qp.exp(qp.PauliX(0), coeff=-3.2j), qp.PauliZ(1)))
+        qml.BasisState(np.array([1, 1]), wires=range(2))
+        return qml.expval(qml.sum(qml.exp(qml.PauliX(0), coeff=-3.2j), qml.PauliZ(1)))
 
     with pytest.raises(
         NotImplementedError,
@@ -636,72 +589,75 @@ def test_meas_error():
     ):
         circuit_exp()
 
-    @qp.qnode(qp.device("default.clifford", wires=3), shots=10)
-    def circuit_herm():
-        qp.Hadamard(wires=[0])
-        qp.CNOT(wires=[0, 1])
-        Amat = np.random.rand(4, 4)
-        return qp.probs(op=qp.Hermitian(Amat + Amat.conj().T, wires=[0, 1]))
+    @qml.qnode(qml.device("default.clifford"))
+    def circuit_snap():
+        qml.Snapshot(measurement=qml.expval(qml.PauliZ(0)))
+        return qml.state()
 
     with pytest.raises(
-        QuantumFunctionError,
+        ValueError,
+        match="default.clifford does not support arbitrary measurements of a state with snapshots.",
+    ):
+        qml.snapshots(circuit_snap)()
+
+    @qml.qnode(qml.device("default.clifford", wires=3, shots=10))
+    def circuit_herm():
+        qml.Hadamard(wires=[0])
+        qml.CNOT(wires=[0, 1])
+        Amat = np.random.rand(4, 4)
+        return qml.probs(op=qml.Hermitian(Amat + Amat.conj().T, wires=[0, 1]))
+
+    with pytest.raises(
+        qml.QuantumFunctionError,
         match="Hermitian is not supported for rotating probabilities on default.clifford.",
     ):
         circuit_herm()
-
-
-class LegacyRX(Operator1):  # pylint: disable=too-few-public-methods
-    has_decomposition = False
 
 
 @pytest.mark.parametrize("check", [True, False])
 def test_clifford_error(check):
     """Test if an QuantumFunctionError is raised when one of the operations is not Clifford."""
 
-    dev = qp.device("default.clifford", tableau="tableau", check_clifford=check)
+    dev = qml.device("default.clifford", tableau="tableau", check_clifford=check)
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def circuit():
-        qp.Hadamard(wires=[0])
-        qp.PauliX(wires=[0])
-        LegacyRX(1.0, wires=[0])
-        return qp.state()
+        qml.Hadamard(wires=[0])
+        qml.PauliX(wires=[0])
+        qml.RX(1.0, wires=[0])
+        return qml.state()
 
     with pytest.raises(
-        DeviceError,
-        match=r"Operator LegacyRX\(1.0, wires=\[0\]\) not supported with default.clifford and does not provide a decomposition",
+        qml.DeviceError,
+        match=r"Operator RX\(1.0, wires=\[0\]\) not supported on default.clifford and does not provide a decomposition",
     ):
-        if qp.decomposition.enabled_graph() and check:
-            with pytest.warns(DecompositionWarning):
-                circuit()
-        else:
-            circuit()
+        circuit()
 
 
 def test_meas_error_noisy():
     """Test error is raised when noisy circuit are executed on Clifford device analytically."""
 
-    @qp.qnode(qp.device("default.clifford"))
+    @qml.qnode(qml.device("default.clifford"))
     def circ_1():
-        qp.BasisState(np.array([1, 1]), wires=range(2))
+        qml.BasisState(np.array([1, 1]), wires=range(2))
         circuit_2()
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
     with pytest.raises(
-        DeviceError,
+        qml.DeviceError,
         match="Channel not supported on default.clifford without finite shots.",
     ):
         circ_1()
 
-    @qp.qnode(qp.device("default.clifford"))
+    @qml.qnode(qml.device("default.clifford"))
     def circ_2():
-        qp.BasisState(np.array([1, 1]), wires=range(2))
-        qp.AmplitudeDamping(0.2, [0])
-        return qp.expval(qp.PauliZ(0))
+        qml.BasisState(np.array([1, 1]), wires=range(2))
+        qml.AmplitudeDamping(0.2, [0])
+        return qml.expval(qml.PauliZ(0))
 
     with pytest.raises(
-        DeviceError,
-        match=r"Operator AmplitudeDamping\(0.2, wires=\[0\]\) not supported with default.clifford",
+        qml.DeviceError,
+        match=r"Operator AmplitudeDamping\(0.2, wires=\[0\]\) not supported on default.clifford",
     ):
         circ_2()
 
@@ -709,73 +665,40 @@ def test_meas_error_noisy():
 @pytest.mark.parametrize(
     "channel_op",
     [
-        qp.PauliError("YZ", 0.2, wires=[0, 1]),
-        qp.PauliError("YZ", 0.3, wires=[1, 3]),
-        qp.BitFlip(0.1, wires=[0]),
-        qp.BitFlip(0.5, wires=[2]),
-        qp.PhaseFlip(0.3, wires=[1]),
-        qp.PhaseFlip(0.5, wires=[3]),
-        qp.DepolarizingChannel(0.2, wires=[0]),
-        qp.DepolarizingChannel(0.75, wires=[2]),
+        qml.PauliError("YZ", 0.2, wires=[0, 1]),
+        qml.PauliError("YZ", 0.3, wires=[1, 3]),
+        qml.BitFlip(0.1, wires=[0]),
+        qml.BitFlip(0.5, wires=[2]),
+        qml.PhaseFlip(0.3, wires=[1]),
+        qml.PhaseFlip(0.5, wires=[3]),
+        qml.DepolarizingChannel(0.2, wires=[0]),
+        qml.DepolarizingChannel(0.75, wires=[2]),
     ],
 )
 def test_meas_noisy_distribution(channel_op):
     """Test error distribution of samples matches with that from `default.mixed` device."""
 
-    dev_c = qp.device("default.clifford", wires=4)
-    dev_q = qp.device("default.mixed", wires=4)
+    dev_c = qml.device("default.clifford", shots=10000, wires=4)
+    dev_q = qml.device("default.mixed", shots=10000, wires=4)
 
     def circuit():
-        qp.Hadamard(wires=[0])
+        qml.Hadamard(wires=[0])
         for idx in range(3):
-            qp.CNOT(wires=[idx, idx + 1])
-        qp.apply(channel_op)
-        return qp.probs()
+            qml.CNOT(wires=[idx, idx + 1])
+        qml.apply(channel_op)
+        return qml.probs()
 
-    qnode_clfrd = qp.set_shots(qp.QNode(circuit, dev_c), shots=10000)
-    qnode_qubit = qp.set_shots(qp.QNode(circuit, dev_q), shots=10000)
+    qnode_clfrd = qml.QNode(circuit, dev_c)
+    qnode_qubit = qml.QNode(circuit, dev_q)
 
     kl_d = np.ma.masked_invalid(sp.special.rel_entr(qnode_clfrd(), qnode_qubit()))
-    assert qp.math.allclose(np.abs(kl_d.sum()), 0.0, atol=1e-1)
+    assert qml.math.allclose(np.abs(kl_d.sum()), 0.0, atol=1e-1)
 
 
 def test_fail_import_stim(monkeypatch):
     """Test if an ImportError is raised when stim is requested but not installed."""
 
     with monkeypatch.context() as m:
-        m.setattr(qp.devices.default_clifford, "has_stim", False)
+        m.setattr(qml.devices.default_clifford, "has_stim", False)
         with pytest.raises(ImportError, match="This feature requires stim"):
-            qp.device("default.clifford")
-
-
-def test_basis_state_large_wires():
-    """Test that BasisState works with a large number of wires without crashing.
-
-    This ensures that BasisState uses the efficient Clifford decomposition
-    instead of expanding the full state vector (which would cause OOM for 64 wires).
-    """
-    # 64 wires would usually crash without the fix(usually more than 30)
-    dev = qp.device("default.clifford", wires=64, tableau=True)
-
-    @qp.qnode(dev)
-    def circuit():
-        # This should now use the efficient decomposition
-        qp.BasisState(np.zeros(64), wires=range(64))
-        return qp.expval(qp.Z(0))
-
-    res = circuit()
-    assert qp.math.isclose(res, 1.0)
-
-
-def test_state_prep_coverage():
-    """Test that StatePrep falls back to Tableau.from_state_vector."""
-    dev = qp.device("default.clifford", wires=1)
-
-    @qp.qnode(dev)
-    def circuit():
-        # Prepare the |1> state using a dense state vector
-        qp.StatePrep(np.array([0.0, 1.0]), wires=[0])
-        return qp.expval(qp.Z(0))
-
-    res = circuit()
-    assert qp.math.isclose(res, -1.0)
+            qml.device("default.clifford")

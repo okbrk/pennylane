@@ -16,22 +16,15 @@ This module contains functions and classes to create a
 :class:`~pennylane.qchem.molecule.Molecule` object. This object stores all
 the necessary information to perform a Hartree-Fock calculation for a given molecule.
 """
-
+# pylint: disable=too-few-public-methods, too-many-arguments, too-many-instance-attributes
+import itertools
 import collections
 
-# pylint: disable=too-many-arguments,too-many-instance-attributes
-import itertools
-import warnings
-
-from scipy.constants import angstrom, physical_constants
-
-import pennylane as qp
+from pennylane import numpy as pnp
 
 from .basis_data import atomic_numbers
 from .basis_set import BasisFunction, mol_basis_data
 from .integrals import contracted_norm, primitive_norm
-
-BOHR_TO_ANG = physical_constants["Bohr radius"][0] / angstrom
 
 
 class Molecule:
@@ -47,37 +40,25 @@ class Molecule:
             where ``N`` is the number of atoms.
         charge (int): net charge of the molecule
         mult (int): Spin multiplicity :math:`\mathrm{mult}=N_\mathrm{unpaired} + 1` for
-            :math:`N_\mathrm{unpaired}` unpaired electrons occupying the HF orbitals.
+            :math:`N_\mathrm{unpaired}` unpaired electrons occupying the HF orbitals. Currently,
+            openshell systems are not supported; ``mult`` must be equal to :math:`1`.
         basis_name (str): Atomic basis set used to represent the molecular orbitals. Currently, the
-            only supported basis sets are ``STO-3G``, ``6-31G``, ``6-311G`` and ``CC-PVDZ``. Other
-            basis sets can be loaded from the basis-set-exchange library using ``load_data``.
+            only supported basis sets are 'STO-3G', '6-31G', '6-311G' and 'CC-PVDZ'.
         load_data (bool): flag to load data from the basis-set-exchange library
         l (tuple[int]): angular momentum quantum numbers of the basis function
         alpha (array[float]): exponents of the primitive Gaussian functions
         coeff (array[float]): coefficients of the contracted Gaussian functions
         r (array[float]): positions of the Gaussian functions
         normalize (bool): if True, the basis functions get normalized
-        unit (str): unit of atomic coordinates. Available options are ``unit="bohr"`` and ``unit="angstrom"``.
-
-    .. note::
-        :class:`~.qchem.Molecule` is not currently compatible with :func:`~.qjit` and ``jax.jit``.
 
     **Example**
 
-    Import necessary modules:
-
-    >>> from pennylane import numpy as np
-    >>> from pennylane.qchem import Molecule
-
-    Define molecular symbols and geometry:
-
     >>> symbols  = ['H', 'H']
     >>> geometry = np.array([[0.0, 0.0, -0.694349],
-    ...                      [0.0, 0.0,  0.694349]], requires_grad = True)
+    >>>                      [0.0, 0.0,  0.694349]], requires_grad = True)
     >>> mol = Molecule(symbols, geometry)
     >>> print(mol.n_electrons)
     2
-
     """
 
     def __init__(
@@ -87,13 +68,11 @@ class Molecule:
         charge=0,
         mult=1,
         basis_name="sto-3g",
-        name="molecule",
         load_data=False,
         l=None,
         alpha=None,
         coeff=None,
         normalize=True,
-        unit="bohr",
     ):
         if (
             basis_name.lower()
@@ -116,58 +95,35 @@ class Molecule:
 
         self.symbols = symbols
         self.coordinates = coordinates
-        self.unit = unit.strip().lower()
         self.charge = charge
         self.mult = mult
         self.basis_name = basis_name.lower()
-        self.name = name
-        self.load_data = load_data
+
         self.n_basis, self.basis_data = mol_basis_data(self.basis_name, self.symbols, load_data)
-
-        if self.unit not in ("angstrom", "bohr"):
-            raise ValueError(
-                f"The provided unit '{unit}' is not supported. "
-                f"Please set 'unit' to 'bohr' or 'angstrom'."
-            )
-
-        if self.unit == "angstrom":
-            self.coordinates = self.coordinates / BOHR_TO_ANG
 
         self.nuclear_charges = [atomic_numbers[s] for s in self.symbols]
 
         self.n_electrons = sum(self.nuclear_charges) - self.charge
 
+        if self.n_electrons % 2 == 1 or self.mult != 1:
+            raise ValueError(
+                "Openshell systems are not supported. Change the charge or spin "
+                "multiplicity of the molecule."
+            )
+
         if l is None:
             l = [i[0] for i in self.basis_data]
 
-        use_jax = any(qp.math.get_interface(x) == "jax" for x in [coordinates, alpha, coeff])
-        interface_args = [{"like": "autograd", "requires_grad": False}, {"like": "jax"}][use_jax]
         if alpha is None:
-            alpha = [qp.math.array(i[1], **interface_args) for i in self.basis_data]
+            alpha = [pnp.array(i[1], requires_grad=False) for i in self.basis_data]
 
         if coeff is None:
-            coeff = [qp.math.array(i[2], **interface_args) for i in self.basis_data]
-
+            coeff = [pnp.array(i[2], requires_grad=False) for i in self.basis_data]
             if normalize:
                 coeff = [
-                    qp.math.array(c * primitive_norm(l[i], alpha[i]), **interface_args)
+                    pnp.array(c * primitive_norm(l[i], alpha[i]), requires_grad=False)
                     for i, c in enumerate(coeff)
                 ]
-
-        if (
-            len(
-                {
-                    qp.math.get_deep_interface(x)
-                    for x in [coordinates, alpha, coeff]
-                    if qp.math.get_deep_interface(x) != "numpy"
-                }
-            )
-            > 1
-        ):
-            warnings.warn(
-                "The parameters coordinates, coeff, and alpha are not of the same interface. Please use the same interface for all 3 or there may be unintended behavior.",
-                UserWarning,
-            )
 
         r = list(
             itertools.chain(
@@ -186,7 +142,6 @@ class Molecule:
         self.n_orbitals = len(self.l)
 
         self.mo_coefficients = None
-        self.normalize = normalize
 
     def __repr__(self):
         """Returns the molecule representation in string format"""
@@ -212,7 +167,7 @@ class Molecule:
 
         >>> symbols  = ['H', 'H']
         >>> geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], requires_grad = False)
-        >>> mol = qp.qchem.Molecule(symbols, geometry)
+        >>> mol = qml.qchem.Molecule(symbols, geometry)
         >>> ao = mol.atomic_orbital(0)
         >>> ao(0.0, 0.0, 0.0)
         0.62824688
@@ -238,12 +193,8 @@ class Molecule:
                 array[float]: value of a basis function
             """
             c = ((x - r[0]) ** lx) * ((y - r[1]) ** ly) * ((z - r[2]) ** lz)
-            e = qp.math.exp(
-                qp.math.tensordot(
-                    -alpha, (x - r[0]) ** 2 + (y - r[1]) ** 2 + (z - r[2]) ** 2, axes=0
-                )
-            )
-            return c * qp.math.dot(coeff, e)
+            e = [pnp.exp(-a * ((x - r[0]) ** 2 + (y - r[1]) ** 2 + (z - r[2]) ** 2)) for a in alpha]
+            return c * pnp.dot(coeff, e)
 
         return orbital
 
@@ -260,8 +211,8 @@ class Molecule:
 
         >>> symbols  = ['H', 'H']
         >>> geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], requires_grad = False)
-        >>> mol = qp.qchem.Molecule(symbols, geometry)
-        >>> qp.qchem.scf(mol)() # run scf to obtain the optimized molecular orbitals
+        >>> mol = qml.qchem.Molecule(symbols, geometry)
+        >>> qml.qchem.scf(mol)() # run scf to obtain the optimized molecular orbitals
         >>> mo = mol.molecular_orbital(1)
         >>> mo(0.0, 0.0, 0.0)
         0.01825128

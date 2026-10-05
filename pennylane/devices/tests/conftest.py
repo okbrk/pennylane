@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Contains shared fixtures for the device tests."""
-
 import argparse
 import os
 
@@ -20,8 +19,7 @@ import numpy as np
 import pytest
 from _pytest.runner import pytest_runtest_makereport as orig_pytest_runtest_makereport
 
-import pennylane as qp
-from pennylane.exceptions import DeviceError
+import pennylane as qml
 
 # ==========================================================
 # pytest fixtures
@@ -37,18 +35,24 @@ N_SHOTS = 1e6
 # List of all devices that are included in PennyLane
 LIST_CORE_DEVICES = {
     "default.qubit",
+    "default.qubit.torch",
+    "default.qubit.tf",
+    "default.qubit.autograd",
 }
 
 
 @pytest.fixture(scope="function")
-def tol(shots):  # pylint: disable=redefined-outer-name
+def tol():
     """Numerical tolerance for equality tests. Returns a different tolerance for tests
     probing analytic or non-analytic devices, which allows us to define the
     standard for deterministic or stochastic test results dynamically."""
 
-    if shots is None:
-        return float(os.environ.get("TOL", TOL))
-    return TOL_STOCHASTIC
+    def _tol(shots):
+        if shots is None:
+            return float(os.environ.get("TOL", TOL))
+        return TOL_STOCHASTIC
+
+    return _tol
 
 
 @pytest.fixture(scope="session")
@@ -63,32 +67,6 @@ def init_state():
     return _init_state
 
 
-@pytest.fixture(params=[False, True], ids=["graph_disabled", "graph_enabled"])
-def enable_and_disable_graph_decomp(request):
-    """
-    A fixture that parametrizes a test to run twice: once with graph
-    decomposition disabled and once with it enabled.
-
-    It automatically handles the setup (enabling/disabling) before the
-    test runs and the teardown (always disabling) after the test completes.
-    """
-    use_graph_decomp = request.param
-    with qp.decomposition.toggle_graph_ctx(use_graph_decomp):
-        yield
-
-
-def get_legacy_capabilities(dev):
-    """Gets the capabilities dictionary of a device."""
-
-    if isinstance(dev, qp.devices.LegacyDeviceFacade):
-        return dev.target_device.capabilities()
-
-    if isinstance(dev, qp.devices.LegacyDevice):
-        return dev.capabilities()
-
-    return {}
-
-
 @pytest.fixture(scope="session")
 def skip_if():
     """Fixture to skip tests."""
@@ -96,8 +74,7 @@ def skip_if():
     def _skip_if(dev, capabilities):
         """Skip test if device has any of the given capabilities."""
 
-        dev_capabilities = get_legacy_capabilities(dev)
-
+        dev_capabilities = dev.capabilities()
         for capability, value in capabilities.items():
             # skip if capability not found, or if capability has specific value
             if capability not in dev_capabilities or dev_capabilities[capability] == value:
@@ -108,28 +85,8 @@ def skip_if():
     return _skip_if
 
 
-@pytest.fixture
-def shots(request) -> None | int:
-    """The number of shots to use during an execution."""
-    shots_value = request.config.getoption("--shots")
-    return None if shots_value in (None, "None") else int(shots_value)
-
-
-@pytest.fixture
-def validate_diff_method(device, diff_method, shots):  # pylint: disable=redefined-outer-name
-    """Skip tests if a device does not support a diff_method"""
-    if diff_method in {"parameter-shift", "hadamard"}:
-        return
-    if diff_method == "backprop" and shots is not None:
-        pytest.skip(reason="test should only be run in analytic mode")
-    dev = device(1)
-    config = qp.devices.ExecutionConfig(gradient_method=diff_method)
-    if not dev.supports_derivatives(execution_config=config):
-        pytest.skip(reason="device does not support diff_method")
-
-
-@pytest.fixture(scope="function", name="device")
-def fixture_device(device_kwargs):
+@pytest.fixture(scope="function")
+def device(device_kwargs):
     """Fixture to create a device."""
 
     # internally used by pytest
@@ -139,14 +96,20 @@ def fixture_device(device_kwargs):
         device_kwargs["wires"] = wires
 
         try:
-            dev = qp.device(**device_kwargs)
-        except DeviceError:
+            dev = qml.device(**device_kwargs)
+        except qml.DeviceError:
             dev_name = device_kwargs["name"]
             # exit the tests if the device cannot be created
             pytest.exit(
                 f"Device {dev_name} cannot be created. To run the device tests on an external device, the "
                 f"plugin and all of its dependencies must be installed."
             )
+
+        if isinstance(dev, qml.Device):
+            capabilities = dev.capabilities()
+            if capabilities.get("model", None) != "qubit":
+                # exit the tests if device based on cv model (currently not supported)
+                pytest.exit("The device test suite currently only runs on qubit-based devices.")
 
         return dev
 
@@ -191,6 +154,8 @@ class StoreDictKeyPair(argparse.Action):
     Note that strings will be converted to ints and floats if possible.
 
     """
+
+    # pylint: disable=too-few-public-methods
 
     def __init__(self, option_strings, dest, nargs=None, **kwargs):
         self._nargs = nargs
@@ -244,16 +209,13 @@ def pytest_addoption(parser):
         metavar="KEY=VAL",
         help="Additional device kwargs.",
     )
-    addoption(
-        "--disable-opmath", action="store", default="False", help="Whether to disable new_opmath"
-    )
 
 
 def pytest_generate_tests(metafunc):
     """Set up device_kwargs fixture from command line options.
 
     The fixture defines a dictionary of keyword argument that can be used to instantiate
-    a device via `qp.device(**device_kwargs)` in the test. This allows us to potentially
+    a device via `qml.device(**device_kwargs)` in the test. This allows us to potentially
     change kwargs in the test before creating the device.
     """
 
@@ -268,6 +230,12 @@ def pytest_generate_tests(metafunc):
 
     for dev in devices_to_test:
         device_kwargs = {"name": dev}
+
+        # if shots specified in command line,
+        # add to the device kwargs
+        if opt.shots is not None:
+            # translate command line string to None if necessary
+            device_kwargs["shots"] = None if (opt.shots == "None") else int(opt.shots)
 
         # store user defined device kwargs
         device_kwargs.update(opt.device_kwargs)
@@ -290,7 +258,7 @@ def pytest_runtest_makereport(item, call):
             # Exclude failing test cases for unsupported operations/observables
             # and those using not implemented features
             if (
-                call.excinfo.type == DeviceError
+                call.excinfo.type == qml.DeviceError
                 and "supported" in str(call.excinfo.value)
                 or call.excinfo.type == NotImplementedError
             ):

@@ -12,15 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 r"""
-Overview
---------
-
-This module contains functionality for performing :doc:`classical shadows <demo:demos/tutorial_diffable_shadows>` measurements.
-
 .. currentmodule:: pennylane
 
 Measurements
-^^^^^^^^^^^^
+------------
 
 .. autosummary::
     :toctree: api
@@ -29,7 +24,7 @@ Measurements
     ~shadow_expval
 
 Shadow class for classical post-processing
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+------------------------------------------
 
 .. autosummary::
     :toctree: api
@@ -37,11 +32,12 @@ Shadow class for classical post-processing
     ~ClassicalShadow
 
 QNode transforms
-^^^^^^^^^^^^^^^^
+----------------
 
 .. autosummary::
     :toctree: api
 
+    ~shadows.shadow_expval
     ~shadows.shadow_state
 
 Classical Shadows formalism
@@ -49,7 +45,7 @@ Classical Shadows formalism
 
 .. note:: As per `arXiv:2103.07510 <https://arxiv.org/abs/2103.07510>`_, when computing multiple expectation values it is advisable to directly estimate the desired observables by simultaneously measuring
     qubit-wise-commuting terms. One way of doing this in PennyLane is via :class:`~pennylane.Hamiltonian` and setting ``grouping_type="qwc"``. For more details on this topic, see the PennyLane demo
-    on :doc:`estimating expectation values with classical shadows <demo:demos/tutorial_diffable_shadows>`.
+    on `estimating expectation values with classical shadows <https://pennylane.ai/qml/demos/tutorial_diffable_shadows.html>`_.
 
 A :class:`ClassicalShadow` is a classical description of a quantum state that is capable of reproducing expectation values of local Pauli observables, see `arXiv:2002.08953 <https://arxiv.org/abs/2002.08953>`_.
 
@@ -76,33 +72,26 @@ Basic usage
 
 The easiest way of computing expectation values with classical shadows in PennyLane is to return :func:`shadow_expval` directly from the qnode.
 
-.. code-block:: python
+.. code-block:: python3
 
-    from pennylane import numpy as np
+    H = qml.Hamiltonian([1., 1.], [qml.Z(0) @ qml.Z(1), qml.X(0) @ qml.X(1)])
 
-    H = qp.Hamiltonian([1., 1.], [qp.Z(0) @ qp.Z(1), qp.X(0) @ qp.Z(1)])
-
-    dev = qp.device("default.qubit", seed=42)
-
-    # shadow_expval + mid-circuit measurements require to defer measurements
-    @qp.defer_measurements
-    @qp.set_shots(shots=10000)
-    @qp.qnode(dev)
+    dev = qml.device("default.qubit", wires=range(2), shots=10000)
+    @qml.qnode(dev)
     def qnode(x):
-        qp.Hadamard(0)
-        qp.CNOT((0,1))
-        qp.RX(x, wires=0)
-        qp.measure(1)
-        return qp.shadow_expval(H, seed=99)
+        qml.Hadamard(0)
+        qml.CNOT((0,1))
+        qml.RX(x, wires=0)
+        return qml.shadow_expval(H)
 
     x = np.array(0.5, requires_grad=True)
 
 The big advantage of this way of computing expectation values is that it is differentiable.
 
 >>> qnode(x)
-array(0.8532)
->>> print(qp.grad(qnode)(x))
--0.4644...
+array(1.9242)
+>>> qml.grad(qnode)(x)
+-0.44999999999999984
 
 There are more options for post-processing classical shadows in :class:`ClassicalShadow`.
 """
@@ -110,4 +99,4 @@ There are more options for post-processing classical shadows in :class:`Classica
 from .classical_shadow import ClassicalShadow, median_of_means, pauli_expval
 
 # allow aliasing in the module namespace
-from .transforms import shadow_state
+from .transforms import shadow_state, shadow_expval

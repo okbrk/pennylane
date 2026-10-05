@@ -12,21 +12,20 @@
 """
 Contains the sign (and xi) decomposition tape transform, implementation of ideas from arXiv:2207.09479
 """
-
+# pylint: disable=protected-access
 import json
 from os import path
+from typing import Sequence, Callable
 
 import numpy as np
 
-import pennylane as qp
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
+import pennylane as qml
 from pennylane.transforms import transform
-from pennylane.typing import PostprocessingFn
 
 
 def controlled_pauli_evolution(theta, wires, pauli_word, controls):
     r"""Controlled Evolution under generic Pauli words, adapted from the decomposition of
-    qp.PauliRot to suit our needs
+    qml.PauliRot to suit our needs
 
 
     Args:
@@ -40,25 +39,24 @@ def controlled_pauli_evolution(theta, wires, pauli_word, controls):
         list[Operator]: decomposition that make up the controlled evolution
     """
     active_wires, active_gates = zip(
-        *[(wire, gate) for wire, gate in zip(wires, pauli_word, strict=True) if gate != "I"],
-        strict=True,
+        *[(wire, gate) for wire, gate in zip(wires, pauli_word) if gate != "I"]
     )
 
     ops = []
-    for wire, gate in zip(active_wires, active_gates, strict=True):
+    for wire, gate in zip(active_wires, active_gates):
         if gate in ("X", "Y"):
             ops.append(
-                qp.Hadamard(wires=[wire]) if gate == "X" else qp.RX(-np.pi / 2, wires=[wire])
+                qml.Hadamard(wires=[wire]) if gate == "X" else qml.RX(-np.pi / 2, wires=[wire])
             )
 
-    ops.append(qp.CNOT(wires=[controls[1], wires[0]]))
-    ops.append(qp.ctrl(op=qp.MultiRZ(theta, wires=list(active_wires)), control=controls[0]))
-    ops.append(qp.CNOT(wires=[controls[1], wires[0]]))
+    ops.append(qml.CNOT(wires=[controls[1], wires[0]]))
+    ops.append(qml.ctrl(op=qml.MultiRZ(theta, wires=list(active_wires)), control=controls[0]))
+    ops.append(qml.CNOT(wires=[controls[1], wires[0]]))
 
-    for wire, gate in zip(active_wires, active_gates, strict=True):
+    for wire, gate in zip(active_wires, active_gates):
         if gate in ("X", "Y"):
             ops.append(
-                qp.Hadamard(wires=[wire]) if gate == "X" else qp.RX(-np.pi / 2, wires=[wire])
+                qml.Hadamard(wires=[wire]) if gate == "X" else qml.RX(-np.pi / 2, wires=[wire])
             )
 
     return ops
@@ -69,13 +67,13 @@ def evolve_under(ops, coeffs, time, controls):
     Evolves under the given Hamiltonian deconstructed into its Pauli words
 
     Args:
-        ops (List[Operator): List of Pauli words that comprise the Hamiltonian
+        ops (List[Observables]): List of Pauli words that comprise the Hamiltonian
         coeffs (List[int]): List of the respective coefficients of the Pauliwords of the Hamiltonian
         time (float): At what time to evaluate these Pauliwords
     """
     ops_temp = []
-    for op, coeff in zip(ops, coeffs, strict=True):
-        pauli_word = qp.pauli.pauli_word_to_string(op)
+    for op, coeff in zip(ops, coeffs):
+        pauli_word = qml.pauli.pauli_word_to_string(op)
         ops_temp.append(
             controlled_pauli_evolution(
                 coeff * time,
@@ -105,14 +103,14 @@ def calculate_xi_decomposition(hamiltonian):
 
 
     Args:
-      hamiltonian (qp.Hamiltonian): The pennylane Hamiltonian to be decomposed
+      hamiltonian (qml.Hamiltonian): The pennylane Hamiltonian to be decomposed
 
     Returns:
       dEs (List[float]): The energy (E_1-E-2)/2 separating the two eigenvalues of the spectrum
       mus (List[float]): The average between the two eigenvalues (E_1+E-2)/2
       times (List[float]): The time for this term group to be evaluated/evolved at
       projs (List[np.array]): The analytical observables associated with these groups,
-       to be measured by qp.Hermitian
+       to be measured by qml.Hermitian
     """
     mat = hamiltonian.sparse_matrix().toarray()
     size = len(mat)
@@ -156,8 +154,8 @@ def construct_sgn_circuit(  # pylint: disable=too-many-arguments
     approximating/estimating the individual terms of your decomposition
 
     Args:
-      hamiltonian (qp.Hamiltonian): The pennylane Hamiltonian to be decomposed
-      tape (qp.QuantumTape: Tape containing the circuit to be expanded into the new circuits
+      hamiltonian (qml.Hamiltonian): The pennylane Hamiltonian to be decomposed
+      tape (qml.QuantumTape: Tape containing the circuit to be expanded into the new circuits
       mus (List[float]): The average between the two eigenvalues (E_1+E-2)/2
       times (List[float]): The time for this term group to be evaluated/evolved at
       phis (List[float]): Optimal phi values for the QSP part associated with the respective
@@ -166,42 +164,42 @@ def construct_sgn_circuit(  # pylint: disable=too-many-arguments
           Hadamard test and the quantum signal processing part on
 
     Returns:
-      tapes (List[qp.tape]): Expanded tapes from the original tape that measures the terms
+      tapes (List[qml.tape]): Expanded tapes from the original tape that measures the terms
         via the approximate sgn decomposition
     """
-    coeffs = hamiltonian.terms()[0]
+    coeffs = hamiltonian.data
     tapes = []
-    for mu, time in zip(mus, times, strict=True):
+    for mu, time in zip(mus, times):
         added_operations = []
-        # Put QSP and Hadamard test on the two auxiliarys Target and Control
-        added_operations.append(qp.Hadamard(controls[0]))
+        # Put QSP and Hadamard test on the two ancillas Target and Control
+        added_operations.append(qml.Hadamard(controls[0]))
         for i, phi in enumerate(phis):
-            added_operations.append(qp.CRX(phi, wires=controls))
+            added_operations.append(qml.CRX(phi, wires=controls))
             if i == len(phis) - 1:
-                added_operations.append(qp.CRY(np.pi, wires=controls))
+                added_operations.append(qml.CRY(np.pi, wires=controls))
             else:
-                for ops in evolve_under(hamiltonian.terms()[1], coeffs, 2 * time, controls):
+                for ops in evolve_under(hamiltonian.ops, coeffs, 2 * time, controls):
                     added_operations.extend(ops)
-                added_operations.append(qp.CRZ(-2 * mu * time, wires=controls))
-        added_operations.append(qp.Hadamard(controls[0]))
+                added_operations.append(qml.CRZ(-2 * mu * time, wires=controls))
+        added_operations.append(qml.Hadamard(controls[0]))
 
         operations = tape.operations + added_operations
 
-        if isinstance(tape.measurements[0], qp.measurements.ExpectationMP):
-            measurements = [qp.expval(-1 * qp.Z(controls[0]))]
+        if tape.measurements[0].return_type == qml.measurements.Expectation:
+            measurements = [qml.expval(-1 * qml.Z(controls[0]))]
         else:
-            measurements = [qp.var(qp.Z(controls[0]))]
+            measurements = [qml.var(qml.Z(controls[0]))]
 
-        new_tape = qp.tape.QuantumScript(operations, measurements, shots=tape.shots)
+        new_tape = qml.tape.QuantumScript(operations, measurements, shots=tape.shots)
 
         tapes.append(new_tape)
     return tapes
 
 
 @transform
-def sign_expand(
-    tape: QuantumScript, circuit=False, J=10, delta=0.0, controls=("Hadamard", "Target")
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def sign_expand(  # pylint: disable=too-many-arguments
+    tape: qml.tape.QuantumTape, circuit=False, J=10, delta=0.0, controls=("Hadamard", "Target")
+) -> (Sequence[qml.tape.QuantumTape], Callable):
     r"""
     Splits a tape measuring a (fast-forwardable) Hamiltonian expectation into mutliple tapes of
     the Xi or sgn decomposition, and provides a function to recombine the results.
@@ -222,88 +220,87 @@ def sign_expand(
           Hadamard test and the quantum signal processing part on, have to be wires on the device
 
     Returns:
-        qnode (pennylane.QNode) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (pennylane.QNode) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
     **Example**
 
     Given a Hamiltonian,
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        H = qp.Z(0) + 0.5 * qp.Z(2) + qp.Z(1)
+        H = qml.Z(0) + 0.5 * qml.Z(2) + qml.Z(1)
 
     a device with auxiliary qubits,
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        dev = qp.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
+        dev = qml.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
 
     and a circuit of the form, with the transform as decorator.
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        @qp.transforms.sign_expand
-        @qp.qnode(dev)
+        @qml.transforms.sign_expand
+        @qml.qnode(dev)
         def circuit():
-            qp.Hadamard(wires=0)
-            qp.CNOT(wires=[0, 1])
-            qp.X(2)
-            return qp.expval(H)
+            qml.Hadamard(wires=0)
+            qml.CNOT(wires=[0, 1])
+            qml.X(2)
+            return qml.expval(H)
 
     >>> circuit()
-    np.float64(-0.499...)
+    -0.4999999999999999
 
     You can also work directly on tapes:
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        operations = [qp.Hadamard(wires=0), qp.CNOT(wires=[0, 1]), qp.X(2)]
-        measurements = [qp.expval(H)]
-        tape = qp.tape.QuantumTape(operations, measurements)
+            operations = [qml.Hadamard(wires=0), qml.CNOT(wires=[0, 1]), qml.X(2)]
+            measurements = [qml.expval(H)]
+            tape = qml.tape.QuantumTape(operations, measurements)
 
     We can use the ``sign_expand`` transform to generate new tapes and a classical
     post-processing function for computing the expectation value of the Hamiltonian in these new decompositions
 
-    >>> tapes, fn = qp.transforms.sign_expand(tape)
+    >>> tapes, fn = qml.transforms.sign_expand(tape)
 
-    We can evaluate these tapes on a device, it needs two additional auxiliary gates labeled 'Hadamard' and 'Target' if
+    We can evaluate these tapes on a device, it needs two additional ancilla gates labeled 'Hadamard' and 'Target' if
     one wants to make the circuit approximation of the decomposition:
 
-    >>> dev = qp.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
+    >>> dev = qml.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
     >>> res = dev.execute(tapes)
     >>> fn(res)
-    np.float64(-0.499...)
+    -0.4999999999999999
 
     To evaluate the circuit approximation of the decomposition one can construct the sgn-decomposition by changing the
     kwarg circuit to True:
 
-    >>> tapes, fn = qp.transforms.sign_expand(tape, circuit=True, J=20, delta=0)
-    >>> dev = qp.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
+    >>> tapes, fn = qml.transforms.sign_expand(tape, circuit=True, J=20, delta=0)
+    >>> dev = qml.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
     >>> dev.execute(tapes)
-    (np.float64(0.017...), np.float64(0.006...), np.float64(-0.0009...), np.float64(0.0023...), np.float64(-0.977...))
     >>> fn(res)
-    np.float64(-0.249...)
+    -0.24999999999999994
 
 
     Lastly, as the paper is about minimizing variance, one can also calculate the variance of the estimator by
     changing the tape:
 
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        operations = [qp.Hadamard(wires=0), qp.CNOT(wires=[0, 1]), qp.X(2)]
-        measurements = [qp.var(H)]
-        tape = qp.tape.QuantumTape(operations, measurements)
+            operations = [qml.Hadamard(wires=0), qml.CNOT(wires=[0, 1]), qml.X(2)]
+            measurements = [qml.var(H)]
+            tape = qml.tape.QuantumTape(operations, measurements)
 
-    >>> tapes, fn = qp.transforms.sign_expand(tape, circuit=True, J=20, delta=0)
-    >>> dev = qp.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
+    >>> tapes, fn = qml.transforms.sign_expand(tape, circuit=True, J=20, delta=0)
+    >>> dev = qml.device("default.qubit", wires=[0,1,2,'Hadamard','Target'])
     >>> res = dev.execute(tapes)
     >>> fn(res)
-    np.float64(10.108...)
+    10.108949481425782
 
     """
     path_str = path.dirname(__file__)
-    with open(path_str + "/sign_expand_data.json", encoding="utf-8") as f:
+    with open(path_str + "/sign_expand_data.json", "r", encoding="utf-8") as f:
         data = json.load(f)
     phis = list(filter(lambda data: data["delta"] == delta and data["order"] == J, data))[0][
         "opt_params"
@@ -312,15 +309,15 @@ def sign_expand(
     hamiltonian = tape.measurements[0].obs
     wires = hamiltonian.wires
 
+    # TODO qml.utils.sparse_hamiltonian at the moment does not allow autograd to push gradients through
     if (
-        not isinstance(hamiltonian, qp.ops.Sum)
+        not isinstance(hamiltonian, qml.Hamiltonian)
         or len(tape.measurements) > 1
-        or not isinstance(
-            tape.measurements[0], (qp.measurements.ExpectationMP, qp.measurements.VarianceMP)
-        )
+        or tape.measurements[0].return_type
+        not in [qml.measurements.Expectation, qml.measurements.Variance]
     ):
         raise ValueError(
-            "Passed tape must end in `qp.expval(H)` or 'qp.var(H)', where H is of type `qp.ops.Sum`"
+            "Passed tape must end in `qml.expval(H)` or 'qml.var(H)', where H is of type `qml.Hamiltonian`"
         )
 
     hamiltonian.compute_grouping()
@@ -331,38 +328,38 @@ def sign_expand(
 
     if circuit:
         tapes = construct_sgn_circuit(hamiltonian, tape, mus, times, phis, controls)
-        if isinstance(tape.measurements[0], qp.measurements.ExpectationMP):
-
+        if tape.measurements[0].return_type == qml.measurements.Expectation:
+            # pylint: disable=function-redefined
             def processing_fn(res):
-                products = [a * b for a, b in zip(res, dEs, strict=True)]
-                return qp.math.sum(products)
+                products = [a * b for a, b in zip(res, dEs)]
+                return qml.math.sum(products)
 
         else:
-
+            # pylint: disable=function-redefined
             def processing_fn(res):
-                products = [a * b for a, b in zip(res, dEs, strict=True)]
-                return qp.math.sum(products) * len(products)
+                products = [a * b for a, b in zip(res, dEs)]
+                return qml.math.sum(products) * len(products)
 
         return tapes, processing_fn
 
     # make one tape per observable
     tapes = []
     for proj in projs:
-        if isinstance(tape.measurements[0], qp.measurements.ExpectationMP):
-            measurements = [qp.expval(qp.Hermitian(proj, wires=wires))]
+        if tape.measurements[0].return_type == qml.measurements.Expectation:
+            measurements = [qml.expval(qml.Hermitian(proj, wires=wires))]
         else:
-            measurements = [qp.var(qp.Hermitian(proj, wires=wires))]
+            measurements = [qml.var(qml.Hermitian(proj, wires=wires))]
 
-        new_tape = qp.tape.QuantumScript(tape.operations, measurements, shots=tape.shots)
+        new_tape = qml.tape.QuantumScript(tape.operations, measurements, shots=tape.shots)
 
         tapes.append(new_tape)
 
     # pylint: disable=function-redefined
     def processing_fn(res):
         return (
-            qp.math.sum(res)
-            if isinstance(tape.measurements[0], qp.measurements.ExpectationMP)
-            else qp.math.sum(res) * len(res)
+            qml.math.sum(res)
+            if tape.measurements[0].return_type == qml.measurements.Expectation
+            else qml.math.sum(res) * len(res)
         )
 
     return tapes, processing_fn

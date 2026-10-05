@@ -15,53 +15,50 @@
 Unit tests for the :func:`pennylane.template.layer` function.
 Integration tests should be placed into ``test_templates.py``.
 """
-
 # pylint: disable=protected-access,cell-var-from-loop,too-many-arguments
 import pytest
-
-import pennylane as qp
+import pennylane as qml
 from pennylane import layer
-from pennylane.exceptions import PennyLaneDeprecationWarning
 
 
 def ConstantCircuit():
-    qp.PauliX(wires=[0])
-    qp.Hadamard(wires=[0])
-    qp.PauliY(wires=[1])
+    qml.PauliX(wires=[0])
+    qml.Hadamard(wires=[0])
+    qml.PauliY(wires=[1])
 
 
 def StaticCircuit(wires, var):
-    qp.CNOT(wires=[wires[3], wires[1]])
-    qp.Hadamard(wires=wires[1])
-    qp.PauliY(wires=wires[2])
+    qml.CNOT(wires=[wires[3], wires[1]])
+    qml.Hadamard(wires=wires[1])
+    qml.PauliY(wires=wires[2])
 
     if var is True:
-        qp.Hadamard(wires=wires[0])
+        qml.Hadamard(wires=wires[0])
 
 
 def KwargCircuit(wires, **kwargs):
-    qp.CNOT(wires=[wires[3], wires[1]])
-    qp.Hadamard(wires=wires[1])
-    qp.PauliY(wires=wires[2])
+    qml.CNOT(wires=[wires[3], wires[1]])
+    qml.Hadamard(wires=wires[1])
+    qml.PauliY(wires=wires[2])
 
     if kwargs["var"] is True:
-        qp.Hadamard(wires=wires[0])
+        qml.Hadamard(wires=wires[0])
 
 
 def DynamicCircuit(parameters):
     for i in range(2):
-        qp.RX(parameters[0][i], wires=i)
+        qml.RX(parameters[0][i], wires=i)
 
-    qp.MultiRZ(parameters[1], wires=[0, 1])
+    qml.MultiRZ(parameters[1], wires=[0, 1])
 
 
 def MultiCircuit(parameters1, parameters2, var1, wires, var2):
     if var2 is True:
         for i, w in enumerate(wires):
-            qp.RY(parameters1[i], wires=w)
+            qml.RY(parameters1[i], wires=w)
 
     if var1 is True:
-        qp.templates.BasicEntanglerLayers([parameters2], wires=wires)
+        qml.templates.BasicEntanglerLayers([parameters2], wires=wires)
 
 
 UNITARIES = [ConstantCircuit, StaticCircuit, KwargCircuit, DynamicCircuit, MultiCircuit]
@@ -70,32 +67,32 @@ DEPTH = [2, 1, 2, 1, 2]
 
 GATES = [
     [
-        qp.PauliX(wires=0),
-        qp.Hadamard(wires=0),
-        qp.PauliY(wires=1),
-        qp.PauliX(wires=0),
-        qp.Hadamard(wires=0),
-        qp.PauliY(wires=1),
+        qml.PauliX(wires=0),
+        qml.Hadamard(wires=0),
+        qml.PauliY(wires=1),
+        qml.PauliX(wires=0),
+        qml.Hadamard(wires=0),
+        qml.PauliY(wires=1),
     ],
-    [qp.CNOT(wires=[3, 1]), qp.Hadamard(wires=1), qp.PauliY(wires=2), qp.Hadamard(wires=0)],
+    [qml.CNOT(wires=[3, 1]), qml.Hadamard(wires=1), qml.PauliY(wires=2), qml.Hadamard(wires=0)],
     [
-        qp.CNOT(wires=[3, 1]),
-        qp.Hadamard(wires=1),
-        qp.PauliY(wires=2),
-        qp.Hadamard(wires=0),
-        qp.CNOT(wires=[3, 1]),
-        qp.Hadamard(wires=1),
-        qp.PauliY(wires=2),
-        qp.Hadamard(wires=[0]),
+        qml.CNOT(wires=[3, 1]),
+        qml.Hadamard(wires=1),
+        qml.PauliY(wires=2),
+        qml.Hadamard(wires=0),
+        qml.CNOT(wires=[3, 1]),
+        qml.Hadamard(wires=1),
+        qml.PauliY(wires=2),
+        qml.Hadamard(wires=[0]),
     ],
-    [qp.RX(0.5, wires=0), qp.RX(0.5, wires=1), qp.MultiRZ(0.3, wires=[0, 1])],
+    [qml.RX(0.5, wires=0), qml.RX(0.5, wires=1), qml.MultiRZ(0.3, wires=[0, 1])],
     [
-        qp.RY(0.5, wires=0),
-        qp.RY(0.4, wires=1),
-        qp.templates.BasicEntanglerLayers([[0.5, 0.4]], wires=[0, 1]),
-        qp.RY(0.5, wires=0),
-        qp.RY(0.4, wires=1),
-        qp.templates.BasicEntanglerLayers([[0.5, 0.4]], wires=[0, 1]),
+        qml.RY(0.5, wires=0),
+        qml.RY(0.4, wires=1),
+        qml.templates.BasicEntanglerLayers([[0.5, 0.4]], wires=[0, 1]),
+        qml.RY(0.5, wires=0),
+        qml.RY(0.4, wires=1),
+        qml.templates.BasicEntanglerLayers([[0.5, 0.4]], wires=[0, 1]),
     ],
 ]
 
@@ -114,7 +111,7 @@ KWARGS = [
     {"wires": range(2), "var2": True},
 ]
 
-REPEAT = list(zip(UNITARIES, DEPTH, ARGS, KWARGS, GATES))
+REPEAT = zip(UNITARIES, DEPTH, ARGS, KWARGS, GATES)
 
 ########################
 
@@ -122,40 +119,49 @@ REPEAT = list(zip(UNITARIES, DEPTH, ARGS, KWARGS, GATES))
 class TestLayer:
     """Tests the layering function"""
 
-    def test_deprecated(self):
-        params = [1, 1, 1]
-
-        def unitary(param, wires):
-            qp.RX(param, wires=wires)
-
-        with pytest.warns(PennyLaneDeprecationWarning, match="layer is deprecated"):
-            layer(unitary, 3, params, wires=[0])
-
     def test_args_length(self):
         """Tests that the correct error is thrown when the length of an argument is incorrect"""
 
         params = [1, 1]
 
         def unitary(param, wire):
-            qp.RX(param, wires=wire)
+            qml.RX(param, wires=wire)
 
-        with pytest.warns(PennyLaneDeprecationWarning, match="layer is deprecated"):
-            with pytest.raises(
-                ValueError,
-                match=r"Each positional argument must have length matching 'depth'; expected 3",
-            ):
-                layer(unitary, 3, params, wires=[0])
+        with pytest.raises(
+            ValueError,
+            match=r"Each positional argument must have length matching 'depth'; expected 3",
+        ):
+            layer(unitary, 3, params, wires=[0])
 
     @pytest.mark.parametrize(("unitary", "depth", "arguments", "keywords", "gates"), REPEAT)
     def test_layer(self, unitary, depth, arguments, keywords, gates):
         """Tests that the layering function is yielding the correct sequence of gates"""
 
-        with pytest.warns(PennyLaneDeprecationWarning, match="layer is deprecated"):
-            with qp.tape.OperationRecorder() as rec:
-                layer(unitary, depth, *arguments, **keywords)
+        with qml.tape.OperationRecorder() as rec:
+            layer(unitary, depth, *arguments, **keywords)
 
         for i, gate in enumerate(rec.operations):
             prep = [gate.name, gate.parameters, gate.wires]
             target = [gates[i].name, gates[i].parameters, gates[i].wires]
 
         assert prep == target
+
+    @pytest.mark.tf
+    def test_layer_tf(self):
+        """Tests that the layering function accepts Tensorflow variables."""
+
+        import tensorflow as tf
+
+        def unitary(param):
+            qml.RX(param, wires=0)
+
+        x = tf.Variable([0.1, 0.2, 0.3])
+
+        with qml.tape.OperationRecorder() as rec:
+            layer(unitary, 3, x)
+
+        assert len(rec.operations) == 3
+
+        for ii, op in enumerate(rec.operations):
+            assert qml.math.allclose(op.parameters[0], x[ii])
+            assert isinstance(op, qml.RX)

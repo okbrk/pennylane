@@ -12,19 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-This module contains the qp.is_hermitian function.
+This module contains the qml.is_hermitian function.
 """
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-from pennylane.math import allclose
-from pennylane.ops import adjoint
-from pennylane.ops.functions.matrix import matrix
-
-if TYPE_CHECKING:
-    from pennylane.core.operator import Operator
+import pennylane as qml
+from pennylane.operation import Operator
 
 
 def is_hermitian(op: Operator):
@@ -45,13 +36,13 @@ def is_hermitian(op: Operator):
 
     **Example**
 
-    >>> op = qp.X(0)
-    >>> qp.is_hermitian(op)
+    >>> op = qml.X(0)
+    >>> qml.is_hermitian(op)
     True
-    >>> op2 = qp.RX(0.54, wires=0)
-    >>> qp.is_hermitian(op2)
+    >>> op2 = qml.RX(0.54, wires=0)
+    >>> qml.is_hermitian(op2)
     False
     """
-    if op.is_verified_hermitian:
+    if op.is_hermitian is True:
         return True
-    return allclose(matrix(op), matrix(adjoint(op)))
+    return qml.math.allclose(qml.matrix(op), qml.matrix(qml.adjoint(op)))

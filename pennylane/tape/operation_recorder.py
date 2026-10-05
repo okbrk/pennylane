@@ -14,9 +14,10 @@
 """
 This module contains the :class:`OperationRecorder`.
 """
+# pylint: disable=too-many-arguments
+from pennylane.queuing import AnnotatedQueue, QueuingManager, process_queue
 
-from pennylane.core.qscript import QuantumScript, process_queue
-from pennylane.core.queuing import AnnotatedQueue, QueuingManager
+from .tape import QuantumScript
 
 
 class OperationRecorder(QuantumScript, AnnotatedQueue):
@@ -30,14 +31,15 @@ class OperationRecorder(QuantumScript, AnnotatedQueue):
     or quantum functions stores applied operators in the
     recorder, which can then be printed.
 
-    >>> shape = qp.templates.StronglyEntanglingLayers.shape(n_layers=1, n_wires=2)
+    >>> shape = qml.templates.StronglyEntanglingLayers.shape(n_layers=1, n_wires=2)
     >>> weights = np.random.random(shape)
-    >>> with OperationRecorder() as rec: # doctest: +SKIP
-    ...    qp.templates.StronglyEntanglingLayers(weights, wires=[0, 1])
+    >>>
+    >>> with OperationRecorder() as rec:
+    >>>    qml.templates.StronglyEntanglingLayers(weights, wires=[0, 1])
 
 
     Alternatively, the :attr:`~.OperationRecorder.queue` attribute can be used
-    to directly access the applied :class:`~.Operation` and :class:`~.Operator`
+    to directly access the applied :class:`~.Operation` and :class:`~.Observable`
     objects.
     """
 
@@ -46,9 +48,10 @@ class OperationRecorder(QuantumScript, AnnotatedQueue):
         ops=None,
         measurements=None,
         shots=None,
-    ):
+        _update=True,
+    ):  # pylint: disable=unused-argument, too-many-arguments
         AnnotatedQueue.__init__(self)
-        QuantumScript.__init__(self, ops, measurements, shots)
+        QuantumScript.__init__(self, ops, measurements, shots, _update=_update)
         self.ops = None
         self.obs = None
 
@@ -68,8 +71,9 @@ class OperationRecorder(QuantumScript, AnnotatedQueue):
         for obj, info in self.items():
             QueuingManager.append(obj, **info)
 
-        self.ops = self.operations
-        self.obs = self.observables
+        new_tape = self.expand(depth=5, stop_at=lambda obj: not isinstance(obj, QuantumScript))
+        self.ops = new_tape.operations
+        self.obs = new_tape.observables
 
     def __str__(self):
         return "\n".join(

@@ -38,7 +38,7 @@ def largest_first(binary_observables, adj):
 
     Args:
         binary_observables (array[int]): the set of Pauli words represented by a column matrix
-            of the Pauli words in binary vector representation
+            of the Pauli words in binary vector represenation
         adj (array[int]): the adjacency matrix of the Pauli graph
 
     Returns:
@@ -55,7 +55,7 @@ def largest_first(binary_observables, adj):
     ... [0., 0., 1.],
     ... [1., 1., 0.]])
     >>> largest_first(binary_observables, adj)
-    {np.int64(1): [array([0., 0., 1.])], np.int64(2): [array([1., 0., 0.]), array([1., 1., 0.])]}
+    {1: [array([0., 0., 1.])], 2: [array([1., 0., 0.]), array([1., 1., 0.])]}
     """
 
     n_terms = np.shape(adj)[0]
@@ -87,7 +87,7 @@ def recursive_largest_first(binary_observables, adj):  # pylint:disable=too-many
 
     Args:
         binary_observables (array[int]): the set of Pauli words represented by a column matrix of
-            the Pauli words in binary vector representation
+            the Pauli words in binary vector represenation
         adj (array[int]): the adjacency matrix of the Pauli graph
 
     Returns:

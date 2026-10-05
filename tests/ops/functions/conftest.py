@@ -16,169 +16,85 @@ Pytest configuration file for ops.functions submodule.
 
 Generates parametrizations of operators to test in test_assert_valid.py.
 """
-
 from inspect import getmembers, isclass
-
-import jax
-import numpy as np
 import pytest
+import numpy as np
 
-import pennylane as qp
-from pennylane.core.operator import (
-    Channel,
-    Operation,
-    Operator,
-    Operator2,
-    StatePrepBase,
-    StatePrepBase2,
-)
-from pennylane.drawer.label import LabelledOp
-from pennylane.exceptions import DeviceError
-from pennylane.ops.op_math import ChangeOpBasis
-from pennylane.ops.op_math.adjoint import Adjoint, AdjointOperation
-from pennylane.ops.op_math.adjoint2 import Adjoint2
-from pennylane.ops.op_math.controlled2 import Controlled2, ControlledOp2
-from pennylane.ops.op_math.pow import PowOperation
-from pennylane.ops.op_math.pow2 import Pow2
-from pennylane.ops.op_math.symbolicop2 import SymbolicOp2
-from pennylane.templates.subroutines.time_evolution.trotter import TrotterizedQfunc
-
-
-def _trotterize_qfunc_dummy(time, theta, phi, wires, flip=False):
-    qp.RX(time * theta, wires[0])
-    qp.RY(time * phi, wires[0])
-    if flip:
-        qp.CNOT(wires)
-
+import pennylane as qml
+from pennylane.operation import Operator, Operation, Observable, Tensor, Channel
+from pennylane.operation import DiagGatesUndefinedError, MatrixUndefinedError
+from pennylane.ops.op_math.adjoint import Adjoint, AdjointObs, AdjointOperation, AdjointOpObs
+from pennylane.ops.op_math.pow import PowObs, PowOperation, PowOpObs
 
 _INSTANCES_TO_TEST = [
-    # GlobalPhase acts on no wires, so `_check_differentiation`'s `qp.probs(wires=op.wires)` cannot be constructed
-    (qp.GlobalPhase(1.1), {"skip_differentiation": True}),
-    (LabelledOp(qp.X(0), "my-x"), {}),
-    # MidMeasure and PauliMeasure are only operators in the tape-based pipeline.
-    (qp.ops.MidMeasure(wires=0), {"skip_capture": True}),
-    (qp.ops.PauliMeasure("X", wires=0), {"skip_capture": True}),
-    # ChangeOpBasis as an operator is only used in the tape-based pipeline. It is unrolled when capture is enabled
-    (ChangeOpBasis(qp.T(0), qp.PauliZ(0)), {"skip_capture": True}),
-    (qp.sum(qp.PauliX(0), qp.PauliZ(0)), {}),
-    (qp.sum(qp.X(0), qp.X(0), qp.Z(0), qp.Z(0)), {}),
-    (qp.BasisState([1], wires=[0]), {"skip_differentiation": True}),
-    (qp.ControlledQubitUnitary(np.eye(2), wires=[1, 0]), {"skip_differentiation": True}),
-    (
-        qp.ControlledQubitUnitary(np.eye(4), wires=[1, 2, 0], control_values=[0]),
-        {"skip_differentiation": True},
-    ),
-    (
-        qp.QubitChannel([np.array([[1, 0], [0, 0.8]]), np.array([[0, 0.6], [0, 0]])], wires=0),
-        {"skip_differentiation": True, "skip_capture": True},
-    ),
-    # Skipping bind_new_parameters test for `MultiControlledX` because it does not make sense for control values
-    (qp.MultiControlledX(wires=[0, 1]), {"skip_bind_new_parameters": True}),
-    (qp.Projector([1], 0), {"skip_differentiation": True}),
-    (qp.Projector([1, 0], 0), {"skip_differentiation": True}),
-    (qp.DiagonalQubitUnitary([1, 1, 1, 1], wires=[0, 1]), {"skip_differentiation": True}),
-    (qp.QubitUnitary(np.eye(2), wires=[0]), {"skip_differentiation": True}),
-    (qp.QubitUnitary(np.eye(4), wires=[0, 1]), {"skip_differentiation": True}),
-    (
-        qp.QubitUnitary(qp.Rot.compute_matrix(0.1, 0.2, 0.3), wires=[0]),
-        {"skip_differentiation": True},
-    ),
-    (qp.SpecialUnitary([1, 1, 1], 0), {"skip_differentiation": True}),
-    (qp.IntegerComparator(1, wires=[0, 1]), {"skip_differentiation": True}),
-    (qp.PauliRot(1.1, "X", wires=[0]), {}),
-    (qp.PPR(2, "XYZ", wires=[0, 1, 2]), {}),
-    (qp.StatePrep([0, 1], 0), {"skip_differentiation": True}),
-    (qp.PCPhase(0.27, dim=2, wires=[0, 1]), {}),
-    (
-        qp.BlockEncode(jax.numpy.array([[0.1, 0.2], [0.3, 0.4]]), wires=[0, 1]),
-        {"skip_differentiation": True},
-    ),
-    (qp.adjoint(qp.PauliX(0)), {}),
-    (qp.adjoint(qp.RX(1.1, 0)), {}),
-    (
-        qp.ops.LinearCombination([1.1, 2.2], [qp.PauliX(0), qp.PauliZ(0)]),
-        {"skip_differentiation": True},
-    ),
-    (qp.s_prod(1.1, qp.RX(1.1, 0)), {"skip_differentiation": True}),
-    (qp.prod(qp.PauliX(0), qp.PauliY(1), qp.PauliZ(0)), {}),
-    # NOTE: qp.prod dispatches to Prod2 now, keep legacy Prod for testing
-    (qp.ops.Prod(qp.PauliX(0), qp.PauliY(1), qp.PauliZ(0)), {}),
-    (qp.ctrl(qp.RX(1.1, 0), 1), {}),
-    pytest.param(
-        (qp.exp(qp.PauliX(0), 1.1), {}),
-        marks=pytest.mark.xfail(
-            reason=(
-                "Real exponent decomposes to complex PauliRot, which is not "
-                "supported with Operator2"
-            )
-        ),
-    ),
-    (qp.pow(qp.IsingXX(1.1, [0, 1]), 2.5), {}),
-    (qp.ops.Evolution(qp.PauliX(0), 5.2), {}),
-    (qp.estimator.FirstQuantization(1, 2, 1), {"skip_bind_new_parameters": True}),
-    (qp.prod(qp.RX(1.1, 0), qp.RY(2.2, 0), qp.RZ(3.3, 1)), {}),
-    (qp.Snapshot(measurement=qp.expval(qp.Z(0)), tag="hi"), {}),
-    (qp.Snapshot(tag="tag"), {}),
-    (qp.Identity(0), {}),
-    (qp.MultiRZ(0.123, wires=[0, 1, 2]), {}),
-    (qp.MultiRZ(0.123, wires=[0]), {}),
-    (qp.Hermitian(np.eye(2), wires=[0]), {"skip_differentiation": True}),
-    (
-        TrotterizedQfunc(
-            0.1,
-            2.3,
-            -4.5,
-            qfunc=_trotterize_qfunc_dummy,
-            n=10,
-            order=2,
-            wires=[1, 2],
-            flip=True,
-        ),
-        {"skip_pickle": True},
-    ),
-    (
-        qp.SelectPauliRot(
-            np.array(
-                [
-                    0.69307448,
-                    0.2574346,
-                    0.84850003,
-                    0.06706336,
-                    0.33502536,
-                    0.79254386,
-                    0.76929339,
-                    0.66070049,
-                ]
-            ),
-            control_wires=[0, 1, 2],
-            target_wire=3,
-            rot_axis="Y",
-        ),
-        {},
-    ),
+    qml.sum(qml.PauliX(0), qml.PauliZ(0)),
+    qml.BasisState([1], wires=[0]),
+    qml.ControlledQubitUnitary(np.eye(2), control_wires=1, wires=0),
+    qml.QubitStateVector([0, 1], wires=0),
+    qml.QubitChannel([np.array([[1, 0], [0, 0.8]]), np.array([[0, 0.6], [0, 0]])], wires=0),
+    qml.MultiControlledX(wires=[0, 1]),
+    qml.Projector([1], 0),  # the state-vector version is already tested
+    qml.SpecialUnitary([1, 1, 1], 0),
+    qml.IntegerComparator(1, wires=[0, 1]),
+    qml.PauliRot(1.1, "X", wires=[0]),
+    qml.StatePrep([0, 1], 0),
+    qml.PCPhase(0.27, dim=2, wires=[0, 1]),
+    qml.BlockEncode([[0.1, 0.2], [0.3, 0.4]], wires=[0, 1]),
+    qml.adjoint(qml.PauliX(0)),
+    qml.adjoint(qml.RX(1.1, 0)),
+    Tensor(qml.PauliX(0), qml.PauliX(1)),
+    qml.Hamiltonian([1.1, 2.2], [qml.PauliX(0), qml.PauliZ(0)]),
+    qml.s_prod(1.1, qml.RX(1.1, 0)),
+    qml.prod(qml.PauliX(0), qml.PauliY(1), qml.PauliZ(0)),
+    qml.ctrl(qml.RX(1.1, 0), 1),
+    qml.exp(qml.PauliX(0), 1.1),
+    qml.pow(qml.IsingXX(1.1, [0, 1]), 2.5),
+    qml.ops.Evolution(qml.PauliX(0), 5.2),
+    qml.QutritBasisState([1, 2, 0], wires=[0, 1, 2]),
+    qml.resource.FirstQuantization(1, 2, 1),
 ]
 """Valid operator instances that could not be auto-generated."""
 
 
 _INSTANCES_TO_FAIL = [
     (
-        qp.SparseHamiltonian(qp.Hamiltonian([1.1], [qp.PauliX(0)]).sparse_matrix(), [0]),
+        qml.SparseHamiltonian(qml.Hamiltonian([1.1], [qml.PauliX(0)]).sparse_matrix(), [0]),
         AssertionError,  # each data element must be tensorlike
     ),
     (
-        qp.PauliError("X", 0.5, wires=0),
-        DeviceError,  # not supported with default.qubit and does not provide a decomposition
+        qml.PauliError("X", 0.5, wires=0),
+        AssertionError,  # each data element must be tensorlike
     ),
     (
-        qp.ops.qubit.special_unitary.TmpPauliRot(1.1, "X", [0]),
+        qml.THermitian(np.eye(3), wires=0),
+        AssertionError,  # qutrit ops fail validation
+    ),
+    (
+        qml.ops.qubit.special_unitary.TmpPauliRot(1.1, "X", [0]),
         AssertionError,  # private type with has_matrix=False despite having one
     ),
     (
-        qp.ops.Conditional(qp.measure(1), qp.S(0)),
+        qml.ops.Conditional(qml.measure(1), qml.S(0)),
         AssertionError,  # needs flattening helpers to be updated, also cannot be pickled
     ),
     (
-        qp.estimator.DoubleFactorization(np.eye(2), np.arange(16).reshape((2,) * 4)),
+        qml.prod(qml.RX(1.1, 0), qml.RY(2.2, 0), qml.RZ(3.3, 1)),
+        DiagGatesUndefinedError,  # has_diagonalizing_gates should be False
+    ),
+    (
+        qml.Identity(0),
+        MatrixUndefinedError,  # empty decomposition, matrix differs from decomp's matrix
+    ),
+    (
+        qml.GlobalPhase(1.1),
+        MatrixUndefinedError,  # empty decomposition, matrix differs from decomp's matrix
+    ),
+    (
+        qml.pulse.ParametrizedEvolution(qml.PauliX(0) + sum * qml.PauliZ(0)),
+        ValueError,  # binding parameters fail, and more
+    ),
+    (
+        qml.resource.DoubleFactorization(np.eye(2), np.arange(16).reshape((2,) * 4)),
         TypeError,  # op.eigvals is a list (overwritten in the init)
     ),
 ]
@@ -191,42 +107,28 @@ These operators need to break PL conventions, and each one's reason is specified
 
 
 _ABSTRACT_OR_META_TYPES = {
-    LabelledOp,
     Adjoint,
-    Adjoint2,
+    AdjointOpObs,
     AdjointOperation,
+    AdjointObs,
     Operator,
-    Operator2,
     Operation,
+    Observable,
     Channel,
-    qp.ops.Projector,
-    qp.ops.SymbolicOp,
-    SymbolicOp2,
-    qp.ops.ScalarSymbolicOp,
-    qp.ops.Pow,
-    Pow2,
-    qp.ops.CompositeOp,
-    qp.ops.CompositeOp2,
-    qp.ops.Controlled,
-    qp.ops.ControlledOp,
-    qp.ops.ChangeOpBasis,
-    qp.ops.ChangeOpBasis2,
-    qp.ops.Prod,
-    qp.ops.Prod2,
-    Controlled2,
-    ControlledOp2,
-    qp.ops.qubit.BasisStateProjector,
-    qp.ops.qubit.StateVectorProjector,
-    qp.templates.core.CollectedSubroutine,
-    # pylint: disable-next=protected-access
-    qp.templates.subroutines.arithmetic.out_square._SquareArithmeticOp,
-    StatePrepBase,
-    StatePrepBase2,
+    qml.ops.SymbolicOp,
+    qml.ops.ScalarSymbolicOp,
+    qml.ops.Pow,
+    qml.ops.CompositeOp,
+    qml.ops.Controlled,
+    qml.ops.ControlledOp,
+    qml.ops.qubit.BasisStateProjector,
+    qml.ops.qubit.StateVectorProjector,
+    qml.ops.qubit.StatePrepBase,
+    qml.resource.ResourcesOperation,
+    qml.resource.ErrorOperation,
+    PowOpObs,
     PowOperation,
-    qp.StatePrep,
-    qp.FromBloq,
-    qp.allocation.Allocate,  # no integer wires
-    qp.allocation.Deallocate,  # no integer wires
+    PowObs,
 }
 """Types that should not have actual instances created."""
 
@@ -244,10 +146,9 @@ def get_all_classes(c):
 
 
 _CLASSES_TO_TEST = (
-    (set(get_all_classes(Operator)) | set(get_all_classes(Operator2)))
-    - {i[1] for i in getmembers(qp.templates) if isclass(i[1]) and issubclass(i[1], Operator)}
-    # `pytest.param` returns a `ParameterSet` (a namedtuple)
-    - {type(v.values[0][0] if hasattr(v, "values") else v[0]) for v in _INSTANCES_TO_TEST}
+    set(get_all_classes(Operator))
+    - {i[1] for i in getmembers(qml.templates) if isclass(i[1]) and issubclass(i[1], Operator)}
+    - {type(op) for op in _INSTANCES_TO_TEST}
     - {type(op) for (op, _) in _INSTANCES_TO_FAIL}
 )
 """All operators, except those tested manually, abstract/meta classes, and templates."""
@@ -259,7 +160,7 @@ def class_to_validate(request):
 
 
 @pytest.fixture(params=_INSTANCES_TO_TEST)
-def valid_instance_and_kwargs(request):
+def valid_instance(request):
     yield request.param
 
 

@@ -25,7 +25,6 @@ at your own discretion.
     apply_operation
     measure
     measure_with_samples
-    sample_probs
     sample_state
     simulate
     adjoint_jacobian
@@ -33,9 +32,9 @@ at your own discretion.
     adjoint_vjp
 """
 
-from .adjoint_jacobian import adjoint_jacobian, adjoint_jvp, adjoint_vjp
 from .apply_operation import apply_operation
+from .adjoint_jacobian import adjoint_jacobian, adjoint_jvp, adjoint_vjp
 from .initialize_state import create_initial_state
 from .measure import measure
-from .sampling import measure_with_samples, sample_probs, sample_state
-from .simulate import get_final_state, measure_final_state, simulate
+from .sampling import sample_state, measure_with_samples
+from .simulate import simulate, get_final_state, measure_final_state

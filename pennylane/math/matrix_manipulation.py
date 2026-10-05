@@ -11,29 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""This module contains methods that manipulates matrices."""
-
+"""This module contains methods to expand the matrix representation of an operator
+to a higher hilbert space with re-ordered wires."""
 import itertools
-import numbers
-from collections.abc import Callable, Iterable, Sequence
 from functools import reduce
+from typing import Generator, Iterable, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix, eye, kron
 
-from pennylane import math
+import pennylane as qml
+from pennylane.wires import Wires
 
 
-# pylint: disable=too-many-branches
-def expand_matrix(mat, wires: Sequence | int, wire_order=None, sparse_format="csr"):
+def expand_matrix(mat, wires, wire_order=None, sparse_format="csr"):
+    # pylint: disable=too-many-branches
     """Re-express a matrix acting on a subspace defined by a set of wire labels
     according to a global wire order.
 
     Args:
         mat (tensor_like): matrix to expand
-        wires (Sequence): wires determining the subspace that ``mat`` acts on; a matrix of
-            dimension :math:`2^n` acts on a subspace of :math:`n` wires.
+        wires (Iterable): wires determining the subspace that ``mat`` acts on; a matrix of
+            dimension :math:`2^n` acts on a subspace of :math:`n` wires
         wire_order (Iterable): global wire order, which has to contain all wire labels in ``wires``, but can also
             contain additional labels
         sparse_format (str): if ``mat`` is a SciPy sparse matrix then this is the string representing the
@@ -95,37 +94,28 @@ def expand_matrix(mat, wires: Sequence | int, wire_order=None, sparse_format="cs
 
     >>> from scipy import sparse
     >>> mat = sparse.csr_matrix([[0, 1], [1, 0]])
-    >>> qp.math.expand_matrix(mat, wires=[1], wire_order=[0,1]).toarray()
+    >>> qml.math.expand_matrix(mat, wires=[1], wire_order=[0,1]).toarray()
     array([[0., 1., 0., 0.],
            [1., 0., 0., 0.],
            [0., 0., 0., 1.],
            [0., 0., 1., 0.]])
 
     """
-    if isinstance(wires, int):
-        wires = [wires]
 
     if (wire_order is None) or (wire_order == wires):
         return mat
 
-    if not wires:
-        scalar = mat[0, 0] if math.ndim(mat) > 0 else mat
-        n_wires = len(wire_order) if wire_order else 0
-        if math.get_interface(mat) == "scipy":
-            return (scalar * eye(2**n_wires, format="coo")).asformat(sparse_format)
-        return scalar * math.eye(2**n_wires, like=mat)
-
     wires = list(wires)
     wire_order = list(wire_order)
 
-    interface = math.get_interface(mat)
-    shape = math.shape(mat)
+    interface = qml.math.get_interface(mat)
+    shape = qml.math.shape(mat)
     batch_dim = shape[0] if len(shape) == 3 else None
 
     def eye_interface(dim):
         if interface == "scipy":
             return eye(2**dim, format="coo")
-        return math.cast_like(math.eye(2**dim, like=interface), mat)
+        return qml.math.cast_like(qml.math.eye(2**dim, like=interface), mat)
 
     def kron_interface(mat1, mat2):
         if interface == "scipy":
@@ -136,7 +126,7 @@ def expand_matrix(mat, wires: Sequence | int, wire_order=None, sparse_format="cs
             # these lines are to avoid a crash when the matrices are not contiguous in memory
             mat1 = mat1.contiguous()
             mat2 = mat2.contiguous()
-        return math.kron(mat1, mat2, like=interface)
+        return qml.math.kron(mat1, mat2, like=interface)
 
     # get a subset of `wire_order` values that contain all wire labels inside `wires` argument
     # e.g. wire_order = [0, 1, 2, 3, 4]; wires = [3, 0, 2]
@@ -152,7 +142,7 @@ def expand_matrix(mat, wires: Sequence | int, wire_order=None, sparse_format="cs
             batch_matrices = [
                 kron_interface(batch, eye_interface(len(wire_difference))) for batch in mat
             ]
-            mat = math.stack(batch_matrices, like=interface)
+            mat = qml.math.stack(batch_matrices, like=interface)
         else:
             mat = kron_interface(mat, eye_interface(len(wire_difference)))
 
@@ -180,7 +170,7 @@ def expand_matrix(mat, wires: Sequence | int, wire_order=None, sparse_format="cs
         # here we compute the kron product of each different tuple and stack them back together
         expanded_batch_matrices = [reduce(kron_interface, mats) for mats in mats_list]
         mat = (
-            math.stack(expanded_batch_matrices, like=interface)
+            qml.math.stack(expanded_batch_matrices, like=interface)
             if len(expanded_batch_matrices) > 1
             else expanded_batch_matrices[0]
         )
@@ -235,12 +225,12 @@ def _permute_dense_matrix(matrix, wires, wire_order, batch_dim):
     # reshape matrix to match wire values e.g. mat[0, 0, 0, 0] = <00|mat|00>
     # with this reshape we can easily swap wires
     shape = [batch_dim] + [2] * (num_wires * 2) if batch_dim else [2] * (num_wires * 2)
-    matrix = math.reshape(matrix, shape)
+    matrix = qml.math.reshape(matrix, shape)
     # transpose matrix
-    matrix = math.transpose(matrix, axes=perm)
+    matrix = qml.math.transpose(matrix, axes=perm)
     # reshape back
     shape = [batch_dim] + [2**num_wires] * 2 if batch_dim else [2**num_wires] * 2
-    return math.reshape(matrix, shape)
+    return qml.math.reshape(matrix, shape)
 
 
 def _sparse_swap_mat(qubit_i, qubit_j, n):
@@ -263,13 +253,13 @@ def _sparse_swap_mat(qubit_i, qubit_j, n):
     return csr_matrix((data, (index_i, index_j)))
 
 
-def _permutation_sparse_matrix(expanded_wires: Sequence, wire_order: Sequence) -> csr_matrix:
+def _permutation_sparse_matrix(expanded_wires: Iterable, wire_order: Iterable) -> csr_matrix:
     """Helper function which generates a permutation matrix in sparse format that swaps the wires
     in ``expanded_wires`` to match the order given by the ``wire_order`` argument.
 
     Args:
-        expanded_wires (Sequence): inital wires
-        wire_order (Sequence): final wires
+        expanded_wires (Iterable): inital wires
+        wire_order (Iterable): final wires
 
     Returns:
         csr_matrix: permutation matrix in CSR sparse format
@@ -290,23 +280,22 @@ def _permutation_sparse_matrix(expanded_wires: Sequence, wire_order: Sequence) -
 
 
 def reduce_matrices(
-    mats_and_wires_gen: Iterable[tuple[np.ndarray, Sequence]], reduce_func: Callable
-) -> tuple[np.ndarray, Sequence]:
+    mats_and_wires_gen: Generator[Tuple[np.ndarray, Wires], None, None], reduce_func: callable
+) -> Tuple[np.ndarray, Wires]:
     """Apply the given ``reduce_func`` cumulatively to the items of the ``mats_and_wires_gen``
-    generator, from left to right, reducing the sequence to a tuple containing a single
+    generator, from left to right, so as to reduce the sequence to a tuple containing a single
     matrix and the wires it acts on.
 
     Args:
-        mats_and_wires_gen (Iterable): tuples containing the matrix and the wires of each operator
+        mats_and_wires_gen (Generator): generator of tuples containing the matrix and the wires of
+            each operator
         reduce_func (callable): function used to reduce the sequence of operators
 
     Returns:
-        Tuple[tensor, Sequence]: a tuple containing the reduced matrix and the wires it acts on
+        Tuple[tensor, Wires]: a tuple containing the reduced matrix and the wires it acts on
     """
 
-    def expand_and_reduce(
-        op1_tuple: tuple[np.ndarray, Sequence], op2_tuple: tuple[np.ndarray, Sequence]
-    ):
+    def expand_and_reduce(op1_tuple: Tuple[np.ndarray, Wires], op2_tuple: Tuple[np.ndarray, Wires]):
         mat1, wires1 = op1_tuple
         mat2, wires2 = op2_tuple
         expanded_wires = wires1 + wires2
@@ -322,7 +311,7 @@ def reduce_matrices(
 def get_batch_size(tensor, expected_shape, expected_size):
     """
     Determine whether a tensor has an additional batch dimension for broadcasting,
-    compared to an expected_shape.
+    compared to an expected_shape. Has support for abstract TF tensors.
 
     Args:
         tensor (TensorLike): A tensor to inspect for batching
@@ -332,112 +321,15 @@ def get_batch_size(tensor, expected_shape, expected_size):
     Returns:
         Optional[int]: The batch size of the tensor if there is one, otherwise None
     """
-    size = math.size(tensor)
-    ndim = math.ndim(tensor)
-    if ndim > len(expected_shape) or size > expected_size:
-        return size // expected_size
+    try:
+        size = qml.math.size(tensor)
+        ndim = qml.math.ndim(tensor)
+        if ndim > len(expected_shape) or size > expected_size:
+            return size // expected_size
+
+    except Exception as err:  # pragma: no cover, pylint:disable=broad-except
+        # This except clause covers the usage of tf.function
+        if not qml.math.is_abstract(tensor):
+            raise err
 
     return None
-
-
-def expand_vector(vector, original_wires, expanded_wires):
-    r"""Expand a vector to more wires.
-
-    Args:
-        vector (array): :math:`2^n` vector where n = len(original_wires).
-        original_wires (Sequence[int]): original wires of vector
-        expanded_wires (Union[Sequence[int], int]): expanded wires of vector, can be shuffled
-            If a single int m is given, corresponds to list(range(m))
-
-    Returns:
-        array: :math:`2^m` vector where m = len(expanded_wires).
-    """
-    if len(original_wires) == 0:
-        val = math.squeeze(vector)
-        return val * math.ones(2 ** len(expanded_wires))
-    if isinstance(expanded_wires, numbers.Integral):
-        expanded_wires = list(range(expanded_wires))
-
-    N = len(original_wires)
-    M = len(expanded_wires)
-    D = M - N
-
-    len_vector = math.shape(vector)[0]
-    qubit_order = int(2 ** (np.log2(len_vector) / N))
-
-    if not set(expanded_wires).issuperset(original_wires):
-        raise ValueError("Invalid target subsystems provided in 'original_wires' argument.")
-
-    if math.shape(vector) != (qubit_order**N,):
-        raise ValueError(f"Vector parameter must be of length {qubit_order}**len(original_wires)")
-
-    dims = [qubit_order] * N
-    tensor = math.reshape(vector, dims)
-
-    if D > 0:
-        extra_dims = [qubit_order] * D
-        ones = math.ones(qubit_order**D).reshape(extra_dims)
-        expanded_tensor = math.tensordot(tensor, ones, axes=0)
-    else:
-        expanded_tensor = tensor
-
-    wire_indices = [expanded_wires.index(wire) for wire in original_wires]
-    wire_indices = np.array(wire_indices)
-
-    # Order tensor factors according to wires
-    original_indices = np.array(range(N))
-    expanded_tensor = math.moveaxis(expanded_tensor, tuple(original_indices), tuple(wire_indices))
-
-    return math.reshape(expanded_tensor, (qubit_order**M,))
-
-
-def convert_to_su2(U) -> tuple:
-    r"""Convert a 2x2 unitary matrix to :math:`SU(2)`. (batched operation)
-
-    Args:
-        U (array[complex]): A matrix with a batch dimension, presumed to be
-            of shape :math:`n \times 2 \times 2` and unitary for any positive integer n.
-
-    Returns:
-        array[complex], float:
-            A :math:`n \times 2 \times 2` matrix :math:`V\in SU(2)` and the corresponding
-            global phase :math:`\alpha` such that :math:`U=Ve^{i\alpha}`.
-
-    """
-    # Compute the determinant
-    U = math.cast(U, "complex128")
-    batch_size = get_batch_size(U, (2, 2), 4)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        determinant = math.linalg.det(U)
-    global_phase = math.angle(determinant) / 2
-    U = math.cast_like(U, determinant)
-    c_phase = math.cast_like(global_phase, 1j)
-    if batch_size:
-        c_phase = math.reshape(c_phase, (batch_size, 1, 1))
-    U = U * math.exp(-1j * c_phase)
-    return U, global_phase
-
-
-def convert_to_su4(U) -> tuple:
-    r"""Convert a 4x4 matrix to :math:`SU(4)`.
-
-    Args:
-        U (array[complex]): A matrix, presumed to be :math:`4 \times 4` and unitary.
-
-    Returns:
-        array[complex], float:
-            A :math:`4 \times 4` matrix in :math:`SU(4)` that is equivalent to U up
-            to a global phase, and the global phase.
-
-    """
-    # Compute the determinant
-    U = math.cast(U, "complex128")
-    batch_size = get_batch_size(U, (4, 4), 16)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        determinant = math.linalg.det(U)
-    global_phase = math.angle(determinant) / 4
-    c_phase = math.cast_like(global_phase, 1j)
-    if batch_size:
-        c_phase = math.reshape(c_phase, (batch_size, 1, 1))
-    U = U * math.exp(-1j * c_phase)
-    return U, global_phase

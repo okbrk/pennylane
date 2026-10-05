@@ -14,14 +14,9 @@
 r"""
 Contains the hardware-efficient ParticleConservingU2 template.
 """
-
-from pennylane import capture, math
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops import CNOT, CRX, RZ, BasisState
-from pennylane.typing import Bool, Wire
-from pennylane.wires import Wires, WiresLike
+# pylint: disable-msg=too-many-branches,too-many-arguments,protected-access
+import pennylane as qml
+from pennylane.operation import Operation, AnyWires
 
 
 def u2_ex_gate(phi, wires=None):
@@ -47,13 +42,13 @@ def u2_ex_gate(phi, wires=None):
     Returns:
         list[.Operator]: sequence of operators defined by this function
     """
-    return [CNOT(wires=wires), CRX(2 * phi, wires=wires[::-1]), CNOT(wires=wires)]
+    return [qml.CNOT(wires=wires), qml.CRX(2 * phi, wires=wires[::-1]), qml.CNOT(wires=wires)]
 
 
 class ParticleConservingU2(Operation):
     r"""Implements the heuristic VQE ansatz for Quantum Chemistry simulations using the
     particle-conserving entangler :math:`U_\mathrm{ent}(\vec{\theta}, \vec{\phi})` proposed in
-    `arXiv:1805.04340 <https://arxiv.org/abs/1805.04340>`__.
+    `arXiv:1805.04340 <https://arxiv.org/abs/1805.04340>`_.
 
     This template prepares :math:`N`-qubit trial states by applying :math:`D` layers of the entangler
     block :math:`U_\mathrm{ent}(\vec{\theta}, \vec{\phi})` to the Hartree-Fock state
@@ -98,9 +93,9 @@ class ParticleConservingU2(Operation):
         weights (tensor_like): Weight tensor of shape ``(D, M)`` where ``D`` is the number of
             layers and ``M`` = ``2N-1`` is the total number of rotation ``(N)`` and exchange
             ``(N-1)`` gates per layer.
-        wires (Iterable): wires that the template acts on.
+        wires (Iterable): wires that the template acts on
         init_state (tensor_like): iterable or shape ``(len(wires),)`` tensor representing the Hartree-Fock state
-            used to initialize the wires. If ``None``, a tuple of zeros is selected as initial state.
+            used to initialize the wires.
 
     .. details::
         :title: Usage Details
@@ -115,59 +110,58 @@ class ParticleConservingU2(Operation):
 
         .. code-block:: python
 
-            import pennylane as qp
+            import pennylane as qml
             import numpy as np
             from functools import partial
 
             # Build the electronic Hamiltonian
             symbols, coordinates = (['H', 'H'], np.array([0., 0., -0.66140414, 0., 0., 0.66140414]))
-            h, qubits = qp.qchem.molecular_hamiltonian(symbols, coordinates)
+            h, qubits = qml.qchem.molecular_hamiltonian(symbols, coordinates)
 
             # Define the HF state
-            ref_state = qp.qchem.hf_state(2, qubits)
+            ref_state = qml.qchem.hf_state(2, qubits)
 
             # Define the device
-            dev = qp.device('default.qubit', wires=qubits)
+            dev = qml.device('default.qubit', wires=qubits)
 
             # Define the ansatz
-            ansatz = partial(qp.ParticleConservingU2, init_state=ref_state, wires=dev.wires)
+            ansatz = partial(qml.ParticleConservingU2, init_state=ref_state, wires=dev.wires)
 
             # Define the cost function
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def cost_fn(params):
                 ansatz(params)
-                return qp.expval(h)
+                return qml.expval(h)
 
             # Compute the expectation value of 'h' for a given set of parameters
             layers = 1
-            shape = qp.ParticleConservingU2.shape(layers, qubits)
+            shape = qml.ParticleConservingU2.shape(layers, qubits)
             params = np.random.random(shape)
             print(cost_fn(params))
 
         **Parameter shape**
 
         The shape of the trainable weights tensor can be computed by the static method
-        :meth:`~qp.ParticleConservingU2.shape` and used when creating randomly
+        :meth:`~qml.ParticleConservingU2.shape` and used when creating randomly
         initialised weight tensors:
 
         .. code-block:: python
 
-            shape = qp.ParticleConservingU2.shape(n_layers=2, n_wires=2)
+            shape = qml.ParticleConservingU2.shape(n_layers=2, n_wires=2)
             params = np.random.random(size=shape)
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"num_wires", "n_layers"}
-
-    def __init__(self, weights, wires, init_state=None):
+    def __init__(self, weights, wires, init_state=None, id=None):
         if len(wires) < 2:
             raise ValueError(
                 f"This template requires the number of qubits to be greater than one;"
                 f"got a wire sequence with {len(wires)} elements"
             )
 
-        shape = math.shape(weights)
+        shape = qml.math.shape(weights)
 
         if len(shape) != 2:
             raise ValueError(f"Weights tensor must be 2-dimensional; got shape {shape}")
@@ -177,19 +171,13 @@ class ParticleConservingU2(Operation):
                 f"Weights tensor must have a second dimension of length {2 * len(wires) - 1}; got {shape[1]}"
             )
 
-        init_state = tuple(0 for _ in wires) if init_state is None else init_state
-
         self._hyperparameters = {"init_state": tuple(init_state)}
 
-        super().__init__(weights, wires=wires)
+        super().__init__(weights, wires=wires, id=id)
 
     @property
     def num_params(self):
         return 1
-
-    @property
-    def resource_params(self) -> dict:
-        return {"num_wires": len(self.wires), "n_layers": math.shape(self.parameters[0])[0]}
 
     @staticmethod
     def compute_decomposition(weights, wires, init_state):  # pylint: disable=arguments-differ
@@ -214,25 +202,23 @@ class ParticleConservingU2(Operation):
 
         **Example**
 
-        >>> weights = torch.tensor([[0.3, 1., 0.2]])
-        >>> ops = qp.ParticleConservingU2.compute_decomposition(weights, wires=["a", "b"], init_state=[0, 1])
-        >>> from pprint import pprint
-        >>> pprint(ops)
-        [BasisState([0 1], wires=['a', 'b']),
-        RZ(0.3000..., wires=['a']),
-        RZ(1.0, wires=['b']),
-        CNOT(wires=['a', 'b']),
-        CRX(0.4000000059604645, wires=['b', 'a']),
-        CNOT(wires=['a', 'b'])]
+        >>> torch.tensor([[0.3, 1., 0.2]])
+        >>> qml.ParticleConservingU2.compute_decomposition(weights, wires=["a", "b"], init_state=[0, 1])
+        [BasisEmbedding(wires=['a', 'b']),
+         RZ(tensor(0.3000), wires=['a']),
+         RZ(tensor(1.), wires=['b']),
+         CNOT(wires=['a', 'b']),
+         CRX(tensor(0.4000), wires=['b', 'a']),
+         CNOT(wires=['a', 'b'])]
         """
         nm_wires = [wires[l : l + 2] for l in range(0, len(wires) - 1, 2)]
         nm_wires += [wires[l : l + 2] for l in range(1, len(wires) - 1, 2)]
-        n_layers = math.shape(weights)[0]
-        op_list = [BasisState(init_state, wires=wires)]
+        n_layers = qml.math.shape(weights)[0]
+        op_list = [qml.BasisEmbedding(init_state, wires=wires)]
 
         for l in range(n_layers):
             for j, wires_ in enumerate(wires):
-                op_list.append(RZ(weights[l, j], wires=wires_))
+                op_list.append(qml.RZ(weights[l, j], wires=wires_))
 
             for i, wires_ in enumerate(nm_wires):
                 op_list.extend(u2_ex_gate(weights[l, len(wires) + i], wires=wires_))
@@ -256,60 +242,3 @@ class ParticleConservingU2(Operation):
                 f"The number of qubits must be greater than one; got 'n_wires' = {n_wires}"
             )
         return n_layers, 2 * n_wires - 1
-
-
-def _particle_conserving_u2_resources(num_wires: int, n_layers: int):
-    num_nm_wires = num_wires - 1  # number of pairs of even-indexed of wires
-    return {
-        BasisState(Bool[num_wires], Wire[num_wires]): 1,
-        RZ: n_layers * num_wires,
-        CNOT: 2 * num_nm_wires * n_layers,
-        CRX: num_nm_wires * n_layers,
-    }
-
-
-@register_resources(_particle_conserving_u2_resources)
-def _particle_conserving_u2_decomposition(weights: list, wires: WiresLike, init_state: tuple[int]):
-    nm_wires = [wires[l : l + 2] for l in range(0, len(wires) - 1, 2)]
-    nm_wires += [wires[l : l + 2] for l in range(1, len(wires) - 1, 2)]
-    n_layers = math.shape(weights)[0]
-
-    if isinstance(wires, Wires):
-        wires = wires.labels
-        # If we are using capture, then it is going to be problematic to use Wires.
-        # Instead, we need to use the wire labels. Here we have a collection of Wires,
-        # and this line goes through each of them and turns them into their labels.
-        nm_wires = list(map(lambda w: w.labels if isinstance(w, Wires) else w, nm_wires))
-
-    if capture.enabled():
-        nm_wires, weights, wires, init_state = (
-            math.array(nm_wires, like="jax"),
-            math.array(weights, like="jax"),
-            math.array(wires, like="jax"),
-            math.array(init_state, like="jax"),
-        )
-
-    BasisState(init_state, wires=wires)
-
-    @for_loop(n_layers)
-    def layers_loop(l):
-        @for_loop(len(wires))
-        def rz_loop(j):
-            wires_ = wires[j]
-            RZ(weights[l, j], wires=wires_)
-
-        rz_loop()  # pylint: disable=no-value-for-parameter
-
-        @for_loop(len(nm_wires))
-        def nm_loop(i):
-            wires_ = nm_wires[i]
-            CNOT(wires=wires_)
-            CRX(2 * weights[l, len(wires) + i], wires=wires_[::-1])
-            CNOT(wires=wires_)
-
-        nm_loop()  # pylint: disable=no-value-for-parameter
-
-    layers_loop()  # pylint: disable=no-value-for-parameter
-
-
-add_decomps(ParticleConservingU2, _particle_conserving_u2_decomposition)

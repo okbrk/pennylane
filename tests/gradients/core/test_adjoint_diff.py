@@ -14,13 +14,10 @@
 """
 Tests for the ``adjoint_jacobian`` method of the :mod:`pennylane` :class:`QubitDevice` class.
 """
-
 import pytest
-from default_qubit_legacy import DefaultQubitLegacy
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
-from pennylane.exceptions import QuantumFunctionError
 
 
 class TestAdjointJacobian:
@@ -29,75 +26,75 @@ class TestAdjointJacobian:
     @pytest.fixture
     def dev(self):
         """Fixture that creates a device with two wires."""
-        return DefaultQubitLegacy(wires=2)
+        return qml.device("default.qubit.legacy", wires=2)
 
     def test_not_expval(self, dev):
         """Test if a QuantumFunctionError is raised for a tape with measurements that are not
         expectation values"""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(0.1, wires=0)
-            qp.var(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(0.1, wires=0)
+            qml.var(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
-        with pytest.raises(QuantumFunctionError, match="Adjoint differentiation method does"):
+        tape = qml.tape.QuantumScript.from_queue(q)
+        with pytest.raises(qml.QuantumFunctionError, match="Adjoint differentiation method does"):
             dev.adjoint_jacobian(tape)
 
     def test_finite_shots_warns(self):
         """Tests warning raised when finite shots specified"""
 
-        dev = DefaultQubitLegacy(wires=2, shots=10)
+        dev = qml.device("default.qubit.legacy", wires=1, shots=10)
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         with pytest.warns(
             UserWarning, match="Requested adjoint differentiation to be computed with finite shots."
         ):
             dev.adjoint_jacobian(tape)
 
-    def test_linear_combination_adjoint_warning(self, dev):
-        """Test that error is raised for qp.Hamiltonian"""
+    def test_hamiltonian_error(self, dev):
+        """Test that error is raised for qml.Hamiltonian"""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.expval(
-                qp.ops.LinearCombination(
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.expval(
+                qml.Hamiltonian(
                     [np.array(-0.05), np.array(0.17)],
-                    [qp.PauliX(0), qp.PauliZ(0)],
+                    [qml.PauliX(0), qml.PauliZ(0)],
                 )
             )
 
-        tape = qp.tape.QuantumScript.from_queue(q)
-        with pytest.warns(
-            UserWarning,
-            match="Differentiating with respect to the input parameters of LinearCombination",
+        tape = qml.tape.QuantumScript.from_queue(q)
+        with pytest.raises(
+            qml.QuantumFunctionError,
+            match="Adjoint differentiation method does not support Hamiltonian observables",
         ):
             dev.adjoint_jacobian(tape)
 
     def test_unsupported_op(self, dev):
         """Test if a QuantumFunctionError is raised for an unsupported operation, i.e.,
-        multi-parameter operations that are not qp.Rot"""
+        multi-parameter operations that are not qml.Rot"""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.CRot(0.1, 0.2, 0.3, wires=[0, 1])
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.CRot(0.1, 0.2, 0.3, wires=[0, 1])
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
-        with pytest.raises(QuantumFunctionError, match="The CRot operation is not"):
+        tape = qml.tape.QuantumScript.from_queue(q)
+        with pytest.raises(qml.QuantumFunctionError, match="The CRot operation is not"):
             dev.adjoint_jacobian(tape)
 
     def test_trainable_hermitian_warns(self):
         """Test attempting to compute the gradient of a tape that obtains the
         expectation value of a Hermitian operator emits a warning if the
         parameters to Hermitian are trainable."""
-        dev = DefaultQubitLegacy(wires=3)
+        dev = qml.device("default.qubit.legacy", wires=3)
 
-        mx = qp.matrix(qp.PauliX(0) @ qp.PauliY(2))
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.expval(qp.Hermitian(mx, wires=[0, 2]))
+        mx = qml.matrix(qml.PauliX(0) @ qml.PauliY(2))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.expval(qml.Hermitian(mx, wires=[0, 2]))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {0}
         with pytest.warns(
             UserWarning, match="Differentiating with respect to the input parameters of Hermitian"
@@ -106,23 +103,23 @@ class TestAdjointJacobian:
 
     @pytest.mark.autograd
     @pytest.mark.parametrize("theta", np.linspace(-2 * np.pi, 2 * np.pi, 7))
-    @pytest.mark.parametrize("G", [qp.RX, qp.RY, qp.RZ])
+    @pytest.mark.parametrize("G", [qml.RX, qml.RY, qml.RZ])
     def test_pauli_rotation_gradient(self, G, theta, tol, dev):
         """Tests that the automatic gradients of Pauli rotations are correct."""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.StatePrep(np.array([1.0, -1.0], requires_grad=False) / np.sqrt(2), wires=0)
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.StatePrep(np.array([1.0, -1.0], requires_grad=False) / np.sqrt(2), wires=0)
             G(theta, wires=[0])
-            qp.expval(qp.PauliZ(0))
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1}
 
         calculated_val = dev.adjoint_jacobian(tape)
 
         # compare to finite differences
-        tapes, fn = qp.gradients.finite_diff(tape)
-        numeric_val = fn(qp.execute(tapes, dev, None))
+        tapes, fn = qml.gradients.finite_diff(tape)
+        numeric_val = fn(qml.execute(tapes, dev, None))
 
         assert isinstance(calculated_val, np.ndarray)
         assert calculated_val.shape == ()
@@ -131,23 +128,23 @@ class TestAdjointJacobian:
     @pytest.mark.autograd
     @pytest.mark.parametrize("theta", np.linspace(-2 * np.pi, 2 * np.pi, 7))
     def test_Rot_gradient(self, theta, tol, dev):
-        """Tests that the device gradient of an arbitrary Euler-angle-parametrized gate is
+        """Tests that the device gradient of an arbitrary Euler-angle-parameterized gate is
         correct."""
         params = np.array([theta, theta**3, np.sqrt(2) * theta])
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.StatePrep(np.array([1.0, -1.0], requires_grad=False) / np.sqrt(2), wires=0)
-            qp.Rot(*params, wires=[0])
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.StatePrep(np.array([1.0, -1.0], requires_grad=False) / np.sqrt(2), wires=0)
+            qml.Rot(*params, wires=[0])
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1, 2, 3}
 
         calculated_val = dev.adjoint_jacobian(tape)
 
         # compare to finite differences
-        tapes, fn = qp.gradients.finite_diff(tape)
-        numeric_val = fn(qp.execute(tapes, dev, None))
+        tapes, fn = qml.gradients.finite_diff(tape)
+        numeric_val = fn(qml.execute(tapes, dev, None))
 
         assert isinstance(calculated_val, tuple)
         assert len(calculated_val) == 3
@@ -159,17 +156,17 @@ class TestAdjointJacobian:
 
         par = 0.23
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RY(par, wires=[0])
-            qp.expval(qp.PauliX(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RY(par, wires=[0])
+            qml.expval(qml.PauliX(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {0}
 
         # gradients
         exact = np.cos(par)
-        tapes, fn = qp.gradients.finite_diff(tape)
-        grad_F = fn(qp.execute(tapes, dev, None))
+        tapes, fn = qml.gradients.finite_diff(tape)
+        grad_F = fn(qml.execute(tapes, dev, None))
         grad_A = dev.adjoint_jacobian(tape)
 
         # different methods must agree
@@ -181,11 +178,11 @@ class TestAdjointJacobian:
         """Test that the gradient of the RX gate matches the known formula."""
         a = 0.7418
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(a, wires=0)
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(a, wires=0)
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         # circuit jacobians
         dev_jacobian = dev.adjoint_jacobian(tape)
         expected_jacobian = -np.sin(a)
@@ -196,18 +193,18 @@ class TestAdjointJacobian:
 
     def test_multiple_rx_gradient(self, tol):
         """Tests that the gradient of multiple RX gates in a circuit yields the correct result."""
-        dev = DefaultQubitLegacy(wires=3)
+        dev = qml.device("default.qubit.legacy", wires=3)
         params = np.array([np.pi, np.pi / 2, np.pi / 3])
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(params[0], wires=0)
-            qp.RX(params[1], wires=1)
-            qp.RX(params[2], wires=2)
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(params[0], wires=0)
+            qml.RX(params[1], wires=1)
+            qml.RX(params[2], wires=2)
 
             for idx in range(3):
-                qp.expval(qp.PauliZ(idx))
+                qml.expval(qml.PauliZ(idx))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         # circuit jacobians
         dev_jacobian = dev.adjoint_jacobian(tape)
         assert isinstance(dev_jacobian, tuple)
@@ -218,37 +215,37 @@ class TestAdjointJacobian:
         expected_jacobian = -np.diag(np.sin(params))
         assert np.allclose(dev_jacobian, expected_jacobian, atol=tol, rtol=0)
 
-    ops = {qp.RX, qp.RY, qp.RZ, qp.PhaseShift, qp.CRX, qp.CRY, qp.CRZ, qp.Rot}
+    ops = {qml.RX, qml.RY, qml.RZ, qml.PhaseShift, qml.CRX, qml.CRY, qml.CRZ, qml.Rot}
 
     @pytest.mark.autograd
-    @pytest.mark.parametrize("obs", [qp.PauliY])
+    @pytest.mark.parametrize("obs", [qml.PauliY])
     @pytest.mark.parametrize(
-        "op", [qp.RX(0.4, wires=0), qp.CRZ(1.0, wires=[0, 1]), qp.Rot(0.2, -0.1, 0.2, wires=0)]
+        "op", [qml.RX(0.4, wires=0), qml.CRZ(1.0, wires=[0, 1]), qml.Rot(0.2, -0.1, 0.2, wires=0)]
     )
     def test_gradients(self, op, obs, tol, dev):
         """Tests that the gradients of circuits match between the finite difference and device
         methods."""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.Hadamard(wires=0)
-            qp.RX(0.543, wires=0)
-            qp.CNOT(wires=[0, 1])
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.Hadamard(wires=0)
+            qml.RX(0.543, wires=0)
+            qml.CNOT(wires=[0, 1])
 
-            qp.apply(op)
+            qml.apply(op)
 
-            qp.Rot(1.3, -2.3, 0.5, wires=[0])
-            qp.RZ(-0.5, wires=0)
-            qp.adjoint(qp.RY(0.5, wires=1))
-            qp.CNOT(wires=[0, 1])
+            qml.Rot(1.3, -2.3, 0.5, wires=[0])
+            qml.RZ(-0.5, wires=0)
+            qml.adjoint(qml.RY(0.5, wires=1))
+            qml.CNOT(wires=[0, 1])
 
-            qp.expval(obs(wires=0))
-            qp.expval(qp.PauliZ(wires=1))
+            qml.expval(obs(wires=0))
+            qml.expval(qml.PauliZ(wires=1))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = set(range(1, 1 + op.num_params))
 
-        tapes, fn = qp.gradients.finite_diff(tape)
-        grad_F = fn(qp.execute(tapes, dev, None))
+        tapes, fn = qml.gradients.finite_diff(tape)
+        grad_F = fn(qml.execute(tapes, dev, None))
         grad_D = dev.adjoint_jacobian(tape)
 
         assert isinstance(grad_D, tuple)
@@ -267,18 +264,18 @@ class TestAdjointJacobian:
         """Tests that gates with multiple free parameters yield correct gradients."""
         x, y, z = [0.5, 0.3, -0.7]
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(0.4, wires=[0])
-            qp.Rot(x, y, z, wires=[0])
-            qp.RY(-0.2, wires=[0])
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(0.4, wires=[0])
+            qml.Rot(x, y, z, wires=[0])
+            qml.RY(-0.2, wires=[0])
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1, 2, 3}
 
         grad_D = dev.adjoint_jacobian(tape)
-        tapes, fn = qp.gradients.finite_diff(tape)
-        grad_F = fn(qp.execute(tapes, dev, None))
+        tapes, fn = qml.gradients.finite_diff(tape)
+        grad_F = fn(qml.execute(tapes, dev, None))
 
         # gradient has the correct shape and every element is nonzero
         assert isinstance(grad_D, tuple)
@@ -294,18 +291,18 @@ class TestAdjointJacobian:
 
         x, y, z = [0.5, 0.3, -0.7]
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(0.4, wires=[0])
-            qp.Rot(x, y, z, wires=[0])
-            qp.RY(-0.2, wires=[0])
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(0.4, wires=[0])
+            qml.Rot(x, y, z, wires=[0])
+            qml.RY(-0.2, wires=[0])
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1, 2, 3}
 
         dM1 = dev.adjoint_jacobian(tape)
 
-        qp.execute([tape], dev, None)
+        qml.execute([tape], dev, None)
         dM2 = dev.adjoint_jacobian(tape, use_device_state=True)
 
         assert np.allclose(dM1, dM2, atol=tol, rtol=0)
@@ -315,18 +312,18 @@ class TestAdjointJacobian:
         """Tests provides correct answer when provided starting state."""
         x, y, z = [0.5, 0.3, -0.7]
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(0.4, wires=[0])
-            qp.Rot(x, y, z, wires=[0])
-            qp.RY(-0.2, wires=[0])
-            qp.expval(qp.PauliZ(0))
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RX(0.4, wires=[0])
+            qml.Rot(x, y, z, wires=[0])
+            qml.RY(-0.2, wires=[0])
+            qml.expval(qml.PauliZ(0))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1, 2, 3}
 
         dM1 = dev.adjoint_jacobian(tape)
 
-        qp.execute([tape], dev, None)
+        qml.execute([tape], dev, None)
         dM2 = dev.adjoint_jacobian(tape, starting_state=dev._pre_rotated_state)
 
         assert np.allclose(dM1, dM2, atol=tol, rtol=0)
@@ -334,24 +331,24 @@ class TestAdjointJacobian:
     def test_gradient_of_tape_with_hermitian(self, tol):
         """Test that computing the gradient of a tape that obtains the
         expectation value of a Hermitian operator works correctly."""
-        dev = DefaultQubitLegacy(wires=3)
+        dev = qml.device("default.qubit.legacy", wires=3)
 
         a, b, c = [0.5, 0.3, -0.7]
 
         def ansatz(a, b, c):
-            qp.RX(a, wires=0)
-            qp.RX(b, wires=1)
-            qp.RX(c, wires=2)
-            qp.CNOT(wires=[0, 1])
-            qp.CNOT(wires=[1, 2])
+            qml.RX(a, wires=0)
+            qml.RX(b, wires=1)
+            qml.RX(c, wires=2)
+            qml.CNOT(wires=[0, 1])
+            qml.CNOT(wires=[1, 2])
 
-        mx = qp.matrix(qp.PauliX(0) @ qp.PauliY(2))
-        with qp.queuing.AnnotatedQueue() as q:
+        mx = qml.matrix(qml.PauliX(0) @ qml.PauliY(2))
+        with qml.queuing.AnnotatedQueue() as q:
             ansatz(a, b, c)
-            qp.RX(a, wires=0)
-            qp.expval(qp.Hermitian(mx, wires=[0, 2]))
+            qml.RX(a, wires=0)
+            qml.expval(qml.Hermitian(mx, wires=[0, 2]))
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {0, 1, 2}
         res = dev.adjoint_jacobian(tape)
 
@@ -368,31 +365,31 @@ class TestAdjointJacobian:
         x = np.array([0.6, 0.8, 1.0])
 
         ops = [
-            qp.Hadamard(wires=0),
-            qp.RX(0.543, wires=0),
-            qp.CNOT(wires=[0, 1]),
-            qp.Rot(x[0], x[1], x[2], wires=0),
-            qp.Rot(1.3, -2.3, 0.5, wires=[0]),
-            qp.RZ(-0.5, wires=0),
-            qp.RY(0.5, wires=1),
-            qp.CNOT(wires=[0, 1]),
+            qml.Hadamard(wires=0),
+            qml.RX(0.543, wires=0),
+            qml.CNOT(wires=[0, 1]),
+            qml.Rot(x[0], x[1], x[2], wires=0),
+            qml.Rot(1.3, -2.3, 0.5, wires=[0]),
+            qml.RZ(-0.5, wires=0),
+            qml.RY(0.5, wires=1),
+            qml.CNOT(wires=[0, 1]),
         ]
 
         observables = [
-            qp.PauliX(0),
-            qp.PauliX(0) @ qp.PauliZ(1),
-            qp.Projector([0], wires=0),
-            qp.Hermitian([[0, 1], [1, 0]], wires=1),
+            qml.PauliX(0),
+            qml.PauliX(0) @ qml.PauliZ(1),
+            qml.Projector([0], wires=0),
+            qml.Hermitian([[0, 1], [1, 0]], wires=1),
         ]
 
-        with qp.queuing.AnnotatedQueue() as q:
+        with qml.queuing.AnnotatedQueue() as q:
             for op in ops:
-                qp.apply(op)
+                qml.apply(op)
 
             for ob in observables:
-                qp.expval(ob)
+                qml.expval(ob)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         tape.trainable_params = {1, 2, 3}
 
         grad_D = dev.adjoint_jacobian(tape)
@@ -406,13 +403,13 @@ class TestAdjointJacobian:
 
         # check the results against individually executed tapes
         for i, ob in enumerate(observables):
-            with qp.queuing.AnnotatedQueue() as q_indiv_tape:
+            with qml.queuing.AnnotatedQueue() as q_indiv_tape:
                 for op in ops:
-                    qp.apply(op)
+                    qml.apply(op)
 
-                qp.expval(ob)
+                qml.expval(ob)
 
-            indiv_tape = qp.tape.QuantumScript.from_queue(q_indiv_tape)
+            indiv_tape = qml.tape.QuantumScript.from_queue(q_indiv_tape)
             indiv_tape.trainable_params = {1, 2, 3}
 
             expected = dev.adjoint_jacobian(indiv_tape)
@@ -427,16 +424,16 @@ class TestAdjointJacobian:
         """Test that a parametrized `QubitUnitary` is accounted for correctly
         when it is not trainable."""
 
-        dev = DefaultQubitLegacy(wires=1)
+        dev = qml.device("default.qubit.legacy", wires=1)
         par = np.array(0.6)
 
         def circuit(x):
-            qp.RY(x, wires=0)
-            qp.QubitUnitary(np.eye(2, requires_grad=False), wires=0)
-            return qp.expval(qp.PauliZ(0))
+            qml.RY(x, wires=0)
+            qml.QubitUnitary(np.eye(2, requires_grad=False), wires=0)
+            return qml.expval(qml.PauliZ(0))
 
-        circ = qp.QNode(circuit, dev, diff_method="adjoint")
-        grad_adjoint = qp.jacobian(circ)(par)
-        circ = qp.QNode(circuit, dev, diff_method="parameter-shift")
-        grad_psr = qp.jacobian(circ)(par)
+        circ = qml.QNode(circuit, dev, diff_method="adjoint")
+        grad_adjoint = qml.jacobian(circ)(par)
+        circ = qml.QNode(circuit, dev, diff_method="parameter-shift")
+        grad_psr = qml.jacobian(circ)(par)
         assert np.allclose(grad_adjoint, grad_psr)

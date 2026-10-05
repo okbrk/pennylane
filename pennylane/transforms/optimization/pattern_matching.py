@@ -17,51 +17,33 @@ substitution."""
 import copy
 import itertools
 from collections import OrderedDict
+from typing import Sequence, Callable
 
 import numpy as np
 
-import pennylane as qp
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.exceptions import QuantumFunctionError
-from pennylane.ops.op_math import Controlled, adjoint
-from pennylane.ops.qubit.attributes import symmetric_over_all_wires
+import pennylane as qml
 from pennylane.transforms import transform
+from pennylane import adjoint
+from pennylane.ops.qubit.attributes import symmetric_over_all_wires
+from pennylane.tape import QuantumTape, QuantumScript
 from pennylane.transforms.commutation_dag import commutation_dag
-from pennylane.typing import PostprocessingFn
 from pennylane.wires import Wires
 
-CONTROL_BASE = {
-    "CNOT": "PauliX",
-    "CZ": "PauliZ",
-    "CCZ": "PauliZ",
-    "CY": "PauliY",
-    "CH": "Hadamard",
-    "CSWAP": "SWAP",
-    "Toffoli": "PauliX",
-    "ControlledPhaseShift": "PhaseShift",
-    "CRX": "RX",
-    "CRY": "RY",
-    "CRZ": "RZ",
-    "C(S)": "S",
-    "CRot": "Rot",
-    "MultiControlledX": "PauliX",
-    "ControlledOperation": "ControlledOperation",
-}
 
-
+# pylint: disable=too-many-statements
 @transform
 def pattern_matching_optimization(
-    tape: QuantumScript, pattern_tapes, custom_quantum_cost=None
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+    tape: QuantumTape, pattern_tapes, custom_quantum_cost=None
+) -> (Sequence[QuantumTape], Callable):
     r"""Quantum function transform to optimize a circuit given a list of patterns (templates).
 
     Args:
-        tape (QNode or QuantumTape or Callable): A quantum circuit to be optimized (QNode or quantum function).
+        tape (QNode or QuantumTape or Callable): A quantum circuit to be optimized.
         pattern_tapes(list(.QuantumTape)): List of quantum tapes that implement the identity.
         custom_quantum_cost (dict): Optional, quantum cost that overrides the default cost dictionary.
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
     Raises:
         QuantumFunctionError: The pattern provided is not a valid QuantumTape or the pattern contains measurements or
@@ -69,42 +51,38 @@ def pattern_matching_optimization(
 
     **Example**
 
+    >>> dev = qml.device('default.qubit', wires=5)
+
     You can apply the transform directly on a :class:`QNode`. For that, you need first to define a pattern that is to be
     found in the circuit. We use the following pattern that implements the identity:
 
     .. code-block:: python
 
-        import pennylane as qp
+        ops = [qml.S(0), qml.S(0), qml.Z(0)]
+        pattern = qml.tape.QuantumTape(ops)
 
-        ops = [qp.S(0), qp.S(0), qp.Z(0)]
-        pattern = qp.tape.QuantumTape(ops)
 
     Let's consider the following circuit where we want to replace a sequence of two ``pennylane.S`` gates with a
     ``pennylane.PauliZ`` gate.
 
     .. code-block:: python
 
-        dev = qp.device('default.qubit', wires=5)
-
-        @qp.transforms.pattern_matching_optimization(pattern_tapes = [pattern])
-        @qp.qnode(device=dev)
+        @partial(pattern_matching_optimization, pattern_tapes = [pattern])
+        @qml.qnode(device=dev)
         def circuit():
-            qp.S(wires=0)
-            qp.Z(0)
-            qp.S(wires=1)
-            qp.CZ(wires=[0, 1])
-            qp.S(wires=1)
-            qp.S(wires=2)
-            qp.CZ(wires=[1, 2])
-            qp.S(wires=2)
-            return qp.expval(qp.X(0))
+            qml.S(wires=0)
+            qml.Z(0)
+            qml.S(wires=1)
+            qml.CZ(wires=[0, 1])
+            qml.S(wires=1)
+            qml.S(wires=2)
+            qml.CZ(wires=[1, 2])
+            qml.S(wires=2)
+            return qml.expval(qml.X(0))
 
     During the call of the circuit, it is first optimized (if possible) and then executed.
 
-    >>> print(qp.draw(circuit)())
-    0: ──S†─╭●────┤  <X>
-    1: ──Z──╰Z─╭●─┤
-    2: ──Z─────╰Z─┤
+    >>> circuit()
 
     .. details::
         :title: Usage Details
@@ -112,28 +90,29 @@ def pattern_matching_optimization(
         .. code-block:: python
 
             def circuit():
-                qp.S(wires=0)
-                qp.Z(0)
-                qp.S(wires=1)
-                qp.CZ(wires=[0, 1])
-                qp.S(wires=1)
-                qp.S(wires=2)
-                qp.CZ(wires=[1, 2])
-                qp.S(wires=2)
-                return qp.expval(qp.X(0))
+                qml.S(wires=0)
+                qml.Z(0)
+                qml.S(wires=1)
+                qml.CZ(wires=[0, 1])
+                qml.S(wires=1)
+                qml.S(wires=2)
+                qml.CZ(wires=[1, 2])
+                qml.S(wires=2)
+                return qml.expval(qml.X(0))
 
         For optimizing the circuit given the following template of CNOTs we apply the ``pattern_matching``
         transform.
 
-        >>> qnode = qp.QNode(circuit, dev)
-        >>> optimized_qnode = pattern_matching_optimization(qnode, pattern_tapes=[pattern])
+        >>> qnode = qml.QNode(circuit, dev)
+        >>> optimized_qfunc = pattern_matching_optimization(pattern_tapes=[pattern])(circuit)
+        >>> optimized_qnode = qml.QNode(optimized_qfunc, dev)
 
-        >>> print(qp.draw(qnode)())
+        >>> print(qml.draw(qnode)())
         0: ──S──Z─╭●──────────┤  <X>
         1: ──S────╰Z──S─╭●────┤
         2: ──S──────────╰Z──S─┤
 
-        >>> print(qp.draw(optimized_qnode)())
+        >>> print(qml.draw(optimized_qnode)())
         0: ──S†─╭●────┤  <X>
         1: ──Z──╰Z─╭●─┤
         2: ──Z─────╰Z─┤
@@ -143,9 +122,10 @@ def pattern_matching_optimization(
         quantum cost dictionary with a negative cost for ``pennylane.PauliZ``.
 
         >>> my_cost = {"PauliZ": -1 , "S": 1, "Adjoint(S)": 1}
-        >>> optimized_qnode = pattern_matching_optimization(qnode, pattern_tapes=[pattern], custom_quantum_cost=my_cost)
+        >>> optimized_qfunc = pattern_matching_optimization(circuit, pattern_tapes=[pattern], custom_quantum_cost=my_cost)
+        >>> optimized_qnode = qml.QNode(optimized_qfunc, dev)
 
-        >>> print(qp.draw(optimized_qnode)())
+        >>> print(qml.draw(optimized_qnode)())
         0: ──S──Z─╭●────┤  <X>
         1: ──Z────╰Z─╭●─┤
         2: ──Z───────╰Z─┤
@@ -155,53 +135,54 @@ def pattern_matching_optimization(
         .. code-block:: python
 
             def circuit():
-                qp.Toffoli(wires=[3, 4, 0])
-                qp.CNOT(wires=[1, 4])
-                qp.CNOT(wires=[2, 1])
-                qp.Hadamard(wires=3)
-                qp.Z(1)
-                qp.CNOT(wires=[2, 3])
-                qp.Toffoli(wires=[2, 3, 0])
-                qp.CNOT(wires=[1, 4])
-                return qp.expval(qp.X(0))
+                qml.Toffoli(wires=[3, 4, 0])
+                qml.CNOT(wires=[1, 4])
+                qml.CNOT(wires=[2, 1])
+                qml.Hadamard(wires=3)
+                qml.Z(1)
+                qml.CNOT(wires=[2, 3])
+                qml.Toffoli(wires=[2, 3, 0])
+                qml.CNOT(wires=[1, 4])
+                return qml.expval(qml.X(0))
 
         We define a pattern that implement the identity:
 
         .. code-block:: python
 
             ops = [
-                qp.CNOT(wires=[1, 2]),
-                qp.CNOT(wires=[0, 1]),
-                qp.CNOT(wires=[1, 2]),
-                qp.CNOT(wires=[0, 1]),
-                qp.CNOT(wires=[0, 2]),
+                qml.CNOT(wires=[1, 2]),
+                qml.CNOT(wires=[0, 1]),
+                qml.CNOT(wires=[1, 2]),
+                qml.CNOT(wires=[0, 1]),
+                qml.CNOT(wires=[0, 2]),
             ]
-            cnot_pattern = qp.tape.QuantumTape(ops)
+            tape = qml.tape.QuantumTape(ops)
 
-        For optimizing the circuit given the following pattern of CNOTs we apply the ``pattern_matching``
+        For optimizing the circuit given the given following pattern of CNOTs we apply the `pattern_matching`
         transform.
 
-        >>> dev = qp.device('default.qubit', wires=5)
-        >>> qnode = qp.QNode(circuit, dev)
-        >>> optimized_qnode = pattern_matching_optimization(qnode, pattern_tapes=[cnot_pattern])
+        >>> dev = qml.device('default.qubit', wires=5)
+        >>> qnode = qml.QNode(circuit, dev)
+        >>> optimized_qfunc = pattern_matching_optimization(circuit, pattern_tapes=[pattern])
+        >>> optimized_qnode = qml.QNode(optimized_qfunc, dev)
 
         In our case, it is possible to find three CNOTs and replace this pattern with only two CNOTs and therefore
         optimizing the circuit. The number of CNOTs in the circuit is reduced by one.
 
-        >>> qp.specs(qnode)().resources.quantum_operations["CNOT"]
+        >>> qml.specs(qnode)()["resources"].gate_types["CNOT"]
         4
 
-        >>> qp.specs(optimized_qnode)().resources.quantum_operations["CNOT"]
+        >>> qml.specs(optimized_qnode)()["resources"].gate_types["CNOT"]
         3
 
-        >>> print(qp.draw(qnode)())
+        >>> print(qml.draw(qnode)())
         0: ─╭X──────────╭X────┤  <X>
         1: ─│──╭●─╭X──Z─│──╭●─┤
         2: ─│──│──╰●─╭●─├●─│──┤
         3: ─├●─│───H─╰X─╰●─│──┤
         4: ─╰●─╰X──────────╰X─┤
 
-        >>> print(qp.draw(optimized_qnode)())
+        >>> print(qml.draw(optimized_qnode)())
         0: ─╭X──────────╭X─┤  <X>
         1: ─│─────╭X──Z─│──┤
         2: ─│──╭●─╰●─╭●─├●─┤
@@ -216,29 +197,28 @@ def pattern_matching_optimization(
     Exact and practical pattern matching for quantum circuit optimization.
     `doi.org/10.1145/3498325 <https://dl.acm.org/doi/abs/10.1145/3498325>`_
     """
-
+    # pylint: disable=too-many-branches
     consecutive_wires = Wires(range(len(tape.wires)))
-    inverse_wires_map = OrderedDict(zip(consecutive_wires, tape.wires, strict=True))
-    original_tape_meas = tape.measurements
+    inverse_wires_map = OrderedDict(zip(consecutive_wires, tape.wires))
 
     for pattern in pattern_tapes:
         # Check the validity of the pattern
         if not isinstance(pattern, QuantumScript):
-            raise QuantumFunctionError("The pattern is not a valid quantum tape.")
+            raise qml.QuantumFunctionError("The pattern is not a valid quantum tape.")
 
         # Check that it does not contain a measurement.
         if pattern.measurements:
-            raise QuantumFunctionError("The pattern contains measurements.")
+            raise qml.QuantumFunctionError("The pattern contains measurements.")
 
         # Verify that the pattern is implementing the identity
         if not np.allclose(
-            qp.matrix(pattern, wire_order=pattern.wires), np.eye(2**pattern.num_wires)
+            qml.matrix(pattern, wire_order=pattern.wires), np.eye(2**pattern.num_wires)
         ):
-            raise QuantumFunctionError("Pattern is not valid, it does not implement identity.")
+            raise qml.QuantumFunctionError("Pattern is not valid, it does not implement identity.")
 
         # Verify that the pattern has less qubits or same number of qubits
         if tape.num_wires < pattern.num_wires:
-            raise QuantumFunctionError("Circuit has less qubits than the pattern.")
+            raise qml.QuantumFunctionError("Circuit has less qubits than the pattern.")
 
         # Construct Dag representation of the circuit and the pattern.
         circuit_dag = commutation_dag(tape)
@@ -258,7 +238,7 @@ def pattern_matching_optimization(
             # If some substitutions are possible, we create an optimized circuit.
             if substitution.substitution_list:
                 # Create a tape that does not affect the outside context.
-                with qp.queuing.AnnotatedQueue() as q_inside:
+                with qml.queuing.AnnotatedQueue() as q_inside:
                     # Loop over all possible substitutions
                     for group in substitution.substitution_list:
                         circuit_sub = group.circuit_config
@@ -273,7 +253,7 @@ def pattern_matching_optimization(
                         for elem in pred:
                             node = circuit_dag.get_node(elem)  # pylint: disable=no-member
                             inst = copy.deepcopy(node.op)
-                            qp.apply(inst)
+                            qml.apply(inst)
                             already_sub.append(elem)
 
                         already_sub = already_sub + circuit_sub
@@ -289,24 +269,22 @@ def pattern_matching_optimization(
                             node = group.template_dag.get_node(index)
                             inst = copy.deepcopy(node.op)
 
-                            inst = qp.map_wires(
-                                inst, wire_map=dict(zip(inst.wires, wires, strict=True))
-                            )
-                            adjoint(qp.apply, lazy=False)(inst)
+                            inst = qml.map_wires(inst, wire_map=dict(zip(inst.wires, wires)))
+                            adjoint(qml.apply, lazy=False)(inst)
 
                     # Add the unmatched gates.
                     for node_id in substitution.unmatched_list:
                         node = circuit_dag.get_node(node_id)  # pylint: disable=no-member
                         inst = copy.deepcopy(node.op)
-                        qp.apply(inst)
+                        qml.apply(inst)
 
                 qscript = QuantumScript.from_queue(q_inside)
-                [tape], _ = qp.map_wires(qscript, wire_map=inverse_wires_map)
+                [tape], _ = qml.map_wires(input=qscript, wire_map=inverse_wires_map)
 
-    new_tape = tape.copy(measurements=original_tape_meas)
+    new_tape = type(tape)(tape.operations, tape.measurements, shots=tape.shots)
 
     def null_postprocessing(results):
-        """A postprocessing function returned by a transform that only converts the batch of results
+        """A postprocesing function returned by a transform that only converts the batch of results
         into a result for a single ``QuantumTape``.
         """
         return results[0]
@@ -331,15 +309,15 @@ def pattern_matching(circuit_dag, pattern_dag):
     .. code-block:: python
 
         def circuit():
-            qp.S(wires=0)
-            qp.Z(0)
-            qp.S(wires=1)
-            qp.CZ(wires=[0, 1])
-            qp.S(wires=1)
-            qp.S(wires=2)
-            qp.CZ(wires=[1, 2])
-            qp.S(wires=2)
-            return qp.expval(qp.X(0))
+            qml.S(wires=0)
+            qml.Z(0)
+            qml.S(wires=1)
+            qml.CZ(wires=[0, 1])
+            qml.S(wires=1)
+            qml.S(wires=2)
+            qml.CZ(wires=[1, 2])
+            qml.S(wires=2)
+            return qml.expval(qml.X(0))
 
     Assume that we want to find all maximal matches of a pattern containing a sequence of two :class:`~.S` gates and
     a :class:`~.PauliZ` gate:
@@ -347,16 +325,16 @@ def pattern_matching(circuit_dag, pattern_dag):
     .. code-block:: python
 
         def pattern():
-            qp.S(wires=0)
-            qp.S(wires=0)
-            qp.Z(0)
+            qml.S(wires=0)
+            qml.S(wires=0)
+            qml.Z(0)
 
 
-    >>> circuit_dag = qp.commutation_dag(circuit)()
-    >>> pattern_dag = qp.commutation_dag(pattern)()
-    >>> all_max_matches = qp.pattern_matching(circuit_dag, pattern_dag)
+    >>> circuit_dag = qml.commutation_dag(circuit)()
+    >>> pattern_dag = qml.commutation_dag(pattern)()
+    >>> all_max_matches = qml.pattern_matching(circuit_dag, pattern_dag)
 
-    The matches are accessible by looping through the list outputted by ``qp.pattern_matching``. This output is a list
+    The matches are accessible by looping through the list outputted by ``qml.pattern_matching``. This output is a list
     of lists containing indices. Each list represents a match between a gate in the pattern with a gate in the circuit.
     The first indices represent the gates in the pattern and the second indices provide indices for the gates in the
     circuit (by order of appearance).
@@ -460,11 +438,7 @@ def _compare_operation_without_qubits(node_1, node_2):
     Return:
         Bool: True if similar operation (no qubits comparison) and False otherwise.
     """
-    return (
-        (node_1.op.name == node_2.op.name)
-        and len(node_1.wires) == len(node_2.wires)
-        and qp.math.allclose(node_1.op.data, node_2.op.data)
-    )
+    return (node_1.op.name == node_2.op.name) and (node_1.op.data == node_2.op.data)
 
 
 def _not_fixed_qubits(n_qubits_circuit, exclude, length):
@@ -495,23 +469,38 @@ def _first_match_qubits(node_c, node_p, n_qubits_p):
         list: list of qubits to consider in circuit (with specific order).
     """
     # pylint: disable=too-many-branches
+    control_base = {
+        "CNOT": "PauliX",
+        "CZ": "PauliZ",
+        "CCZ": "PauliZ",
+        "CY": "PauliY",
+        "CH": "Hadamard",
+        "CSWAP": "SWAP",
+        "Toffoli": "PauliX",
+        "ControlledPhaseShift": "PhaseShift",
+        "CRX": "RX",
+        "CRY": "RY",
+        "CRZ": "RZ",
+        "CRot": "Rot",
+        "MultiControlledX": "PauliX",
+        "ControlledOperation": "ControlledOperation",
+    }
 
     first_match_qubits = []
 
     # Controlled gate
-    if isinstance(node_c.op, Controlled):
+    if len(node_c.op.control_wires) >= 1:
         circuit_control = node_c.op.control_wires
-        circuit_target = Wires([w for w in node_c.op.wires if w not in circuit_control])
+        circuit_target = Wires([w for w in node_c.op.wires if w not in node_c.op.control_wires])
         # Not symmetric target gate or acting on 1 wire (target wires cannot be permuted) (For example Toffoli)
-        if CONTROL_BASE[node_p.op.name] not in symmetric_over_all_wires:
+        if control_base[node_p.op.name] not in symmetric_over_all_wires:
             # Permute control
             for control_permuted in itertools.permutations(circuit_control):
                 control_permuted = list(control_permuted)
                 first_match_qubits_sub = [-1] * n_qubits_p
                 for q in node_p.wires:
                     node_circuit_perm = control_permuted + circuit_target
-                    index = node_p.wires.index(q)
-                    first_match_qubits_sub[q] = node_circuit_perm[index]
+                    first_match_qubits_sub[q] = node_circuit_perm[node_p.wires.index(q)]
                 first_match_qubits.append(first_match_qubits_sub)
         # Symmetric target gate (target wires can be permuted) (For example CSWAP)
         else:
@@ -581,7 +570,7 @@ def _update_qubits(circuit_dag, qubits_conf):
         list(list(int)): Target wires
         list(list(int)): Control wires
     """
-
+    # pylint: disable=too-many-arguments
     wires = []
     control_wires = []
     target_wires = []
@@ -648,10 +637,25 @@ def _compare_qubits(node1, wires1, control1, target1, wires2, control2, target2)
         control2 (list(int)): Control wires of the second node.
         target2 (list(int)): Target wires of the second node.
     """
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-instance-attributes, too-many-arguments
+
+    control_base = {
+        "CNOT": "PauliX",
+        "CZ": "PauliZ",
+        "CY": "PauliY",
+        "CSWAP": "SWAP",
+        "Toffoli": "PauliX",
+        "ControlledPhaseShift": "PhaseShift",
+        "CRX": "RX",
+        "CRY": "RY",
+        "CRZ": "RZ",
+        "CRot": "Rot",
+        "MultiControlledX": "PauliX",
+        "ControlledOperation": "ControlledOperation",
+    }
 
     if control1 and set(control1) == set(control2):
-        if CONTROL_BASE[node1.op.name] in symmetric_over_all_wires and set(target1) == set(target2):
+        if control_base[node1.op.name] in symmetric_over_all_wires and set(target1) == set(target2):
             return True
         if target1 == target2:
             return True
@@ -679,7 +683,7 @@ class ForwardMatch:  # pylint: disable=too-many-instance-attributes,too-few-publ
             node_id_c (int): index of the first gate matched in the circuit.
             node_id_p (int): index of the first gate matched in the pattern.
         """
-        # pylint: disable=too-many-arguments
+        # pylint: disable=too-many-branches, too-many-arguments
 
         # Commutation DAG of the circuit
         self.circuit_dag = circuit_dag
@@ -834,7 +838,7 @@ class ForwardMatch:  # pylint: disable=too-many-instance-attributes,too-few-publ
         """Apply the forward match algorithm and returns the list of matches given an initial match
         and a qubits configuration.
         """
-        # pylint: disable=too-many-nested-blocks
+        # pylint: disable=too-many-branches,too-many-nested-blocks
 
         # Initialization
         self._init_successors_to_visit()
@@ -1448,7 +1452,7 @@ def _gate_indices(circuit_matched, circuit_blocked):
     """
     gate_indices = []
 
-    for i, (matched, blocked) in enumerate(zip(circuit_matched, circuit_blocked, strict=True)):
+    for i, (matched, blocked) in enumerate(zip(circuit_matched, circuit_blocked)):
         if (not matched) and (not blocked):
             gate_indices.append(i)
     gate_indices.reverse()
@@ -1551,11 +1555,6 @@ class TemplateSubstitution:  # pylint: disable=too-few-public-methods
                 "SWAP": 6,
                 "CSWAP": 63,
                 "Toffoli": 21,
-                "C(S)": 4,
-                "CCZ": 21,
-                # the quantum cost of a MultiControlledX gate scales as 4n^2, where n is the number of control wires
-                # see exercise 4.29 in Nielsen and Chuang
-                "MultiControlledX": lambda op: 2 * 4 * len(op.control_wires) ** 2,
             }
 
     def _pred_block(self, circuit_sublist, index):
@@ -1589,13 +1588,11 @@ class TemplateSubstitution:  # pylint: disable=too-few-public-methods
         """
         cost_left = 0
         for i in left:
-            cost = self.quantum_cost[self.template_dag.get_node(i).op.name]
-            cost_left += cost(self.template_dag.get_node(i).op) if callable(cost) else cost
+            cost_left += self.quantum_cost[self.template_dag.get_node(i).op.name]
 
         cost_right = 0
         for j in right:
-            cost = self.quantum_cost[self.template_dag.get_node(j).op.name]
-            cost_right += cost(self.template_dag.get_node(j).op) if callable(cost) else cost
+            cost_right += self.quantum_cost[self.template_dag.get_node(j).op.name]
 
         return cost_left > cost_right
 

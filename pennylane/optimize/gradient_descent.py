@@ -30,11 +30,11 @@ class GradientDescentOptimizer:
     where :math:`\eta` is a user-defined hyperparameter corresponding to step size.
 
     Args:
-        stepsize (float): the user-defined hyperparameter :math:`\eta` (default value: 0.01).
+        stepsize (float): the user-defined hyperparameter :math:`\eta`
 
     .. note::
 
-        When using ``torch`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
+        When using ``torch``, ``tensorflow`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
 
     """
 
@@ -101,7 +101,7 @@ class GradientDescentOptimizer:
 
     @staticmethod
     def compute_grad(objective_fn, args, kwargs, grad_fn=None):
-        r"""Compute the gradient of the objective function at the given point and return it along with
+        r"""Compute gradient of the objective function at the given point and return it along with
         the objective function forward pass (if available).
 
         Args:
@@ -116,7 +116,7 @@ class GradientDescentOptimizer:
         Returns:
             tuple (array): NumPy array containing the gradient :math:`\nabla f(x^{(t)})` and the
             objective function output. If ``grad_fn`` is provided, the objective function
-            will not be evaluated and instead ``None`` will be returned.
+            will not be evaluted and instead ``None`` will be returned.
         """
         g = get_gradient(objective_fn) if grad_fn is None else grad_fn
         grad = g(*args, **kwargs)

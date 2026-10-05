@@ -25,7 +25,6 @@ Constructor Functions
     ~adjoint
     ~ctrl
     ~cond
-    ~change_op_basis
     ~exp
     ~sum
     ~pow
@@ -41,23 +40,17 @@ Symbolic Classes
     :toctree: api
 
     ~Adjoint
-    ~ChangeOpBasis
-    ~ChangeOpBasis2
     ~CompositeOp
-    ~CompositeOp2
     ~Conditional
     ~Controlled
     ~ControlledOp
     ~Evolution
     ~Exp
-    ~LinearCombination
     ~Pow
     ~Prod
-    ~Prod2
     ~Sum
     ~SProd
     ~SymbolicOp
-    ~SymbolicOp2
     ~ScalarSymbolicOp
 
 Controlled Operator Classes
@@ -93,9 +86,7 @@ Decompositions
 
     ~one_qubit_decomposition
     ~two_qubit_decomposition
-    ~multi_qubit_decomposition
     ~sk_decomposition
-    ~rs_decomposition
 
 Control Decompositions
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -108,63 +99,38 @@ Control Decompositions
     ~ctrl_decomp_zyz
     ~ctrl_decomp_bisect
 
-Other Functions
-~~~~~~~~~~~~~~~
-
-.. currentmodule:: pennylane.ops.op_math
-
-.. autosummary::
-    :toctree: api
-
-    ~custom_ctrl_dispatch
-
 """
 
 from .adjoint import Adjoint, adjoint
-from .adjoint2 import Adjoint2
 from .composite import CompositeOp
-from .composite2 import CompositeOp2
-from .condition import Conditional, cond
-from .controlled import Controlled, ControlledOp, ctrl, custom_ctrl_dispatch
-from .controlled2 import Controlled2, ControlledOp2
+from .condition import cond, Conditional
+from .controlled import Controlled, ControlledOp, ctrl
 from .controlled_ops import (
-    CCZ,
-    CH,
-    CNOT,
+    ControlledQubitUnitary,
+    ControlledPhaseShift,
+    CPhase,
+    CRot,
     CRX,
     CRY,
     CRZ,
-    CSWAP,
     CY,
     CZ,
-    ControlledPhaseShift,
-    ControlledQubitUnitary,
-    CPhase,
-    CRot,
-    MultiControlledX,
+    CH,
+    CCZ,
+    CSWAP,
+    CNOT,
     Toffoli,
+    MultiControlledX,
 )
-from .decompositions import (
-    one_qubit_decomposition,
-    sk_decomposition,
-    rs_decomposition,
-    two_qubit_decomposition,
-    multi_qubit_decomposition,
-    ctrl_decomp_bisect,
-    ctrl_decomp_zyz,
-)
+from .decompositions import one_qubit_decomposition, two_qubit_decomposition, sk_decomposition
 from .evolution import Evolution
 from .exp import Exp, exp
-from .linear_combination import LinearCombination
 from .pow import Pow, pow
 from .prod import Prod, prod
-from .prod2 import Prod2
-from .change_op_basis import ChangeOpBasis, change_op_basis
-from .change_op_basis2 import ChangeOpBasis2
 from .sprod import SProd, s_prod
 from .sum import Sum, sum
 from .symbolicop import ScalarSymbolicOp, SymbolicOp
-from .symbolicop2 import SymbolicOp2
+from .controlled_decompositions import ctrl_decomp_zyz, ctrl_decomp_bisect
 
 controlled_qubit_ops = {
     "ControlledQubitUnitary",

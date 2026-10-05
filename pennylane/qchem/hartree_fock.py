@@ -17,7 +17,7 @@ This module contains the functions needed for performing the self-consistent-fie
 
 import itertools
 
-import pennylane as qp
+import pennylane as qml
 
 from .matrices import core_matrix, mol_density_matrix, overlap_matrix, repulsion_tensor
 
@@ -99,7 +99,7 @@ def scf(mol, n_steps=50, tol=1e-8):
     >>> geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], requires_grad = False)
     >>> alpha = np.array([[3.42525091, 0.62391373, 0.1688554],
     >>>                   [3.42525091, 0.62391373, 0.1688554]], requires_grad=True)
-    >>> mol = qp.qchem.Molecule(symbols, geometry, alpha=alpha)
+    >>> mol = qml.qchem.Molecule(symbols, geometry, alpha=alpha)
     >>> args = [alpha]
     >>> v_fock, coeffs, fock_matrix, h_core, rep_tensor = scf(mol)(*args)
     >>> v_fock
@@ -116,71 +116,48 @@ def scf(mol, n_steps=50, tol=1e-8):
             tuple(array[float]): eigenvalues of the Fock matrix, molecular orbital coefficients,
             Fock matrix, core matrix
         """
-        if mol.n_electrons % 2 == 1 or mol.mult != 1:
-            raise ValueError(
-                "Open-shell systems are not supported. Change the charge or spin multiplicity of the molecule."
-            )
-
         basis_functions = mol.basis_set
         charges = mol.nuclear_charges
         r = mol.coordinates
         n_electron = mol.n_electrons
 
-        if qp.math.get_interface(r) == "autograd":
-            if getattr(r, "requires_grad", False):
-                args_r = [[args[0][i]] * mol.n_basis[i] for i in range(len(mol.n_basis))]
-                # In autograd, _scf constructs args_ as r, alpha, coeff, r
-                args_ = [*args] + [qp.math.vstack(list(itertools.chain(*args_r)))]
-                rep_tensor = repulsion_tensor(basis_functions)(*args_[1:])
-                s = overlap_matrix(basis_functions)(*args_[1:])
-                h_core = core_matrix(basis_functions, charges, r)(*args_)
-            else:
-                rep_tensor = repulsion_tensor(basis_functions)(*args)
-                s = overlap_matrix(basis_functions)(*args)
-                h_core = core_matrix(basis_functions, charges, r)(*args)
+        if r.requires_grad:
+            args_r = [[args[0][i]] * mol.n_basis[i] for i in range(len(mol.n_basis))]
+            args_ = [*args] + [qml.math.vstack(list(itertools.chain(*args_r)))]
+            rep_tensor = repulsion_tensor(basis_functions)(*args_[1:])
+            s = overlap_matrix(basis_functions)(*args_[1:])
+            h_core = core_matrix(basis_functions, charges, r)(*args_)
         else:
-            # NOTE: In JAX, args is ordered r, coeff, alpha.
-            # NOTE: core_matrix expects args_ to be r, r, coeff, alpha.
-            if (
-                len(args) > 0
-                and qp.math.get_interface(r) == "jax"
-                and qp.math.requires_grad(args[0])
-            ):
-                args_r = [[args[0][i]] * mol.n_basis[i] for i in range(len(mol.n_basis))]
-                args_ = [*args] + [qp.math.vstack(list(itertools.chain(*args_r)))]
-                args_ = [args_[0], args_[3], args_[1], args_[2]]
-                rep_tensor = repulsion_tensor(basis_functions)(*args_[1:])
-                s = overlap_matrix(basis_functions)(*args_[1:])
-                h_core = core_matrix(basis_functions, charges, r)(*args_)
-            else:
-                rep_tensor = repulsion_tensor(basis_functions)(*args)
-                s = overlap_matrix(basis_functions)(*args)
-                h_core = core_matrix(basis_functions, charges, r)(*args)
+            rep_tensor = repulsion_tensor(basis_functions)(*args)
+            s = overlap_matrix(basis_functions)(*args)
+            h_core = core_matrix(basis_functions, charges, r)(*args)
 
-        rng = qp.math.random.default_rng(2030)
-        s = s + qp.math.diag(rng.random(len(s)) * 1.0e-12)
+        rng = qml.math.random.default_rng(2030)
+        s = s + qml.math.diag(rng.random(len(s)) * 1.0e-12)
 
-        w, v = qp.math.linalg.eigh(s)
-        x = v @ qp.math.diag(1.0 / qp.math.sqrt(w)) @ v.T
+        w, v = qml.math.linalg.eigh(s)
+        x = v @ qml.math.diag(1.0 / qml.math.sqrt(w)) @ v.T
 
-        eigvals, w_fock = qp.math.linalg.eigh(x.T @ h_core @ x)  # initial guess for the scf problem
+        eigvals, w_fock = qml.math.linalg.eigh(
+            x.T @ h_core @ x
+        )  # initial guess for the scf problem
         coeffs = x @ w_fock
 
         p = mol_density_matrix(n_electron, coeffs)
 
         for _ in range(n_steps):
-            j = qp.math.einsum("pqrs,rs->pq", rep_tensor, p)
-            k = qp.math.einsum("psqr,rs->pq", rep_tensor, p)
+            j = qml.math.einsum("pqrs,rs->pq", rep_tensor, p)
+            k = qml.math.einsum("psqr,rs->pq", rep_tensor, p)
 
             fock_matrix = h_core + 2 * j - k
 
-            eigvals, w_fock = qp.math.linalg.eigh(x.T @ fock_matrix @ x)
+            eigvals, w_fock = qml.math.linalg.eigh(x.T @ fock_matrix @ x)
 
             coeffs = x @ w_fock
 
             p_update = mol_density_matrix(n_electron, coeffs)
 
-            if qp.math.linalg.norm(p_update - p) <= tol:
+            if qml.math.linalg.norm(p_update - p) <= tol:
                 break
 
             p = p_update
@@ -215,7 +192,7 @@ def nuclear_energy(charges, r):
 
     >>> symbols  = ['H', 'F']
     >>> geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]], requires_grad = True)
-    >>> mol = qp.qchem.Molecule(symbols, geometry)
+    >>> mol = qml.qchem.Molecule(symbols, geometry)
     >>> args = [mol.coordinates]
     >>> e = nuclear_energy(mol.nuclear_charges, mol.coordinates)(*args)
     >>> print(e)
@@ -231,17 +208,14 @@ def nuclear_energy(charges, r):
         Returns:
             array[float]: nuclear-repulsion energy
         """
-        if getattr(r, "requires_grad", False) or (
-            len(args) > 0 and qp.math.get_interface(r) == "jax" and qp.math.requires_grad(args[0])
-        ):
+        if r.requires_grad:
             coor = args[0]
         else:
             coor = r
-        e = qp.math.array([0.0])
+        e = qml.math.array([0.0])
         for i, r1 in enumerate(coor):
             for j, r2 in enumerate(coor[i + 1 :]):
-                e = e + (charges[i] * charges[i + j + 1] / qp.math.linalg.norm(r1 - r2))
-
+                e = e + (charges[i] * charges[i + j + 1] / qml.math.linalg.norm(r1 - r2))
         return e
 
     return _nuclear_energy
@@ -262,7 +236,7 @@ def hf_energy(mol):
     >>> geometry = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], requires_grad = False)
     >>> alpha = np.array([[3.42525091, 0.62391373, 0.1688554],
     >>>                   [3.42525091, 0.62391373, 0.1688554]], requires_grad=True)
-    >>> mol = qp.qchem.Molecule(symbols, geometry, alpha=alpha)
+    >>> mol = qml.qchem.Molecule(symbols, geometry, alpha=alpha)
     >>> args = [alpha]
     >>> hf_energy(mol)(*args)
     -1.065999461545263
@@ -279,7 +253,7 @@ def hf_energy(mol):
         """
         _, coeffs, fock_matrix, h_core, _ = scf(mol)(*args)
         e_rep = nuclear_energy(mol.nuclear_charges, mol.coordinates)(*args)
-        e_elec = qp.math.einsum(
+        e_elec = qml.math.einsum(
             "pq,qp", fock_matrix + h_core, mol_density_matrix(mol.n_electrons, coeffs)
         )
         energy = e_elec + e_rep

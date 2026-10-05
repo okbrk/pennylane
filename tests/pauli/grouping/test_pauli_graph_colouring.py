@@ -14,10 +14,8 @@
 """
 Unit tests for heuristic Pauli graph colouring functions in ``/pauli/grouping/graph_colouring.py``.
 """
-
-import numpy as np
 import pytest
-
+import numpy as np
 from pennylane.pauli.grouping.graph_colouring import largest_first, recursive_largest_first
 
 

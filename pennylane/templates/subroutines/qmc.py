@@ -14,20 +14,11 @@
 """
 Contains the QuantumMonteCarlo template and utility functions.
 """
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments
-import copy
-
+# pylint: disable=too-many-arguments
 import numpy as np
-
-from pennylane import math
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
+import pennylane as qml
+from pennylane.operation import AnyWires, Operation
 from pennylane.ops import QubitUnitary
-from pennylane.typing import Complex, Wire
-from pennylane.wires import Wires
-
-from .qpe import QuantumPhaseEstimation
 
 
 def probs_to_unitary(probs):
@@ -57,17 +48,17 @@ def probs_to_unitary(probs):
     **Example:**
 
     >>> p = np.ones(4) / 4
-    >>> probs_to_unitary(p) # doctest: +SKIP
-    array([[ 0.5   ,  0.5   ,  0.5   ,  0.5   ],
-           [ 0.5   , -0.8333,  0.1667,  0.1667],
-           [ 0.5   ,  0.1667, -0.8333,  0.1667],
-           [ 0.5   ,  0.1667,  0.1667, -0.8333]])
+    >>> probs_to_unitary(p)
+    array([[ 0.5       ,  0.5       ,  0.5       ,  0.5       ],
+           [ 0.5       , -0.83333333,  0.16666667,  0.16666667],
+           [ 0.5       ,  0.16666667, -0.83333333,  0.16666667],
+           [ 0.5       ,  0.16666667,  0.16666667, -0.83333333]])
     """
 
-    if not math.is_abstract(
+    if not qml.math.is_abstract(
         sum(probs)
     ):  # skip check and error if jitting to avoid JAX tracer errors
-        if not math.allclose(sum(probs), 1) or min(probs) < 0:
+        if not qml.math.allclose(sum(probs), 1) or min(probs) < 0:
             raise ValueError(
                 "A valid probability distribution of non-negative numbers that sum to one "
                 "must be input"
@@ -75,18 +66,18 @@ def probs_to_unitary(probs):
 
     # Using the approach discussed here:
     # https://quantumcomputing.stackexchange.com/questions/10239/how-can-i-fill-a-unitary-knowing-only-its-first-column
-    psi = math.sqrt(probs)
+    psi = qml.math.sqrt(probs)
     overlap = psi[0]
-    denominator = math.sqrt(2 + 2 * overlap)
-    psi = math.set_index(psi, 0, psi[0] + 1)  # psi[0] += 1, but JAX-JIT compatible
+    denominator = qml.math.sqrt(2 + 2 * overlap)
+    psi = qml.math.set_index(psi, 0, psi[0] + 1)  # psi[0] += 1, but JAX-JIT compatible
     psi /= denominator
 
     dim = len(probs)
-    return 2 * math.outer(psi, psi) - np.eye(dim)
+    return 2 * qml.math.outer(psi, psi) - np.eye(dim)
 
 
 def func_to_unitary(func, M):
-    r"""Calculates the unitary that encodes a function onto an auxiliary qubit register.
+    r"""Calculates the unitary that encodes a function onto an ancilla qubit register.
 
     Consider a function defined on the set of integers :math:`X = \{0, 1, \ldots, M - 1\}` whose
     output is bounded in the interval :math:`[0, 1]`, i.e., :math:`f: X \rightarrow [0, 1]`.
@@ -100,8 +91,8 @@ def func_to_unitary(func, M):
         \sqrt{f(i)} |1\rangle\right).
 
     In other words, for a given input state :math:`|i\rangle \otimes |0\rangle`, this unitary
-    encodes the amplitude :math:`\sqrt{f(i)}` onto the :math:`|1\rangle` state of the auxiliary qubit.
-    Hence, measuring the auxiliary qubit will result in the :math:`|1\rangle` state with probability
+    encodes the amplitude :math:`\sqrt{f(i)}` onto the :math:`|1\rangle` state of the ancilla qubit.
+    Hence, measuring the ancilla qubit will result in the :math:`|1\rangle` state with probability
     :math:`f(i)`.
 
     Args:
@@ -119,20 +110,27 @@ def func_to_unitary(func, M):
 
     >>> func = lambda i: np.sin(i) ** 2
     >>> M = 16
-    >>> func_to_unitary(func, M) # doctest: +SKIP
-    array([[ 1.    ,  0.    ,  0.    , ...,  0.    ,  0.    ,  0.    ],
-           [ 0.    , -1.    ,  0.    , ...,  0.    ,  0.    ,  0.    ],
-           [ 0.    ,  0.    ,  0.5403, ...,  0.    ,  0.    ,  0.    ],
+    >>> func_to_unitary(func, M)
+    array([[ 1.        ,  0.        ,  0.        , ...,  0.        ,
+             0.        ,  0.        ],
+           [ 0.        , -1.        ,  0.        , ...,  0.        ,
+             0.        ,  0.        ],
+           [ 0.        ,  0.        ,  0.54030231, ...,  0.        ,
+             0.        ,  0.        ],
            ...,
-           [ 0.    ,  0.    ,  0.    , ..., -0.1367,  0.    ,  0.    ],
-           [ 0.    ,  0.    ,  0.    , ...,  0.    ,  0.7597,  0.6503],
-           [ 0.    ,  0.    ,  0.    , ...,  0.    ,  0.6503, -0.7597]],
-          shape=(32, 32))
+           [ 0.        ,  0.        ,  0.        , ..., -0.13673722,
+             0.        ,  0.        ],
+           [ 0.        ,  0.        ,  0.        , ...,  0.        ,
+             0.75968791,  0.65028784],
+           [ 0.        ,  0.        ,  0.        , ...,  0.        ,
+             0.65028784, -0.75968791]])
     """
     unitary = np.zeros((2 * M, 2 * M))
 
     fs = [func(i) for i in range(M)]
-    if not math.is_abstract(fs[0]):  # skip check and error if jitting to avoid JAX tracer errors
+    if not qml.math.is_abstract(
+        fs[0]
+    ):  # skip check and error if jitting to avoid JAX tracer errors
         if min(fs) < 0 or max(fs) > 1:
             raise ValueError(
                 "func must be bounded within the interval [0, 1] for the range of input values"
@@ -140,17 +138,17 @@ def func_to_unitary(func, M):
 
     for i, f in enumerate(fs):
         # array = set_index(array, idx, val) is a JAX-JIT compatible version of array[idx] = val
-        unitary = math.set_index(unitary, (2 * i, 2 * i), math.sqrt(1 - f))
-        unitary = math.set_index(unitary, (2 * i + 1, 2 * i), math.sqrt(f))
-        unitary = math.set_index(unitary, (2 * i, 2 * i + 1), math.sqrt(f))
-        unitary = math.set_index(unitary, (2 * i + 1, 2 * i + 1), -math.sqrt(1 - f))
+        unitary = qml.math.set_index(unitary, (2 * i, 2 * i), qml.math.sqrt(1 - f))
+        unitary = qml.math.set_index(unitary, (2 * i + 1, 2 * i), qml.math.sqrt(f))
+        unitary = qml.math.set_index(unitary, (2 * i, 2 * i + 1), qml.math.sqrt(f))
+        unitary = qml.math.set_index(unitary, (2 * i + 1, 2 * i + 1), -qml.math.sqrt(1 - f))
 
     return unitary
 
 
 def _make_V(dim):
     r"""Calculates the :math:`\mathcal{V}` unitary which performs a reflection along the
-    :math:`|1\rangle` state of the end auxiliary qubit.
+    :math:`|1\rangle` state of the end ancilla qubit.
 
     Args:
         dim (int): dimension of :math:`\mathcal{V}`
@@ -200,7 +198,7 @@ def make_Q(A, R):
     Returns:
         array: the :math:`\mathcal{Q}` unitary
     """
-    A_big = math.kron(A, np.eye(2))
+    A_big = qml.math.kron(A, np.eye(2))
     F = R @ A_big
     F_dagger = F.conj().T
 
@@ -311,7 +309,7 @@ class QuantumMonteCarlo(Operation):
 
         The ``QuantumMonteCarlo`` template can then be used:
 
-        .. code-block:: python
+        .. code-block::
 
             n = 10
             N = 2 ** n
@@ -319,61 +317,39 @@ class QuantumMonteCarlo(Operation):
             target_wires = range(m + 1)
             estimation_wires = range(m + 1, n + m + 1)
 
-            dev = qp.device("default.qubit", wires=(n + m + 1))
+            dev = qml.device("default.qubit", wires=(n + m + 1))
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit():
-                qp.templates.QuantumMonteCarlo(
+                qml.templates.QuantumMonteCarlo(
                     probs,
                     func,
                     target_wires=target_wires,
                     estimation_wires=estimation_wires,
                 )
-                return qp.probs(estimation_wires)
+                return qml.probs(estimation_wires)
 
             phase_estimated = np.argmax(circuit()[:int(N / 2)]) / N
 
         The estimated value can be retrieved using the formula :math:`\mu = (1-\cos(\pi \theta))/2`
 
         >>> (1 - np.cos(np.pi * phase_estimated)) / 2
-        np.float64(0.4327...)
+        0.4327096457464369
     """
 
+    num_wires = AnyWires
     grad_method = None
-
-    resource_keys = {"num_target_wires", "num_estimation_wires", "q_shape"}
-
-    @classmethod
-    def _primitive_bind_call(
-        cls, probs, func, target_wires, estimation_wires
-    ):  # pylint: disable=arguments-differ
-        # handle target wires and estimation wires
-        return cls._primitive.bind(
-            probs,
-            *target_wires,
-            *estimation_wires,
-            func=func,
-            num_target_wires=len(target_wires),
-        )
 
     @classmethod
     def _unflatten(cls, data, metadata):
         new_op = cls.__new__(cls)
-        new_op._hyperparameters = dict(metadata[1])
+        new_op._hyperparameters = dict(metadata[1])  # pylint: disable=protected-access
 
         # call operation.__init__ to initialize private properties like _name, _id, _pauli_rep, etc.
         Operation.__init__(new_op, *data, wires=metadata[0])
         return new_op
 
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "num_target_wires": len(self.hyperparameters["target_wires"]),
-            "num_estimation_wires": len(self.hyperparameters["estimation_wires"]),
-            "q_shape": math.shape(self.data[2]),
-        }
-
-    def __init__(self, probs, func, target_wires, estimation_wires):
+    def __init__(self, probs, func, target_wires, estimation_wires, id=None):
         if isinstance(probs, np.ndarray) and probs.ndim != 1:
             raise ValueError("The probability distribution must be specified as a flat array")
 
@@ -386,8 +362,8 @@ class QuantumMonteCarlo(Operation):
                 "The probability distribution must have a length that is a power of two"
             )
 
-        target_wires = tuple(target_wires)
-        estimation_wires = tuple(estimation_wires)
+        target_wires = list(target_wires)
+        estimation_wires = list(estimation_wires)
         wires = target_wires + estimation_wires
 
         if num_target_wires != len(target_wires):
@@ -396,26 +372,12 @@ class QuantumMonteCarlo(Operation):
                 f" {num_target_wires} target wires"
             )
 
+        self._hyperparameters = {"estimation_wires": estimation_wires, "target_wires": target_wires}
+
         A = probs_to_unitary(probs)
         R = func_to_unitary(func, dim_p)
         Q = make_Q(A, R)
-
-        self._hyperparameters = {
-            "estimation_wires": estimation_wires,
-            "target_wires": target_wires,
-        }
-
-        super().__init__(A, R, Q, wires=wires)
-
-    def map_wires(self, wire_map: dict):
-        # pylint: disable=protected-access
-        new_op = copy.deepcopy(self)
-        new_op._wires = Wires([wire_map.get(wire, wire) for wire in self.wires])
-        for key in ["estimation_wires", "target_wires"]:
-            new_op._hyperparameters[key] = tuple(
-                wire_map.get(w, w) for w in self._hyperparameters[key]
-            )
-        return new_op
+        super().__init__(A, R, Q, wires=wires, id=id)
 
     @property
     def num_params(self):
@@ -424,7 +386,7 @@ class QuantumMonteCarlo(Operation):
     @staticmethod
     def compute_decomposition(
         A, R, Q, wires, estimation_wires, target_wires
-    ):  # pylint: disable=arguments-differ
+    ):  # pylint: disable=arguments-differ,unused-argument
         r"""Representation of the operator as a product of other operators.
 
         .. math:: O = O_1 O_2 \dots O_n.
@@ -435,7 +397,7 @@ class QuantumMonteCarlo(Operation):
 
         Args:
             A (array): unitary matrix corresponding to an input probability distribution
-            R (array): unitary that encodes the function applied to the auxiliary qubit register
+            R (array): unitary that encodes the function applied to the ancilla qubit register
             Q (array): matrix that encodes the expectation value according to the probability unitary
                 and the function-encoding unitary
             wires (Any or Iterable[Any]): full set of wires that the operator acts on
@@ -448,47 +410,9 @@ class QuantumMonteCarlo(Operation):
         op_list = [
             QubitUnitary(A, wires=target_wires[:-1]),
             QubitUnitary(R, wires=target_wires),
-            QuantumPhaseEstimation(
-                QubitUnitary(Q, wires=target_wires), estimation_wires=estimation_wires
+            qml.templates.QuantumPhaseEstimation(
+                Q, target_wires=target_wires, estimation_wires=estimation_wires
             ),
         ]
 
         return op_list
-
-
-# pylint: disable=protected-access
-
-
-@QuantumMonteCarlo._primitive.def_impl
-def _quantum_monte_carlo_impl(probs, *wires, func, num_target_wires):
-    target_wires = wires[:num_target_wires]
-    estimation_wires = wires[num_target_wires:]
-    return type.__call__(QuantumMonteCarlo, probs, func, target_wires, estimation_wires)
-
-
-def _quantum_monte_carlo_resources(num_target_wires, num_estimation_wires, q_shape):
-    return {
-        QubitUnitary(
-            Complex[2 ** (num_target_wires - 1), 2 ** (num_target_wires - 1)],
-            wires=Wire[num_target_wires - 1],
-        ): 1,
-        QubitUnitary(
-            Complex[2**num_target_wires, 2**num_target_wires], wires=Wire[num_target_wires]
-        ): 1,
-        QuantumPhaseEstimation(
-            QubitUnitary(Complex[*q_shape], wires=Wire[num_target_wires]),
-            estimation_wires=Wire[num_estimation_wires],
-        ): 1,
-    }
-
-
-@register_resources(_quantum_monte_carlo_resources)
-def _quantum_monte_carlo_decomposition(
-    A, R, Q, wires, estimation_wires, target_wires
-):  # pylint: disable=unused-argument
-    QubitUnitary(A, wires=target_wires[:-1])
-    QubitUnitary(R, wires=target_wires)
-    QuantumPhaseEstimation(QubitUnitary(Q, wires=target_wires), estimation_wires=estimation_wires)
-
-
-add_decomps(QuantumMonteCarlo, _quantum_monte_carlo_decomposition)

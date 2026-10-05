@@ -14,13 +14,9 @@
 r"""
 Contains the ArbitraryUnitary template.
 """
-
-from pennylane import math
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
+import pennylane as qml
+from pennylane.operation import Operation, AnyWires
 from pennylane.ops import PauliRot
-from pennylane.typing import Float, Wire
-from pennylane.wires import WiresLike
 
 _PAULIS = ["I", "X", "Y", "Z"]
 
@@ -87,8 +83,7 @@ class ArbitraryUnitary(Operation):
     .. code-block:: python
 
         def arbitrary_nearest_neighbour_interaction(weights, wires):
-            for i, w in enumerate(range(0, len(wires) - 1, 2)):
-                ArbitraryUnitary(weights[i], wires=[w, w + 1])
+            qml.broadcast(unitary=ArbitraryUnitary, pattern="double", wires=wires, parameters=weights)
 
     Args:
         weights (tensor_like): The angles of the Pauli word rotations, needs to have length :math:`4^n - 1`
@@ -96,25 +91,20 @@ class ArbitraryUnitary(Operation):
         wires (Iterable): wires that the template acts on
     """
 
+    num_wires = AnyWires
     grad_method = None
     num_params = 1
     ndim_params = (1,)
 
-    resource_keys = {"num_wires"}
-
-    def __init__(self, weights, wires):
-        shape = math.shape(weights)
+    def __init__(self, weights, wires, id=None):
+        shape = qml.math.shape(weights)
         dim = 4 ** len(wires) - 1
         if len(shape) not in (1, 2) or shape[-1] != dim:
             raise ValueError(
                 f"Weights tensor must be of shape {(dim,)} or (batch_dim, {dim}); got {shape}."
             )
 
-        super().__init__(weights, wires=wires)
-
-    @property
-    def resource_params(self) -> dict:
-        return {"num_wires": len(self.wires)}
+        super().__init__(weights, wires=wires, id=id)
 
     @staticmethod
     def compute_decomposition(weights, wires):  # pylint: disable=arguments-differ
@@ -150,21 +140,3 @@ class ArbitraryUnitary(Operation):
             n_wires (int): number of wires that template acts on
         """
         return (4**n_wires - 1,)
-
-
-def _arbitrary_unitary_resources(num_wires: int) -> dict:
-    resources = {}
-    for pauli_word in _all_pauli_words_but_identity(num_wires):
-        resources[PauliRot(Float, pauli_word=pauli_word, wires=Wire[len(pauli_word)])] = 1
-    return resources
-
-
-@register_resources(_arbitrary_unitary_resources)
-def _arbitrary_unitary_decomposition(weights: list, wires: WiresLike, **_):
-    words = list(_all_pauli_words_but_identity(len(wires)))
-
-    for i, word in enumerate(words):
-        PauliRot(weights[..., i], word, wires=wires)
-
-
-add_decomps(ArbitraryUnitary, _arbitrary_unitary_decomposition)

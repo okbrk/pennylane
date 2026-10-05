@@ -4,9 +4,9 @@
 
 {% if module.split(".")[1:] | length >= 1 %}
    {% set mod = module.split(".")[1:] | join(".") %}
-   {% set mod = "qp." + mod %}
+   {% set mod = "qml." + mod %}
 {% else %}
-   {% set mod = "qp" %}
+   {% set mod = "qml" %}
 {% endif %}
 
 {{ mod }}.{{ objname }}

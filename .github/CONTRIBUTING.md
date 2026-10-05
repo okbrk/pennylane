@@ -9,8 +9,7 @@ Learn more about contributing to open source in general with
 [this great guide](https://opensource.guide/how-to-contribute/).
 
 Please pay attention to our
-[code of conduct](./CODE_OF_CONDUCT.md),
-as well as our policy on [AI contributions](../AI_Policy.md),
+[code of conduct](https://github.com/PennyLaneAI/pennylane/blob/master/.github/CODE_OF_CONDUCT.md)
 and help us make quantum computing a welcoming place for all.
 
 ## How can I get involved in the community?
@@ -18,8 +17,8 @@ and help us make quantum computing a welcoming place for all.
 Start by experimenting with PennyLane.  Figure out how to do things and form opinions about what you
 like and dislike about the ecosystem.  What made your life easier? What was a source of
 difficulty and confusion? We can always use more user feedback. You can use our
-[demonstrations](https://pennylane.ai/qml/demonstrations) and
-[blog](https://pennylane.ai/blog) to learn about features and applications.
+[demonstrations](https://pennylane.ai/qml/demonstrations.html) and
+[blog](https://pennylane.ai/blog/) to learn about features and applications.
 
 As you get a feel for the user experience, you can start peeking under the hood and finding out how
 the package accomplishes its tasks.
@@ -34,7 +33,7 @@ Sometimes, it might take us a couple of hours to reply - please be patient!
 It's up to you!
 
 * **Write a Community Demo.** - Show off your PennyLane application on
-  [our community page](https://pennylane.ai/qml/demos_community). We take Jupyter notebooks,
+  [our community page](https://pennylane.ai/qml/demos_community.html). We take Jupyter notebooks,
   scripts with explanations, or entire repositories.  Community demos are a great way to showcase
   research and new papers.
 
@@ -43,7 +42,7 @@ It's up to you!
 
 * **Test the cutting-edge PennyLane releases.** - Clone our GitHub repository, and keep up with
   the latest features. Learn how to install PennyLane from source
-  [here](https://pennylane.ai/install). If you run into any bugs, make a bug
+  [here](https://pennylane.ai/install.html?version=preview). If you run into any bugs, make a bug
   report on our [issue tracker](https://github.com/XanaduAI/pennylane/issues).
 
 * **Report bugs.** - If you come across any bugs or issues, make a bug report. PennyLane has
@@ -65,8 +64,7 @@ Want to help with the repository itself?  There are several different avenues fo
   ["good first issue" label](https://github.com/PennyLaneAI/pennylane/contribute).  Issues with
   this label are meant for newcomers and *should* contain fewer challenging bits.  If the issue
   ends up trickier than we assumed, you can start a conversation on the issue page or open up a
-  "Work in Progress" PR to ask for help. Developers new to PennyLane can use the dev dependency-group in the [pyproject.toml](../pyproject.toml) file to install dependencies required for PennyLane code development. Simply run `pip install  --group dev` from the root of the repository. 
-  Please ensure that you have read and adhere to the [AI contribution policy](../AI_Policy.md).
+  "Work in Progress" PR to ask for help. Developers new to PennyLane can use the [requirements-dev.txt](https://github.com/PennyLaneAI/pennylane/blob/master/requirements-dev.txt) file to install dependencies required for PennyLane code development. Simply run `pip install -r requirements-dev.txt` from the root of the repository.
 
 * **Documentation**- If you would like to add to our documentation or suggest
   improvements/changes, let us know or submit a pull request directly. Changes that fix rendering

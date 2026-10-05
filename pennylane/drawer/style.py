@@ -18,17 +18,18 @@ To add a new style:
 * create a private function that modifies ``plt.rcParams``.
 * add an entry to the private dictionary ``_style_map``.
 * update the docstrings for ``use_style`` and ``draw_mpl``.
-* Add an entry to ``doc/code/qp_drawer.rst``
+* Add an entry to ``doc/code/qml_drawer.rst``
 * Add a test in ``tests/drawer/test_style.py``
 
 Use the decorator ``_needs_mpl`` on style functions to raise appropriate
 errors if ``matplotlib`` is not installed.
 """
 
+
 _has_mpl = True  # pragma: no cover
 try:  # pragma: no cover
-    import matplotlib.font_manager as fm
     import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
 except (ModuleNotFoundError, ImportError) as e:  # pragma: no cover
     _has_mpl = False
 
@@ -227,19 +228,19 @@ def use_style(style: str):
 
     .. code-block:: python
 
-        qp.drawer.use_style('black_white')
+        qml.drawer.use_style('black_white')
 
-        @qp.qnode(qp.device('lightning.qubit', wires=(0,1,2,3)))
+        @qml.qnode(qml.device('lightning.qubit', wires=(0,1,2,3)))
         def circuit(x, z):
-            qp.QFT(wires=(0,1,2,3))
-            qp.Toffoli(wires=(0,1,2))
-            qp.CSWAP(wires=(0,2,3))
-            qp.RX(x, wires=0)
-            qp.CRZ(z, wires=(3,0))
-            return qp.expval(qp.Z(0))
+            qml.QFT(wires=(0,1,2,3))
+            qml.Toffoli(wires=(0,1,2))
+            qml.CSWAP(wires=(0,2,3))
+            qml.RX(x, wires=0)
+            qml.CRZ(z, wires=(3,0))
+            return qml.expval(qml.Z(0))
 
 
-        fig, ax = qp.draw_mpl(circuit)(1.2345,1.2345)
+        fig, ax = qml.draw_mpl(circuit)(1.2345,1.2345)
         fig.show()
 
     .. figure:: ../../_static/style/black_white_style.png
@@ -253,7 +254,7 @@ def use_style(style: str):
         __current_style_fn = _styles_map[style]
     else:
         raise TypeError(
-            f"style '{style}' provided to ``qp.drawer.use_style`` "
+            f"style '{style}' provided to ``qml.drawer.use_style`` "
             f"does not exist.  Available options are {available_styles()}"
         )
 

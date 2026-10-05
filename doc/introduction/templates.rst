@@ -36,6 +36,9 @@ trainable parameters, and they may be constructed from repeated layers.
     :description: :doc:`BasisEmbedding <../code/api/pennylane.BasisEmbedding>`
     :figure: _static/templates/embeddings/basis.png
 
+.. gallery-item::
+    :description: :doc:`DisplacementEmbedding <../code/api/pennylane.DisplacementEmbedding>`
+    :figure: _static/templates/embeddings/displacement.png
 
 .. gallery-item::
     :description: :doc:`IQPEmbedding <../code/api/pennylane.IQPEmbedding>`
@@ -44,6 +47,10 @@ trainable parameters, and they may be constructed from repeated layers.
 .. gallery-item::
     :description: :doc:`QAOAEmbedding <../code/api/pennylane.QAOAEmbedding>`
     :figure: _static/templates/embeddings/qaoa.png
+
+.. gallery-item::
+    :description: :doc:`SqueezingEmbedding <../code/api/pennylane.SqueezingEmbedding>`
+    :figure: _static/templates/embeddings/squeezing.png
 
 .. raw:: html
 
@@ -57,6 +64,10 @@ Layer templates
 Layer architectures define sequences of trainable gates that are repeated like the layers in a
 neural network. Note that arbitrary templates or operations can also be repeated using the
 :func:`~pennylane.layer` function.
+
+.. gallery-item::
+    :description: :doc:`CVNeuralNetLayers <../code/api/pennylane.CVNeuralNetLayers>`
+    :figure: _static/templates/layers/cvqnn.png
 
 .. gallery-item::
     :description: :doc:`RandomLayers <../code/api/pennylane.RandomLayers>`
@@ -88,6 +99,14 @@ state. In contrast to embeddings that can in principle be used anywhere in a cir
 state preparation is typically used as the first operation.
 
 .. gallery-item::
+    :description: :doc:`BasisStatePreparation <../code/api/pennylane.BasisStatePreparation>`
+    :figure: _static/templates/state_preparations/basis.png
+
+.. gallery-item::
+    :description: :doc:`QutritBasisStatePreparation <../code/api/pennylane.QutritBasisStatePreparation>`
+    :figure: _static/templates/state_preparations/basis_qutrit.png
+
+.. gallery-item::
     :description: :doc:`MottonenStatePreparation <../code/api/pennylane.MottonenStatePreparation>`
     :figure: _static/templates/state_preparations/mottonen.png
 
@@ -99,115 +118,11 @@ state preparation is typically used as the first operation.
     :description: :doc:`CosineWindow <../code/api/pennylane.CosineWindow>`
     :figure: _static/templates/state_preparations/thumbnail_cosine_window.png
 
-.. gallery-item::
-    :description: :doc:`QROMStatePreparation <../code/api/pennylane.QROMStatePreparation>`
-    :figure: _static/templates/state_preparations/thumbnail_qrom.png
-
-.. gallery-item::
-    :description: :doc:`MPSPrep <../code/api/pennylane.MPSPrep>`
-    :figure: _static/templates/tensornetworks/MPS_template.png
-
-.. gallery-item::
-    :description: :doc:`MultiplexerStatePreparation <../code/api/pennylane.MultiplexerStatePreparation>`
-    :figure: _static/templates/state_preparations/multiplexerSP_template.png
-
-.. gallery-item::
-    :description: :doc:`SumOfSlatersPrep <../code/api/pennylane.SumOfSlatersPrep>`
-    :figure: _static/templates/state_preparations/sumofslatersprep_template.png
-
-.. gallery-item::
-    :description: :doc:`PartialUnaryStatePreparation <../code/api/pennylane.PartialUnaryStatePreparation>`
-    :figure: _static/templates/state_preparations/partialunarystatepreparation_template.png
-
-.. gallery-item::
-    :description: :doc:`UniformPrep <../code/api/pennylane.UniformPrep>`
-    :figure: _static/templates/state_preparations/uniformprep.png
-
-.. gallery-item::
-    :description: :doc:`AliasSampling <../code/api/pennylane.AliasSampling>`
-    :figure: _static/templates/state_preparations/aliassampling.png
-
-.. gallery-item::
-    :description: :doc:`PhaseGradientStatePrep <../code/api/pennylane.PhaseGradientStatePrep>`
-    :figure: _static/templates/state_preparations/phasegradientstateprep_template.png
-
-
 .. raw:: html
 
         <div style='clear:both'></div>
 
 .. _intro_ref_temp_subroutines:
-
-Arithmetic templates
---------------------
-
-Quantum arithmetic templates enable in-place and out-place modular operations such
-as addition, multiplication and exponentiation.
-
-.. gallery-item::
-    :description: :doc:`PhaseAdder <../code/api/pennylane.PhaseAdder>`
-    :figure: _static/templates/arithmetic/phaseadder.png
-
-.. gallery-item::
-    :description: :doc:`Adder <../code/api/pennylane.Adder>`
-    :figure: _static/templates/arithmetic/adder.png
-
-.. gallery-item::
-    :description: :doc:`SemiAdder <../code/api/pennylane.SemiAdder>`
-    :figure: _static/templates/arithmetic/semiadder.png
-
-.. gallery-item::
-    :description: :doc:`Incrementer <../code/api/pennylane.Incrementer>`
-    :figure: _static/templates/arithmetic/adder.png
-
-.. gallery-item::
-    :description: :doc:`OutAdder <../code/api/pennylane.OutAdder>`
-    :figure: _static/templates/arithmetic/outadder.png
-
-.. gallery-item::
-    :description: :doc:`Multiplier <../code/api/pennylane.Multiplier>`
-    :figure: _static/templates/arithmetic/multiplier.png
-
-.. gallery-item::
-    :description: :doc:`OutMultiplier <../code/api/pennylane.OutMultiplier>`
-    :figure: _static/templates/arithmetic/outmultiplier.png
-
-.. gallery-item::
-    :description: :doc:`SignedOutMultiplier <../code/api/pennylane.SignedOutMultiplier>`
-    :figure: _static/templates/arithmetic/signedoutmultiplier.png
-
-.. gallery-item::
-    :description: :doc:`OutSquare <../code/api/pennylane.OutSquare>`
-    :figure: _static/templates/arithmetic/outsquare.png
-
-.. gallery-item::
-    :description: :doc:`SignedOutSquare <../code/api/pennylane.SignedOutSquare>`
-    :figure: _static/templates/arithmetic/signedoutsquare.png
-
-.. gallery-item::
-    :description: :doc:`ModExp <../code/api/pennylane.ModExp>`
-    :figure: _static/templates/arithmetic/modexp.png
-
-.. gallery-item::
-    :description: :doc:`IntegerComparator <../code/api/pennylane.IntegerComparator>`
-    :figure: _static/templates/arithmetic/integercomparator.png
-
-.. gallery-item::
-    :description: :doc:`LeftClassicalComparator <../code/api/pennylane.LeftClassicalComparator>`
-    :figure: _static/templates/arithmetic/leftclassicalcomparator.png
-
-.. gallery-item::
-    :description: :doc:`LeftQuantumComparator <../code/api/pennylane.LeftQuantumComparator>`
-    :figure: _static/templates/arithmetic/leftquantumcomparator.png
-
-.. gallery-item::
-    :description: :doc:`OutPoly <../code/api/pennylane.OutPoly>`
-    :figure: _static/templates/arithmetic/outpoly.png
-
-
-.. raw:: html
-
-        <div style='clear:both'></div>
 
 Quantum Chemistry templates
 ---------------------------
@@ -293,10 +208,6 @@ Other subroutines
 Other useful templates which do not belong to the previous categories can be found here.
 
 .. gallery-item::
-    :description: :doc:`Instantaneous Quantum Polynomial Circuit (IQP) <../code/api/pennylane.IQP>`
-    :figure: _static/templates/subroutines/iqp.png
-
-.. gallery-item::
     :description: :doc:`Grover Diffusion Operator <../code/api/pennylane.GroverOperator>`
     :figure: _static/templates/subroutines/grover.svg
 
@@ -307,6 +218,10 @@ Other useful templates which do not belong to the previous categories can be fou
 .. gallery-item::
     :description: :doc:`Amplitude Amplification <../code/api/pennylane.AmplitudeAmplification>`
     :figure: _static/templates/subroutines/ampamp.png
+
+.. gallery-item::
+    :description: :doc:`Interferometer <../code/api/pennylane.Interferometer>`
+    :figure: _static/templates/subroutines/interferometer.png
 
 .. gallery-item::
     :description: :doc:`FermionicSingleExcitation <../code/api/pennylane.FermionicSingleExcitation>`
@@ -330,18 +245,6 @@ Other useful templates which do not belong to the previous categories can be fou
 
 .. gallery-item::
   :description: :doc:`TrotterProduct <../code/api/pennylane.TrotterProduct>`
-  :figure: _static/templates/subroutines/trotter_product.png
-
-.. gallery-item::
-  :description: :doc:`TrotterCDF <../code/api/pennylane.TrotterCDF>`
-  :figure: _static/templates/subroutines/trotter_product.png
-
-.. gallery-item::
-  :description: :doc:`TrotterCGF <../code/api/pennylane.TrotterCGF>`
-  :figure: _static/templates/subroutines/trotter_product.png
-
-.. gallery-item::
-  :description: :doc:`TrotterVibronic <../code/api/pennylane.TrotterVibronic>`
   :figure: _static/templates/subroutines/trotter_product.png
 
 .. gallery-item::
@@ -385,60 +288,12 @@ Other useful templates which do not belong to the previous categories can be fou
     :figure: _static/templates/subroutines/qsvt.png
 
 .. gallery-item::
-    :description: :doc:`GQSP<../code/api/pennylane.GQSP>`
-    :figure: _static/templates/subroutines/gqsp.png
-
-.. gallery-item::
     :description: :doc:`Select<../code/api/pennylane.Select>`
-    :figure: _static/templates/subroutines/select_cropped.png
+    :figure: _static/templates/subroutines/select.png
 
 .. gallery-item::
     :description: :doc:`ControlledSequence<../code/api/pennylane.ControlledSequence>`
     :figure: _static/templates/subroutines/small_ctrl.png
-
-.. gallery-item::
-    :description: :doc:`FABLE <../code/api/pennylane.FABLE>`
-    :figure: _static/templates/subroutines/fable.png
-
-.. gallery-item::
-    :description: :doc:`Qubitization <../code/api/pennylane.Qubitization>`
-    :figure: _static/templates/qubitization/thumbnail_qubitization.png
-
-.. gallery-item::
-    :description: :doc:`OneBodyBlockEncoding <../code/api/pennylane.OneBodyBlockEncoding>`
-    :figure: _static/templates/subroutines/onebodyblockencoding.png
-
-.. gallery-item::
-    :description: :doc:`QROM <../code/api/pennylane.QROM>`
-    :figure: _static/templates/qrom/qrom_thumbnail.png
-
-.. gallery-item::
-    :description: :doc:`Bucket Brigade QRAM <../code/api/pennylane.BBQRAM>`
-    :figure: _static/templates/qram/bbqram_thumbnail.png
-
-.. gallery-item::
-    :description: :doc:`Select Only QRAM <../code/api/pennylane.SelectOnlyQRAM>`
-    :figure: _static/templates/qram/select_qram_thumbnail.png
-
-.. gallery-item::
-    :description: :doc:`Hybrid QRAM <../code/api/pennylane.HybridQRAM>`
-    :figure: _static/templates/qram/hybrid_qram_thumbnail.png
-
-.. gallery-item::
-    :description: :doc:`Flip Flop QRAM <../code/api/pennylane.FFQRAM>`
-    :figure: _static/templates/qram/ffqram_thumbnail.png
-
-.. gallery-item::
-    :description: :doc:`PrepSelPrep <../code/api/pennylane.PrepSelPrep>`
-    :figure: _static/templates/prepselprep/prepselprep.png
-
-.. gallery-item::
-    :description: :doc:`SelectPauliRot <../code/api/pennylane.SelectPauliRot>`
-    :figure: _static/templates/subroutines/select_pauli_rot_cropped.png
-
-.. gallery-item::
-    :description: :doc:`TemporaryAND <../code/api/pennylane.TemporaryAND>`
-    :figure: _static/templates/subroutines/temporary_and.png
 
 .. raw:: html
 
@@ -446,6 +301,54 @@ Other useful templates which do not belong to the previous categories can be fou
 
 .. _intro_ref_temp_constr:
 
+Broadcasting function
+---------------------
+
+PennyLane offers a broadcasting function to easily construct templates: :func:`~.broadcast`
+takes either quantum gates or templates and applies them to wires in a specific pattern.
+
+.. warning::
+
+    While the broadcasting function can make template construction very convenient, it
+    adds an overhead and is therefore not recommended when speed is a major concern.
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Single) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_single.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Double) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_double.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Double Odd) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_double_odd.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Chain) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_chain.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Ring) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_ring.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Pyramid) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_pyramid.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (All-to-All) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_alltoall.png
+
+.. gallery-item::
+    :description: :doc:`Broadcast (Custom) <../code/api/pennylane.broadcast>`
+    :figure: _static/templates/broadcast_custom.png
+
+.. raw:: html
+
+        <div style='clear:both'></div>
+
+.. _intro_ref_temp_init:
 
 Parameter initializations
 -------------------------
@@ -455,20 +358,20 @@ The shape can for example be used to construct random weights at the beginning o
 
 .. code-block:: python
 
-    import pennylane as qp
+    import pennylane as qml
     from pennylane.templates import BasicEntanglerLayers
     from pennylane import numpy as np
 
     n_wires = 3
-    dev = qp.device('default.qubit', wires=n_wires)
+    dev = qml.device('default.qubit', wires=n_wires)
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def circuit(weights):
         BasicEntanglerLayers(weights=weights, wires=range(n_wires))
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
     shape = BasicEntanglerLayers.shape(n_layers=2, n_wires=n_wires)
-    np.random.seed(42)  # to make the result reproducible
+    np.random.seed(42)  # to make the result reproducable
     weights = np.random.random(size=shape)
 
 >>> circuit(weights)
@@ -488,15 +391,15 @@ statement:
 
     def MyTemplate(a, b, wires):
         c = np.sin(a) + b
-        qp.RX(c, wires=wires[0])
+        qml.RX(c, wires=wires[0])
 
     n_wires = 3
-    dev = qp.device('default.qubit', wires=n_wires)
+    dev = qml.device('default.qubit', wires=n_wires)
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def circuit(a, b):
         MyTemplate(a, b, wires=range(n_wires))
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
 >>> circuit(2, 3)
 -0.7195065654396784
@@ -518,7 +421,7 @@ Layering Function
 
 The layer function creates a new template by repeatedly applying a sequence of quantum
 gates to a set of wires. You can import this function both via
-``qp.layer`` and ``qp.templates.layer``.
+``qml.layer`` and ``qml.templates.layer``.
 
 .. autosummary::
 

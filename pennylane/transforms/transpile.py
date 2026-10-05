@@ -3,16 +3,18 @@ Contains the transpiler transform.
 """
 
 from functools import partial
+from typing import List, Union, Sequence, Callable
 
-import pennylane as qp
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.core.queuing import QueuingManager
-from pennylane.decomposition import gate_sets
-from pennylane.ops import LinearCombination
+import networkx as nx
+
+import pennylane as qml
+from pennylane.transforms import transform
+from pennylane import Hamiltonian
+from pennylane.operation import Tensor
 from pennylane.ops import __all__ as all_ops
 from pennylane.ops.qubit import SWAP
-from pennylane.transforms import transform
-from pennylane.typing import PostprocessingFn
+from pennylane.queuing import QueuingManager
+from pennylane.tape import QuantumTape
 
 
 def state_transposition(results, mps, new_wire_order, original_wire_order):
@@ -31,14 +33,14 @@ def state_transposition(results, mps, new_wire_order, original_wire_order):
 
     """
     if len(mps) == 1:
-        temp_mp = qp.measurements.StateMP(wires=original_wire_order)
-        return temp_mp.process_state(results[0], wire_order=qp.wires.Wires(new_wire_order))
+        temp_mp = qml.measurements.StateMP(wires=original_wire_order)
+        return temp_mp.process_state(results[0], wire_order=qml.wires.Wires(new_wire_order))
     new_results = list(results[0])
     for i, mp in enumerate(mps):
-        if isinstance(mp, qp.measurements.StateMP):
-            temp_mp = qp.measurements.StateMP(wires=original_wire_order)
+        if isinstance(mp, qml.measurements.StateMP):
+            temp_mp = qml.measurements.StateMP(wires=original_wire_order)
             new_res = temp_mp.process_state(
-                new_results[i], wire_order=qp.wires.Wires(new_wire_order)
+                new_results[i], wire_order=qml.wires.Wires(new_wire_order)
             )
             new_results[i] = new_res
     return tuple(new_results)
@@ -48,9 +50,9 @@ def _process_measurements(expanded_tape, device_wires, is_default_mixed):
     measurements = expanded_tape.measurements.copy()
     if device_wires:
         for i, m in enumerate(measurements):
-            if isinstance(m, qp.measurements.StateMP):
+            if isinstance(m, qml.measurements.StateMP):
                 if is_default_mixed:
-                    measurements[i] = qp.density_matrix(wires=device_wires)
+                    measurements[i] = qml.density_matrix(wires=device_wires)
             elif not m.wires:
                 measurements[i] = type(m)(wires=device_wires)
 
@@ -59,8 +61,8 @@ def _process_measurements(expanded_tape, device_wires, is_default_mixed):
 
 @transform
 def transpile(
-    tape: QuantumScript, coupling_map, device=None
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+    tape: QuantumTape, coupling_map: Union[List, nx.Graph], device=None
+) -> (Sequence[QuantumTape], Callable):
     """Transpile a circuit according to a desired coupling map
 
     .. warning::
@@ -69,12 +71,12 @@ def transpile(
         is passed which contains these types of measurements, a ``NotImplementedError`` will be raised.
 
     Args:
-        tape (QNode or QuantumTape or Callable): A quantum circuit (QNode or quantum function).
-        coupling_map: Data specifying the couplings between different qubits. This data can be any format accepted by ``nx.to_networkx_graph()``,
-            currently including edge list, dict of dicts, dict of lists, NetworkX graph, 2D NumPy array, SciPy sparse matrix, or PyGraphviz graph.
+        tape (QNode or QuantumTape or Callable): A quantum tape.
+        coupling_map (list[tuple(int, int)] or nx.Graph): Either a list of tuples(int, int) or an instance of
+            `networkx.Graph` specifying the couplings between different qubits.
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
     **Example**
 
@@ -83,13 +85,13 @@ def transpile(
     .. code-block:: python
 
         def circuit():
-            qp.CNOT(wires=[0, 1])
-            qp.CNOT(wires=[2, 3])
-            qp.CNOT(wires=[1, 3])
-            qp.CNOT(wires=[1, 2])
-            qp.CNOT(wires=[2, 3])
-            qp.CNOT(wires=[0, 3])
-            return qp.probs(wires=[0, 1, 2, 3])
+            qml.CNOT(wires=[0, 1])
+            qml.CNOT(wires=[2, 3])
+            qml.CNOT(wires=[1, 3])
+            qml.CNOT(wires=[1, 2])
+            qml.CNOT(wires=[2, 3])
+            qml.CNOT(wires=[0, 3])
+            return qml.probs(wires=[0, 1, 2, 3])
 
     which, before transpiling it looks like this:
 
@@ -111,10 +113,10 @@ def transpile(
     We encode this in a coupling map as a list of the edges which are present in the graph, and then pass this, together
     with the circuit, to the transpile function to get a circuit which can be executed for the specified coupling map:
 
-    >>> dev = qp.device('default.qubit', wires=[0, 1, 2, 3])
-    >>> transpiled_circuit = qp.transforms.transpile(circuit, coupling_map=[(0, 1), (1, 3), (3, 2), (2, 0)])
-    >>> transpiled_qnode = qp.QNode(transpiled_circuit, dev)
-    >>> print(qp.draw(transpiled_qnode)())
+    >>> dev = qml.device('default.qubit', wires=[0, 1, 2, 3])
+    >>> transpiled_circuit = qml.transforms.transpile(circuit, coupling_map=[(0, 1), (1, 3), (3, 2), (2, 0)])
+    >>> transpiled_qnode = qml.QNode(transpiled_circuit, dev)
+    >>> print(qml.draw(transpiled_qnode)())
     0: ─╭●────────────────╭●─┤ ╭Probs
     1: ─╰X─╭●───────╭●────│──┤ ├Probs
     2: ─╭●─│──╭SWAP─│──╭X─╰X─┤ ├Probs
@@ -125,22 +127,23 @@ def transpile(
     """
     if device:
         device_wires = device.wires
-        is_default_mixed = device.name == "default.mixed"
+        is_default_mixed = getattr(device, "short_name", "") == "default.mixed"
     else:
         device_wires = None
         is_default_mixed = False
     # init connectivity graph
-    import networkx as nx  # pylint: disable=import-outside-toplevel
-
-    coupling_graph = coupling_map if isinstance(coupling_map, nx.Graph) else nx.Graph(coupling_map)
+    coupling_graph = (
+        nx.Graph(coupling_map) if not isinstance(coupling_map, nx.Graph) else coupling_map
+    )
 
     # make sure every wire is present in coupling map
     if any(wire not in coupling_graph.nodes for wire in tape.wires):
+        wires = tape.wires.tolist()
         raise ValueError(
-            f"Not all wires present in coupling map! wires: {tape.wires}, coupling map: {coupling_graph.nodes}"
+            f"Not all wires present in coupling map! wires: {wires}, coupling map: {coupling_graph.nodes}"
         )
 
-    if any(isinstance(m.obs, (LinearCombination, qp.ops.Prod)) for m in tape.measurements):
+    if any(isinstance(m.obs, (Hamiltonian, Tensor)) for m in tape.measurements):
         raise NotImplementedError(
             "Measuring expectation values of tensor products or Hamiltonians is not yet supported"
         )
@@ -155,19 +158,10 @@ def transpile(
     with QueuingManager.stop_recording():
         # this unrolls everything in the current tape (in particular templates)
         def stop_at(obj):
-            if not isinstance(obj, qp.operation.Operator):
-                return True
-            if not obj.has_decomposition:
-                return True
             return (obj.name in all_ops) and (not getattr(obj, "only_visual", False))
 
-        [expanded_tape], _ = qp.devices.preprocess.decompose(
-            tape,
-            target_gates=gate_sets.ROTATIONS_PLUS_CNOT,
-            stopping_condition=stop_at,
-            name="transpile",
-            error=qp.operation.DecompositionUndefinedError,
-        )
+        expanded_tape = tape.expand(stop_at=stop_at)
+
         # make copy of ops
         list_op_copy = expanded_tape.operations.copy()
         wire_order = device_wires or tape.wires
@@ -178,8 +172,8 @@ def transpile(
         while len(list_op_copy) > 0:
             op = list_op_copy[0]
 
-            # gates which act on no wires (GlobalPhase) or one wire
-            if len(op.wires) <= 1:
+            # gates which act only on one wire
+            if len(op.wires) == 1:
                 gates.append(op)
                 list_op_copy.pop(0)
                 continue
@@ -200,7 +194,7 @@ def transpile(
             # for the shortest path between the two qubits in the connectivity graph. We then move the q2 into the
             # neighbourhood of q1 via swap operations.
             source_wire, dest_wire = op.wires
-
+            # pylint:disable=too-many-function-args
             shortest_path = nx.algorithms.shortest_path(coupling_graph, source_wire, dest_wire)
             path_length = len(shortest_path) - 1
             wires_to_swap = [shortest_path[(i - 1) : (i + 1)] for i in range(path_length, 1, -1)]
@@ -220,15 +214,15 @@ def transpile(
             list_op_copy = [op.map_wires(wire_map) for op in list_op_copy]
             wire_order = [wire_map[w] for w in wire_order]
             measurements = [m.map_wires(wire_map) for m in measurements]
-    new_tape = tape.copy(operations=gates, measurements=measurements)
+    new_tape = type(tape)(gates, measurements, shots=tape.shots)
 
     # note: no need for transposition with density matrix, so type must be `StateMP` but not `DensityMatrixMP`
     # pylint: disable=unidiomatic-typecheck
-    any_state_mp = any(type(m) is qp.measurements.StateMP for m in measurements)
+    any_state_mp = any(type(m) is qml.measurements.StateMP for m in measurements)
     if not any_state_mp or device_wires is None:
 
         def null_postprocessing(results):
-            """A postprocessing function returned by a transform that only converts the batch of results
+            """A postprocesing function returned by a transform that only converts the batch of results
             into a result for a single ``QuantumTape``.
             """
             return results[0]
@@ -248,7 +242,7 @@ def _transpile_qnode(self, qnode, targs, tkwargs):
     """Custom qnode transform for ``transpile``."""
     if tkwargs.get("device", None):
         raise ValueError(
-            "Cannot provide a 'device' value directly to the transpile decorator "
+            "Cannot provide a 'device' value directly to the defer_measurements decorator "
             "when transforming a QNode."
         )
 

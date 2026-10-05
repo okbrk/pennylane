@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for the SPSA optimizer"""
-
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
+
 
 univariate = [(np.sin), (lambda x: np.exp(x / 10.0)), (lambda x: x**2)]
 
@@ -37,7 +37,7 @@ class TestSPSAOptimizer:
         function."""
         gamma = 0.3
         c = 0.1
-        spsa_opt = qp.SPSAOptimizer(maxiter=10, c=c, gamma=gamma)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10, c=c, gamma=gamma)
         args = np.array([args], requires_grad=True)
 
         alpha = 0.602
@@ -71,7 +71,7 @@ class TestSPSAOptimizer:
         ak = a / (A + k) ** alpha
         deltas = np.array(np.meshgrid([1, -1], [1, -1])).T.reshape(-1, 2)
 
-        spsa_opt = qp.SPSAOptimizer(A=A)
+        spsa_opt = qml.SPSAOptimizer(A=A)
 
         x_vals = np.linspace(-10, 10, 16, endpoint=False)
 
@@ -100,7 +100,7 @@ class TestSPSAOptimizer:
     @pytest.mark.parametrize("f", univariate)
     def test_step_and_cost_supplied_univar_cost(self, args, f):
         """Test that returned cost is correct."""
-        spsa_opt = qp.SPSAOptimizer(10)
+        spsa_opt = qml.SPSAOptimizer(10)
         args = np.array(args, requires_grad=True)
 
         _, res = spsa_opt.step_and_cost(f, args)
@@ -110,14 +110,14 @@ class TestSPSAOptimizer:
     def test_step_and_cost_supplied_cost(self):
         """Test that the correct cost is returned via the step_and_cost method
         for the SPSA optimizer."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun(variables):
-            qp.RX(variables[0], wires=[0])
-            qp.RY(variables[1], wires=[0])
-            qp.RY(variables[2], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(variables[0], wires=[0])
+            qml.RY(variables[1], wires=[0])
+            qml.RY(variables[2], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         inputs = np.array([0.4, 0.2, 0.4], requires_grad=True)
 
@@ -129,12 +129,12 @@ class TestSPSAOptimizer:
     def test_step_and_cost_hamiltonian(self):
         """Test that the correct cost is returned via the step_and_cost method
         for the SPSA optimizer."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun(variables):
-            obs = [qp.PauliX(0) @ qp.PauliZ(0), qp.PauliZ(0) @ qp.Hadamard(0)]
-            return qp.expval(qp.Hamiltonian(variables, obs))
+            obs = [qml.PauliX(0) @ qml.PauliZ(0), qml.PauliZ(0) @ qml.Hadamard(0)]
+            return qml.expval(qml.Hamiltonian(variables, obs))
 
         inputs = np.array([0.2, -0.543], requires_grad=True)
 
@@ -145,14 +145,14 @@ class TestSPSAOptimizer:
 
     def test_step_spsa(self):
         """Test that the correct param is returned via the step method."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun(params):
-            qp.RX(params[0], wires=[0])
-            qp.RY(params[1], wires=[0])
-            qp.RY(params[2], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(params[0], wires=[0])
+            qml.RY(params[1], wires=[0])
+            qml.RY(params[2], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         args = np.array([0.4, 0.2, 0.8], requires_grad=True)
 
@@ -191,15 +191,15 @@ class TestSPSAOptimizer:
     def test_step_and_cost_spsa_single_multid_input(self):
         """Test that the correct cost is returned via the step_and_cost method
         with a multidimensional input."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
         multid_array = np.array([[0.1, 0.2], [-0.1, -0.4]])
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun_mdarr(var):
-            qp.RX(var[0, 1], wires=[0])
-            qp.RY(var[1, 0], wires=[0])
-            qp.RY(var[1, 1], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(var[0, 1], wires=[0])
+            qml.RY(var[1, 0], wires=[0])
+            qml.RY(var[1, 1], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         _, res = spsa_opt.step_and_cost(quant_fun_mdarr, multid_array)
         expected = quant_fun_mdarr(multid_array)
@@ -209,16 +209,16 @@ class TestSPSAOptimizer:
     def test_step_spsa_single_multid_input(self):
         """Test that the correct param is returned via the step method
         with a multidimensional input."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
         multid_array = np.array([[0.1, 0.2], [-0.1, -0.4]])
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun_mdarr(var):
-            qp.RX(var[0, 0], wires=[0])
-            qp.RX(var[0, 1], wires=[0])
-            qp.RY(var[1, 0], wires=[0])
-            qp.RY(var[1, 1], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(var[0, 0], wires=[0])
+            qml.RX(var[0, 1], wires=[0])
+            qml.RY(var[1, 0], wires=[0])
+            qml.RY(var[1, 1], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         alpha = 0.602
         gamma = 0.101
@@ -259,7 +259,7 @@ class TestSPSAOptimizer:
     def test_step_for_univar_cost(self, args, f):
         """Test that a gradient step can be applied correctly with a univariate
         function."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
         args = np.array([args], requires_grad=True)
 
         alpha = 0.602
@@ -287,7 +287,7 @@ class TestSPSAOptimizer:
     def test_step_and_cost(self, args, f):
         """Test that a gradient step can be applied correctly with a univariate
         function."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
         args = np.array([args], requires_grad=True)
 
         alpha = 0.602
@@ -314,14 +314,14 @@ class TestSPSAOptimizer:
     def test_parameters_not_a_tensor_and_not_all_require_grad(self):
         """Test execution of list of parameters of different sizes
         and not all require grad."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun(*variables):
-            qp.RX(variables[0][1], wires=[0])
-            qp.RY(variables[1][2], wires=[0])
-            qp.RY(variables[2], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(variables[0][1], wires=[0])
+            qml.RY(variables[1][2], wires=[0])
+            qml.RY(variables[2], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         inputs = [
             np.array((0.2, 0.3), requires_grad=True),
@@ -337,14 +337,14 @@ class TestSPSAOptimizer:
     def test_parameters_in_step(self):
         """Test execution of list of parameters of different sizes
         and not all require grad."""
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
 
-        @qp.qnode(qp.device("default.qubit", wires=1))
+        @qml.qnode(qml.device("default.qubit", wires=1))
         def quant_fun(*variables):
-            qp.RX(variables[0][1], wires=[0])
-            qp.RY(variables[1][2], wires=[0])
-            qp.RY(variables[2], wires=[0])
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(variables[0][1], wires=[0])
+            qml.RY(variables[1][2], wires=[0])
+            qml.RY(variables[2], wires=[0])
+            return qml.expval(qml.PauliZ(0))
 
         inputs = [
             np.array((0.2, 0.3), requires_grad=True),
@@ -360,17 +360,17 @@ class TestSPSAOptimizer:
     def test_parameter_not_an_array(self):
         """Test function when there is only one float parameter that doesn't
         require grad."""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(a):
-            qp.RX(a, wires=0)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(a, wires=0)
+            return qml.expval(qml.PauliZ(0))
 
         def cost(a):
             return circuit(a)
 
-        spsa_opt = qp.SPSAOptimizer(maxiter=10)
+        spsa_opt = qml.SPSAOptimizer(maxiter=10)
         params = 0.5
 
         res = spsa_opt.step(cost, params)
@@ -380,21 +380,21 @@ class TestSPSAOptimizer:
 
     def test_obj_func_with_probs_not_a_scalar_function(self):
         """Test that if the objective function is not a
-        scalar function, like qp.probs(), an error is raised."""
+        scalar function, like qml.probs(), an error is raised."""
 
         n_wires = 4
         n_layers = 3
-        dev = qp.device("default.qubit", wires=n_wires)
+        dev = qml.device("default.qubit", wires=n_wires)
 
         def circuit(params):
-            qp.StronglyEntanglingLayers(params, wires=list(range(n_wires)))
+            qml.StronglyEntanglingLayers(params, wires=list(range(n_wires)))
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def cost(params):
             circuit(params)
-            return qp.probs(wires=[0, 1, 2, 3])
+            return qml.probs(wires=[0, 1, 2, 3])
 
-        opt = qp.SPSAOptimizer(maxiter=10)
+        opt = qml.SPSAOptimizer(maxiter=10)
         params = np.random.normal(scale=0.1, size=(n_layers, n_wires, 3), requires_grad=True)
 
         with pytest.raises(
@@ -407,7 +407,7 @@ class TestSPSAOptimizer:
     def test_obj_func_not_a_scalar_function(self, f):
         """Test that if the objective function is not a
         scalar function, an error is raised."""
-        spsa_opt = qp.SPSAOptimizer(10)
+        spsa_opt = qml.SPSAOptimizer(10)
         args = np.array([[0.1, 0.2], [-0.1, -0.4]])
 
         with pytest.raises(
@@ -416,31 +416,55 @@ class TestSPSAOptimizer:
         ):
             spsa_opt.step(f, args)
 
+    @pytest.mark.tf
+    def test_obj_func_not_a_scalar_function_with_tensorflow_interface(self):
+        """Test that if the objective function is not a
+        scalar function, an error is raised using tensorflow_interface."""
+
+        n_wires = 4
+        n_layers = 3
+        dev = qml.device("default.qubit", wires=n_wires)
+
+        def circuit(params):
+            qml.StronglyEntanglingLayers(params, wires=list(range(n_wires)))
+
+        @qml.qnode(dev)
+        def cost(params):
+            circuit(params)
+            return qml.probs(wires=[0, 1, 2, 3])
+
+        opt = qml.SPSAOptimizer(maxiter=10)
+        params = np.random.normal(scale=0.1, size=(n_layers, n_wires, 3), requires_grad=True)
+
+        with pytest.raises(
+            ValueError,
+            match="The objective function must be a scalar function for the gradient ",
+        ):
+            opt.step(cost, params)
+
+    @pytest.mark.xfail(reason="Lightning cannot use adjoint with state prep ops yet")
     @pytest.mark.slow
-    def test_lightning_device(self):
+    def test_lighting_device(self):
         """Test SPSAOptimizer implementation with lightning.qubit device."""
         coeffs = [0.2, -0.543, 0.4514]
         obs = [
-            qp.PauliX(0) @ qp.PauliZ(1),
-            qp.PauliZ(0) @ qp.Hadamard(2),
-            qp.PauliX(3) @ qp.PauliZ(1),
+            qml.PauliX(0) @ qml.PauliZ(1),
+            qml.PauliZ(0) @ qml.Hadamard(2),
+            qml.PauliX(3) @ qml.PauliZ(1),
         ]
-        H = qp.Hamiltonian(coeffs, obs)
+        H = qml.Hamiltonian(coeffs, obs)
         num_qubits = 4
-        dev = qp.device("lightning.qubit", wires=num_qubits)
+        dev = qml.device("lightning.qubit", wires=num_qubits)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def cost_fun(params, num_qubits=1):
-            qp.BasisState([1, 1, 0, 0], wires=range(num_qubits))
-
-            assert num_qubits == 4
-
+            qml.BasisState(np.array([1, 1, 0, 0]), wires=range(num_qubits))
             for i in range(num_qubits):
-                qp.Rot(*params[i], wires=0)
-                qp.CNOT(wires=[2, 3])
-                qp.CNOT(wires=[2, 0])
-                qp.CNOT(wires=[3, 1])
-            return qp.expval(H)
+                qml.Rot(*params[i], wires=0)
+                qml.CNOT(wires=[2, 3])
+                qml.CNOT(wires=[2, 0])
+                qml.CNOT(wires=[3, 1])
+            return qml.expval(H)
 
         init_params = np.random.normal(0, np.pi, (num_qubits, 3), requires_grad=True)
         params = init_params
@@ -448,7 +472,7 @@ class TestSPSAOptimizer:
         init_energy = cost_fun(init_params, num_qubits)
 
         max_iterations = 100
-        opt = qp.SPSAOptimizer(maxiter=max_iterations)
+        opt = qml.SPSAOptimizer(maxiter=max_iterations)
         for _ in range(max_iterations):
             params, energy = opt.step_and_cost(cost_fun, params, num_qubits=num_qubits)
 
@@ -460,16 +484,16 @@ class TestSPSAOptimizer:
         """Test SPSAOptimizer implementation with default.mixed device."""
         n_qubits = 1
         max_iterations = 400
-        dev = qp.device("default.mixed", wires=n_qubits)
+        dev = qml.device("default.mixed", wires=n_qubits)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(params):
-            qp.RX(params[0], wires=0)
-            qp.RY(params[1], wires=0)
-            qp.AmplitudeDamping(0.5, wires=0)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(params[0], wires=0)
+            qml.RY(params[1], wires=0)
+            qml.AmplitudeDamping(0.5, wires=0)
+            return qml.expval(qml.PauliZ(0))
 
-        opt = qp.SPSAOptimizer(maxiter=max_iterations, c=0.3)
+        opt = qml.SPSAOptimizer(maxiter=max_iterations, c=0.3)
 
         init_params = np.random.normal(scale=0.1, size=(2,), requires_grad=True)
         params = init_params
@@ -488,4 +512,4 @@ class TestSPSAOptimizer:
             TypeError,
             match="One of the parameters maxiter or A must be provided.",
         ):
-            qp.SPSAOptimizer()
+            qml.SPSAOptimizer()

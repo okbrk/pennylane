@@ -13,7 +13,8 @@
 # limitations under the License.
 """
 This subpackage provides default devices for PennyLane, which do not need external plugins to be installed.
-The default devices provide basic built-in qubit that can be used with PennyLane without the need for additional
+The default devices provide basic built-in qubit
+and CV circuit simulators that can be used with PennyLane without the need for additional
 dependencies. They may also be used in the PennyLane test suite in order
 to verify and test quantum gradient computations.
 
@@ -23,36 +24,37 @@ to verify and test quantum gradient computations.
 .. autosummary::
     :toctree: api
 
-    capabilities
+
     default_qubit
+    default_qubit_legacy
+    default_qubit_jax
+    default_qubit_torch
+    default_qubit_tf
+    default_qubit_autograd
+    default_gaussian
     default_mixed
+    default_qutrit
     default_clifford
-    default_tensor
-    _legacy_device
-    _qubit_device
     null_qubit
-    reference_qubit
     tests
 
 Next generation devices
 -----------------------
 
 :class:`pennylane.devices.Device` is the latest interface for the next generation of devices that
-replaces :class:`pennylane.devices.LegacyDevice` and :class:`pennylane.devices.QubitDevice`.
+replaces :class:`pennylane.Device` and :class:`pennylane.QubitDevice`.
+
+While the previous interface :class:`pennylane.Device` is imported top level, the new :class:`pennylane.devices.Device` is
+accessible from the ``pennylane.devices`` submodule.
 
 .. currentmodule:: pennylane.devices
 .. autosummary::
     :toctree: api
 
     ExecutionConfig
-    MCMConfig
     Device
-    DefaultMixed
     DefaultQubit
-    default_tensor.DefaultTensor
     NullQubit
-    ReferenceQubit
-    LegacyDeviceFacade
 
 Preprocessing Transforms
 ------------------------
@@ -65,16 +67,11 @@ method for devices.
     :toctree: api
 
     decompose
-    device_resolve_dynamic_wires
-    measurements_from_counts
-    measurements_from_samples
-    validate_adjoint_trainable_params
     validate_observables
     validate_measurements
     validate_device_wires
     validate_multiprocessing_workers
     validate_adjoint_trainable_params
-    no_analytic
     no_sampling
 
 Other transforms that may be relevant to device preprocessing include:
@@ -85,12 +82,15 @@ Other transforms that may be relevant to device preprocessing include:
 
     defer_measurements
     transforms.broadcast_expand
+    transforms.sum_expand
     transforms.split_non_commuting
+    transforms.hamiltonian_expand
+
 
 Modifiers
 ---------
 
-The ``modifiers`` allow for the easy addition of default behaviour to a device.
+The ``modifiers`` allow for the easy addition of default behavior to a device.
 
 .. currentmodule:: pennylane.devices.modifiers
 .. autosummary::
@@ -104,34 +104,29 @@ to handle a single circuit. See the documentation for each modifier for more det
 
 .. code-block:: python
 
-    from pennylane.devices import Device
-    from pennylane.devices.modifiers import simulator_tracking, single_tape_support
-
     @simulator_tracking
     @single_tape_support
-    class MyDevice(Device):
+    class MyDevice(qml.devices.Device):
 
-        def execute(self, circuits, execution_config: ExecutionConfig | None = None):
+        def execute(self, circuits, execution_config = qml.devices.DefaultExecutionConfig):
             return tuple(0.0 for _ in circuits)
 
->>> import pennylane as qp
 >>> dev = MyDevice()
->>> tape = qp.tape.QuantumScript([qp.S(0)], [qp.expval(qp.X(0))])
+>>> tape = qml.tape.QuantumTape([qml.S(0)], [qml.expval(qml.X(0))])
 >>> with dev.tracker:
 ...     out = dev.execute(tape)
 >>> out
 0.0
->>> import pprint
->>> pprint.pprint(dev.tracker.history)
+>>> dev.tracker.history
 {'batches': [1],
+ 'simulations': [1],
  'executions': [1],
- 'resources': [SpecsResources(counts={'S': 1},
-                              measurement_processes={'expval(PauliX)': 1},
-                              num_wires=1,
-                              circuit_depth=1,
-                              total_quantum_operations=1)],
  'results': [0.0],
- 'simulations': [1]}
+ 'resources': [Resources(num_wires=1, num_gates=1,
+ gate_types=defaultdict(<class 'int'>, {'S': 1}),
+ gate_sizes=defaultdict(<class 'int'>, {1: 1}), depth=1,
+ shots=Shots(total_shots=None, shot_vector=()))]}
+
 
 Qubit Simulation Tools
 ----------------------
@@ -140,36 +135,23 @@ Qubit Simulation Tools
 .. automodule:: pennylane.devices.qubit
 
 
-Qubit Mixed-State Simulation Tools
+Qutrit Mixed-State Simulation Tools
 -----------------------------------
 
-.. currentmodule:: pennylane.devices.qubit_mixed
-.. automodule:: pennylane.devices.qubit_mixed
+.. currentmodule:: pennylane.devices.qutrit_mixed
+.. automodule:: pennylane.devices.qutrit_mixed
 
 """
 
-from .tracker import Tracker
-
-from .capabilities import DeviceCapabilities
-from .execution_config import ExecutionConfig, MCMConfig
-from .device_constructor import device, refresh_devices
+from .execution_config import ExecutionConfig, DefaultExecutionConfig
 from .device_api import Device
 from .default_qubit import DefaultQubit
-from .legacy_facade import LegacyDeviceFacade
 
-# DefaultTensor is not imported here to avoid possible warnings
-# from quimb. Such warnings are due to a known issue with the cotengra package
-# when the latter is installed along with certain other packages.
+# DefaultQubitTF and DefaultQubitAutograd not imported here since this
+# would lead to an automatic import of tensorflow and autograd, which are
+# not PennyLane core dependencies
+from .default_qubit_legacy import DefaultQubitLegacy
+from .default_gaussian import DefaultGaussian
 from .default_mixed import DefaultMixed
 from .default_clifford import DefaultClifford
 from .null_qubit import NullQubit
-from .reference_qubit import ReferenceQubit
-from ._legacy_device import Device as LegacyDevice
-from ._qubit_device import QubitDevice
-
-
-# pylint: disable=undefined-variable
-def __getattr__(name):
-    if name == "plugin_devices":
-        return device_constructor.plugin_devices
-    raise AttributeError(f"module 'pennylane.devices' has no attribute '{name}'")

@@ -12,25 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Adaptive optimizer"""
-
 import copy
+from typing import Sequence, Callable
 
-# pylint: disable=not-callable
-from pennylane import math
+# pylint: disable= no-value-for-parameter, protected-access, not-callable
+import pennylane as qml
 from pennylane import numpy as pnp
-from pennylane._grad import grad
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.ops.functions import bind_new_parameters
-from pennylane.transforms.core import transform
-from pennylane.typing import PostprocessingFn
-from pennylane.workflow import construct_tape
-
-from .gradient_descent import GradientDescentOptimizer
+from pennylane.tape import QuantumTape
+from pennylane import transform
 
 
 @transform
-def append_gate(tape: QuantumScript, params, gates) -> tuple[QuantumScriptBatch, PostprocessingFn]:
-    """Append parametrized gates to an existing tape.
+def append_gate(tape: QuantumTape, params, gates) -> (Sequence[QuantumTape], Callable):
+    """Append parameterized gates to an existing tape.
 
     Args:
         tape (QuantumTape or QNode or Callable): quantum circuit to transform by adding gates
@@ -38,19 +32,21 @@ def append_gate(tape: QuantumScript, params, gates) -> tuple[QuantumScriptBatch,
         gates (list[Operator]): list of the gates to be added
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
     """
     new_operations = []
 
     for i, g in enumerate(gates):
+        g = copy.copy(g)
         new_params = (params[i], *g.data[1:])
-        new_operations.append(bind_new_parameters(g, new_params))
+        g.data = new_params
+        new_operations.append(g)
 
-    new_tape = tape.copy(operations=tape.operations + new_operations)
+    new_tape = type(tape)(tape.operations + new_operations, tape.measurements, shots=tape.shots)
 
     def null_postprocessing(results):
-        """A postprocessing function returned by a transform that only converts the batch of results
+        """A postprocesing function returned by a transform that only converts the batch of results
         into a result for a single ``QuantumTape``.
         """
         return results[0]  # pragma: no cover
@@ -73,8 +69,8 @@ class AdaptiveOptimizer:
     algorithms such as `ADAPT-VQE <https://www.nature.com/articles/s41467-019-10988-2>`_.
 
     Args:
-        param_steps (int): number of steps for optimizing the parameter of a selected gate (default value: 10).
-        stepsize (float): step size for optimizing the parameter of a selected gate (default value: 0.5).
+        param_steps (int): number of steps for optimizing the parameter of a selected gate
+        stepsize (float): step size for optimizing the parameter of a selected gate
 
     **Example**
 
@@ -82,7 +78,7 @@ class AdaptiveOptimizer:
     `ADAPT-VQE <https://www.nature.com/articles/s41467-019-10988-2>`_ algorithm for building an
     adaptive circuit for the :math:`\text{H}_3^+` cation.
 
-    >>> import pennylane as qp
+    >>> import pennylane as qml
     >>> from pennylane import numpy as np
 
     The molecule is defined and the Hamiltonian is computed with:
@@ -91,26 +87,26 @@ class AdaptiveOptimizer:
     >>> geometry = np.array([[0.01076341, 0.04449877, 0.0],
     ...                      [0.98729513, 1.63059094, 0.0],
     ...                      [1.87262415, -0.00815842, 0.0]], requires_grad=False)
-    >>> H, qubits = qp.qchem.molecular_hamiltonian(symbols, geometry, charge = 1)
+    >>> H, qubits = qml.qchem.molecular_hamiltonian(symbols, geometry, charge = 1)
 
     The collection of gates to grow the circuit adaptively contains all single and double
     excitations:
 
     >>> n_electrons = 2
-    >>> singles, doubles = qp.qchem.excitations(n_electrons, qubits)
-    >>> singles_excitations = [qp.SingleExcitation(0.0, x) for x in singles]
-    >>> doubles_excitations = [qp.DoubleExcitation(0.0, x) for x in doubles]
+    >>> singles, doubles = qml.qchem.excitations(n_electrons, qubits)
+    >>> singles_excitations = [qml.SingleExcitation(0.0, x) for x in singles]
+    >>> doubles_excitations = [qml.DoubleExcitation(0.0, x) for x in doubles]
     >>> operator_pool = doubles_excitations + singles_excitations
 
     An initial circuit preparing the Hartree-Fock state and returning the expectation value of the
     Hamiltonian is defined:
 
-    >>> hf_state = qp.qchem.hf_state(n_electrons, qubits)
-    >>> dev = qp.device("default.qubit", wires=qubits)
-    >>> @qp.qnode(dev)
+    >>> hf_state = qml.qchem.hf_state(n_electrons, qubits)
+    >>> dev = qml.device("default.qubit", wires=qubits)
+    >>> @qml.qnode(dev)
     ... def circuit():
-    ...     qp.BasisState(hf_state, wires=range(qubits))
-    ...     return qp.expval(H)
+    ...     qml.BasisState(hf_state, wires=range(qubits))
+    ...     return qml.expval(H)
 
     The optimizer is instantiated and then the circuit is created and optimized adaptively:
 
@@ -118,7 +114,7 @@ class AdaptiveOptimizer:
     >>> for i in range(len(operator_pool)):
     ...     circuit, energy, gradient = opt.step_and_cost(circuit, operator_pool, drain_pool=True)
     ...     print('Energy:', energy)
-    ...     print(qp.draw(circuit, show_matrices=False)())
+    ...     print(qml.draw(circuit, show_matrices=False)())
     ...     print('Largest Gradient:', gradient)
     ...     print()
     ...     if gradient < 1e-3:
@@ -160,7 +156,7 @@ class AdaptiveOptimizer:
 
     @staticmethod
     def _circuit(params, gates, initial_circuit):
-        """Append parametrized gates to an existing circuit.
+        """Append parameterized gates to an existing circuit.
 
         Args:
             params (array[float]): parameters of the gates to be added
@@ -203,7 +199,6 @@ class AdaptiveOptimizer:
         """
         cost = circuit()
         qnode = copy.copy(circuit)
-        tape = construct_tape(qnode)()
 
         if drain_pool:
             operator_pool = [
@@ -211,16 +206,16 @@ class AdaptiveOptimizer:
                 for gate in operator_pool
                 if all(
                     gate.name != operation.name or gate.wires != operation.wires
-                    for operation in tape.operations
+                    for operation in circuit.tape.operations
                 )
             ]
 
         params = pnp.array([gate.parameters[0] for gate in operator_pool], requires_grad=True)
         qnode.func = self._circuit
-        grads = grad(qnode)(params, gates=operator_pool, initial_circuit=circuit.func)
+        grads = qml.grad(qnode)(params, gates=operator_pool, initial_circuit=circuit.func)
 
         selected_gates = [operator_pool[pnp.argmax(abs(grads))]]
-        optimizer = GradientDescentOptimizer(stepsize=self.stepsize)
+        optimizer = qml.GradientDescentOptimizer(stepsize=self.stepsize)
 
         if params_zero:
             params = pnp.zeros(len(selected_gates))
@@ -234,4 +229,4 @@ class AdaptiveOptimizer:
 
         qnode.func = append_gate(circuit.func, params, selected_gates)
 
-        return qnode, cost, max(abs(math.toarray(grads)))
+        return qnode, cost, max(abs(qml.math.toarray(grads)))

@@ -24,7 +24,6 @@ This module contains functions that act on operators and tapes.
     ~dot
     ~eigvals
     ~equal
-    ~assert_equal
     ~evolve
     ~generator
     ~is_commuting
@@ -36,25 +35,20 @@ This module contains functions that act on operators and tapes.
     ~iterative_qpe
     ~commutator
     ~comm
-    ~single_qubit_zyz_angles
-    ~subcircuit
 
 """
-
 from .bind_new_parameters import bind_new_parameters
-from .equal import equal, assert_equal
-from .assert_valid import assert_valid
-from .commutator import comm, commutator
+from .commutator import commutator, comm
 from .dot import dot
 from .eigvals import eigvals
+from .equal import equal
 from .evolve import evolve
 from .generator import generator
 from .is_commuting import is_commuting
 from .is_hermitian import is_hermitian
 from .is_unitary import is_unitary
-from .iterative_qpe import iterative_qpe
 from .map_wires import map_wires
 from .matrix import matrix
 from .simplify import simplify
-from .single_qubit_zyz_angles import single_qubit_zyz_angles
-from .subcircuit import subcircuit
+from .iterative_qpe import iterative_qpe
+from .assert_valid import assert_valid

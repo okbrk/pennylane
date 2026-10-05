@@ -16,26 +16,17 @@
 This submodule contains the template for the Reflection operation.
 """
 
-import copy
-
 import numpy as np
-
-from pennylane import ops
-from pennylane.core.operator import Operation, Operator2, abstractify
-from pennylane.core.queuing import QueuingManager, apply
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops.op_math.adjoint2 import _adjoint_abstract
-from pennylane.ops.op_math.controlled2 import _ctrl_abstract
-from pennylane.typing import Wire
-from pennylane.wires import Wires
+import pennylane as qml
+from pennylane.operation import Operation
+from pennylane.queuing import QueuingManager
 
 
 class Reflection(Operation):
     r"""Apply a reflection about a state :math:`|\Psi\rangle`.
 
-    This operator works by providing an operation, :math:`U`, that prepares the desired state, :math:`\vert \Psi \rangle`,
-    that we want to reflect about. We can also provide a reflection angle :math:`\alpha`
-    to define the operation in a more generic form:
+    Given an operator :math:`U` such that :math:`|\Psi\rangle = U|0\rangle`  and a reflection angle :math:`\alpha`,
+    this template creates the operation:
 
     .. math::
 
@@ -47,46 +38,36 @@ class Reflection(Operation):
     Args:
         U (Operator): the operator that prepares the state :math:`|\Psi\rangle`
         alpha (float): the angle of the operator, default is :math:`\pi`
-        reflection_wires (Any or Iterable[Any]): subsystem of wires on which to reflect, the
-            default is ``None`` and the reflection will be applied on the ``U`` wires.
+        reflection_wires (Any or Iterable[Any]): subsystem of wires on which to reflect, the default is ``None`` and the reflection will be applied on the ``U`` wires
 
     **Example**
 
     This example shows how to apply the reflection :math:`-I + 2|+\rangle \langle +|` to the state :math:`|1\rangle`.
 
-    .. code-block:: python
+    .. code-block::
 
-        U = qp.Hadamard(wires=0)
-        dev = qp.device('default.qubit')
+        @qml.prod
+        def generator(wires):
+            qml.Hadamard(wires=wires)
 
-        @qp.qnode(dev)
+        U = generator(wires=0)
+
+        dev = qml.device('default.qubit')
+        @qml.qnode(dev)
         def circuit():
-            qp.PauliX(wires=0)
-            qp.Reflection(U)
-            return qp.state()
 
-    >>> circuit() # doctest: +SKIP
-    array([1.+6.123234e-17j, 0.-6.123234e-17j])
+            # Initialize to the state |1>
+            qml.PauliX(wires=0)
 
-    For cases when :math:`U` comprises many operations, you can create a quantum
-    function containing each operation, one per line, then decorate the quantum
-    function with ``@qp.prod``:
+            # Apply the reflection
+            qml.Reflection(U)
 
-    .. code-block:: python
+            return qml.state()
 
-        @qp.prod
-        def U(wires):
-            qp.Hadamard(wires=wires[0])
-            qp.RY(0.1, wires=wires[1])
+    >>> circuit()
+    tensor([1.+6.123234e-17j, 0.-6.123234e-17j], requires_grad=True)
 
-        @qp.qnode(dev)
-        def circuit():
-            qp.Reflection(U([0, 1]))
-            return qp.state()
 
-    >>> circuit() # doctest: +SKIP
-    array([-0.0025-6.1385e-17j,  0.0499+3.0565e-18j,  0.9975+6.1079e-17j,
-            0.0499+3.0565e-18j])
 
     .. details::
         :title: Theory
@@ -109,34 +90,17 @@ class Reflection(Operation):
 
     """
 
-    grad_method = None
-
-    resource_keys = {"base_rep", "num_wires", "num_reflection_wires"}
-
     def _flatten(self):
         data = (self.hyperparameters["base"], self.parameters[0])
-        return data, (self.hyperparameters["reflection_wires"],)
-
-    # pylint: disable=arguments-differ
-    @classmethod
-    def _primitive_bind_call(cls, U, alpha, reflection_wires, **kwargs):
-        def _get_tracer(op):
-            if isinstance(op, Operator2):
-                if op.tracer is None:
-                    # pylint: disable-next=protected-access
-                    op._bind_primitive()  # pragma: no cover
-                return op.tracer if op.tracer is not None else op
-            return op  # pragma: no cover
-
-        U = _get_tracer(U)
-        return super()._primitive_bind_call(U, alpha, wires=reflection_wires, **kwargs)
+        metadata = tuple(value for key, value in self.hyperparameters.items() if key != "base")
+        return data, metadata
 
     @classmethod
     def _unflatten(cls, data, metadata):
-        U, alpha = data
+        U, alpha = (data[0], data[1])
         return cls(U, alpha=alpha, reflection_wires=metadata[0])
 
-    def __init__(self, U, alpha=np.pi, reflection_wires=None):
+    def __init__(self, U, alpha=np.pi, reflection_wires=None, id=None):
         self._name = "Reflection"
         wires = U.wires
 
@@ -148,29 +112,10 @@ class Reflection(Operation):
 
         self._hyperparameters = {
             "base": U,
-            "reflection_wires": tuple(reflection_wires),
+            "reflection_wires": reflection_wires,
         }
 
-        super().__init__(alpha, *U.data, wires=wires)
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "base_rep": abstractify(self.hyperparameters["base"]),
-            "num_wires": len(self.wires),
-            "num_reflection_wires": len(self.hyperparameters["reflection_wires"]),
-        }
-
-    def map_wires(self, wire_map: dict):
-        # pylint: disable=protected-access
-        new_op = copy.deepcopy(self)
-        new_op._wires = Wires([wire_map.get(wire, wire) for wire in self.wires])
-        new_op._hyperparameters["base"] = new_op._hyperparameters["base"].map_wires(wire_map)
-        new_op._hyperparameters["reflection_wires"] = tuple(
-            wire_map.get(w, w) for w in new_op._hyperparameters["reflection_wires"]
-        )
-
-        return new_op
+        super().__init__(alpha, wires=wires, id=id)
 
     @property
     def alpha(self):
@@ -193,97 +138,29 @@ class Reflection(Operation):
         U = hyperparameters["base"]
         reflection_wires = hyperparameters["reflection_wires"]
 
-        wires = Wires(reflection_wires) if reflection_wires is not None else wires
+        wires = qml.wires.Wires(reflection_wires) if reflection_wires is not None else wires
 
-        decomp_ops = []
+        ops = []
 
-        decomp_ops.append(ops.GlobalPhase(np.pi))
-        decomp_ops.append(ops.adjoint(U))
+        ops.append(qml.GlobalPhase(np.pi))
+        ops.append(qml.adjoint(U))
 
         if len(wires) > 1:
-            decomp_ops.append(ops.X(wires=wires[-1]))
-            decomp_ops.append(
-                ops.ctrl(
-                    ops.PhaseShift(alpha, wires=wires[-1]),
+            ops.append(qml.PauliX(wires=wires[-1]))
+            ops.append(
+                qml.ctrl(
+                    qml.PhaseShift(alpha, wires=wires[-1]),
                     control=wires[:-1],
                     control_values=[0] * (len(wires) - 1),
                 )
             )
-            decomp_ops.append(ops.X(wires=wires[-1]))
+            ops.append(qml.PauliX(wires=wires[-1]))
 
         else:
-            decomp_ops.append(ops.X(wires=wires))
-            decomp_ops.append(ops.PhaseShift(alpha, wires=wires))
-            decomp_ops.append(ops.X(wires=wires))
+            ops.append(qml.PauliX(wires=wires))
+            ops.append(qml.PhaseShift(alpha, wires=wires))
+            ops.append(qml.PauliX(wires=wires))
 
-        if QueuingManager.recording():
-            apply(U)
+        ops.append(U)
 
-        decomp_ops.append(U)
-
-        return decomp_ops
-
-
-def _reflection_decomposition_resources(base_rep, num_wires, num_reflection_wires=None) -> dict:
-
-    num_wires = num_reflection_wires if num_reflection_wires is not None else num_wires
-
-    resources = {
-        ops.GlobalPhase: 1,
-        _adjoint_abstract(base_rep): 1,
-        ops.PauliX: 2,
-    }
-
-    if num_wires > 1:
-        resources[
-            _ctrl_abstract(
-                ops.PhaseShift, Wire[num_wires - 1], num_zero_control_values=num_wires - 1
-            )
-        ] = 1
-    else:
-        resources[ops.PhaseShift] = 1
-
-    resources[base_rep] = 1
-
-    return resources
-
-
-@register_resources(_reflection_decomposition_resources)
-def _reflection_decomposition(*parameters, wires=None, **hyperparameters):
-    alpha = parameters[0]
-    U = hyperparameters["base"]
-    reflection_wires = hyperparameters["reflection_wires"]
-
-    wires = Wires(reflection_wires) if reflection_wires is not None else wires
-
-    ops.GlobalPhase(np.pi)
-    ops.adjoint(U)
-
-    if len(wires) > 1:
-        ops.PauliX(wires=wires[-1])
-
-        ops.ctrl(
-            ops.PhaseShift(alpha, wires=wires[-1]),
-            control=wires[:-1],
-            control_values=[0] * (len(wires) - 1),
-        )
-
-        ops.PauliX(wires=wires[-1])
-
-    else:
-        ops.PauliX(wires=wires)
-        ops.PhaseShift(alpha, wires=wires)
-        ops.PauliX(wires=wires)
-
-    apply(U)
-
-
-add_decomps(Reflection, _reflection_decomposition)
-
-# pylint: disable=protected-access
-
-
-@Reflection._primitive.def_impl
-def _(*args, n_wires, **kwargs):
-    (U, alpha), reflection_wires = args[:-n_wires], args[-n_wires:]
-    return type.__call__(Reflection, U, alpha, reflection_wires=reflection_wires, **kwargs)
+        return ops

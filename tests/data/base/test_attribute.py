@@ -17,9 +17,8 @@ Tests for :mod:`pennylane.data.base.attribute`.
 
 # pylint: disable=unused-argument,unused-variable,too-many-public-methods
 
-from collections.abc import Iterable
 from copy import copy, deepcopy
-from typing import Any
+from typing import Any, Iterable, List
 
 import numpy as np
 import pytest
@@ -48,7 +47,7 @@ pytestmark = pytest.mark.data
 pytest.importorskip("h5py")
 
 
-def _sort_types(types: Iterable[type]) -> list[type]:
+def _sort_types(types: Iterable[type]) -> List[type]:
     """
     pytest-split requires that test parameters are always in the same
     order between runs. This function ensures that collections of types
@@ -127,7 +126,7 @@ class TestAttributeInfo:
         [
             ({"py_type": None}, "None"),
             ({"py_type": "None"}, "None"),
-            ({"py_type": list[None]}, "list[None]"),
+            ({"py_type": List[None]}, "list[None]"),
             ({}, None),
         ],
     )
@@ -285,8 +284,8 @@ class TestAttribute:
     )
     def test_repr(self, val, attribute_type):
         """Test that __repr__ has the expected format."""
-        with np.printoptions(legacy="1.21"):
-            assert repr(attribute(val)) == f"{attribute_type.__name__}({repr(val)})"
+
+        assert repr(attribute(val)) == f"{attribute_type.__name__}({repr(val)})"
 
     @pytest.mark.parametrize(
         "val",

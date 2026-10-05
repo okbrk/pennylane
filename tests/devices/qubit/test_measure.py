@@ -13,18 +13,19 @@
 # limitations under the License.
 """Unit tests for measure in devices/qubit."""
 
-import numpy as np
 import pytest
+
+import numpy as np
 from scipy.sparse import csr_matrix
 
-import pennylane as qp
+import pennylane as qml
 from pennylane.devices.qubit import simulate
 from pennylane.devices.qubit.measure import (
+    measure,
+    state_diagonalizing_gates,
     csr_dot_products,
     full_dot_products,
     get_measurement_function,
-    measure,
-    state_diagonalizing_gates,
     sum_of_terms_method,
 )
 
@@ -36,26 +37,25 @@ class TestCurrentlyUnsupportedCases:
 
         state = 0.5 * np.ones((2, 2))
         with pytest.raises(NotImplementedError):
-            _ = measure(qp.sample(wires=0), state)
+            _ = measure(qml.sample(wires=0), state)
 
 
-@pytest.mark.unit
 class TestMeasurementDispatch:
     """Test that get_measurement_function dispatchs to the correct place."""
 
     def test_state_no_obs(self):
         """Test that the correct internal function is used for a measurement process with no observables."""
         # Test a case where state_measurement_process is used
-        mp1 = qp.state()
+        mp1 = qml.state()
         assert get_measurement_function(mp1, state=1) == state_diagonalizing_gates
 
     @pytest.mark.parametrize(
         "m",
         (
-            qp.var(qp.PauliZ(0)),
-            qp.expval(qp.sum(qp.PauliZ(0), qp.PauliX(0))),
-            qp.expval(qp.sum(*(qp.PauliX(i) for i in range(15)))),
-            qp.expval(qp.prod(qp.PauliX(0), qp.PauliY(1), qp.PauliZ(10))),
+            qml.var(qml.PauliZ(0)),
+            qml.expval(qml.sum(qml.PauliZ(0), qml.PauliX(0))),
+            qml.expval(qml.sum(*(qml.PauliX(i) for i in range(15)))),
+            qml.expval(qml.prod(qml.PauliX(0), qml.PauliY(1), qml.PauliZ(10))),
         ),
     )
     def test_diagonalizing_gates(self, m):
@@ -65,61 +65,46 @@ class TestMeasurementDispatch:
 
     def test_hermitian_full_dot_product(self):
         """Test that the expectation value of a hermitian uses the full dot products method."""
-        mp = qp.expval(qp.Hermitian(np.eye(2), wires=0))
+        mp = qml.expval(qml.Hermitian(np.eye(2), wires=0))
         assert get_measurement_function(mp, state=1) is full_dot_products
 
     def test_hamiltonian_sparse_method(self):
         """Check that the sparse expectation value method is used if the state is numpy."""
-        H = qp.Hamiltonian([2], [qp.PauliX(0)])
+        H = qml.Hamiltonian([2], [qml.PauliX(0)])
         state = np.zeros(2)
-        assert get_measurement_function(qp.expval(H), state) is csr_dot_products
+        assert get_measurement_function(qml.expval(H), state) is csr_dot_products
 
     def test_hamiltonian_sum_of_terms_when_backprop(self):
         """Check that the sum of terms method is used when the state is trainable."""
-        H = qp.Hamiltonian([2], [qp.PauliX(0)])
-        state = qp.numpy.zeros(2)
-        assert get_measurement_function(qp.expval(H), state) is sum_of_terms_method
+        H = qml.Hamiltonian([2], [qml.PauliX(0)])
+        state = qml.numpy.zeros(2)
+        assert get_measurement_function(qml.expval(H), state) is sum_of_terms_method
 
     def test_sum_sparse_method_when_large_and_nonoverlapping(self):
         """Check that the sparse expectation value method is used if the state is numpy and
         the Sum is large with overlapping wires."""
-        S = qp.prod(*(qp.PauliX(i) for i in range(8))) + qp.prod(*(qp.PauliY(i) for i in range(8)))
+        S = qml.prod(*(qml.PauliX(i) for i in range(8))) + qml.prod(
+            *(qml.PauliY(i) for i in range(8))
+        )
         state = np.zeros(2)
-        assert get_measurement_function(qp.expval(S), state) is csr_dot_products
+        assert get_measurement_function(qml.expval(S), state) is csr_dot_products
 
     def test_sum_sum_of_terms_when_backprop(self):
         """Check that the sum of terms method is used when"""
-        S = qp.prod(*(qp.PauliX(i) for i in range(8))) + qp.prod(*(qp.PauliY(i) for i in range(8)))
-        state = qp.numpy.zeros(2)
-        assert get_measurement_function(qp.expval(S), state) is sum_of_terms_method
-
-    def test_no_sparse_matrix(self):
-        """Tests Hamiltonians/Sums containing observables that do not have a sparse matrix."""
-
-        class DummyOp(qp.operation.Operator):  # pylint: disable=too-few-public-methods
-            num_wires = 1
-
-        S1 = qp.Hamiltonian([0.5, 0.5], [qp.X(0), DummyOp(wires=1)])
-        state = np.zeros(2)
-        assert get_measurement_function(qp.expval(S1), state) is sum_of_terms_method
-
-        S2 = qp.X(0) + DummyOp(wires=1)
-        assert get_measurement_function(qp.expval(S2), state) is sum_of_terms_method
-
-        S3 = 0.5 * qp.X(0) + 0.5 * DummyOp(wires=1)
-        assert get_measurement_function(qp.expval(S3), state) is sum_of_terms_method
-
-        S4 = qp.Y(0) + qp.X(0) @ DummyOp(wires=1)
-        assert get_measurement_function(qp.expval(S4), state) is sum_of_terms_method
+        S = qml.prod(*(qml.PauliX(i) for i in range(8))) + qml.prod(
+            *(qml.PauliY(i) for i in range(8))
+        )
+        state = qml.numpy.zeros(2)
+        assert get_measurement_function(qml.expval(S), state) is sum_of_terms_method
 
 
 class TestMeasurements:
     @pytest.mark.parametrize(
         "measurement, expected",
         [
-            (qp.state(), -0.5j * np.ones(4)),
-            (qp.density_matrix(wires=0), 0.5 * np.ones((2, 2))),
-            (qp.probs(wires=[0]), np.array([0.5, 0.5])),
+            (qml.state(), -0.5j * np.ones(4)),
+            (qml.density_matrix(wires=0), 0.5 * np.ones((2, 2))),
+            (qml.probs(wires=[0]), np.array([0.5, 0.5])),
         ],
     )
     def test_state_measurement_no_obs(self, measurement, expected):
@@ -133,18 +118,18 @@ class TestMeasurements:
         "obs, expected",
         [
             (
-                qp.Hamiltonian([-0.5, 2], [qp.PauliY(0), qp.PauliZ(0)]),
+                qml.Hamiltonian([-0.5, 2], [qml.PauliY(0), qml.PauliZ(0)]),
                 0.5 * np.sin(0.123) + 2 * np.cos(0.123),
             ),
             (
-                qp.SparseHamiltonian(
-                    csr_matrix(-0.5 * qp.PauliY(0).matrix() + 2 * qp.PauliZ(0).matrix()),
+                qml.SparseHamiltonian(
+                    csr_matrix(-0.5 * qml.PauliY(0).matrix() + 2 * qml.PauliZ(0).matrix()),
                     wires=[0],
                 ),
                 0.5 * np.sin(0.123) + 2 * np.cos(0.123),
             ),
             (
-                qp.Hermitian(-0.5 * qp.PauliY(0).matrix() + 2 * qp.PauliZ(0).matrix(), wires=0),
+                qml.Hermitian(-0.5 * qml.PauliY(0).matrix() + 2 * qml.PauliZ(0).matrix(), wires=0),
                 0.5 * np.sin(0.123) + 2 * np.cos(0.123),
             ),
         ],
@@ -153,17 +138,17 @@ class TestMeasurements:
         """Test that measurements of hamiltonian/ sparse hamiltonian/ hermitians work correctly."""
         # Create RX(0.123)|0> state
         state = np.array([np.cos(0.123 / 2), -1j * np.sin(0.123 / 2)])
-        res = measure(qp.expval(obs), state)
+        res = measure(qml.expval(obs), state)
         assert np.allclose(res, expected)
 
     def test_sum_expval_tensor_contraction(self):
         """Test that `Sum` expectation values are correct when tensor contraction
         is used for computation."""
-        summands = (qp.prod(qp.PauliY(i), qp.PauliZ(i + 1)) for i in range(7))
-        obs = qp.sum(*summands)
-        ops = [qp.RX(0.123, wires=i) for i in range(8)]
-        meas = [qp.expval(obs)]
-        qs = qp.tape.QuantumScript(ops, meas)
+        summands = (qml.prod(qml.PauliY(i), qml.PauliZ(i + 1)) for i in range(7))
+        obs = qml.sum(*summands)
+        ops = [qml.RX(0.123, wires=i) for i in range(8)]
+        meas = [qml.expval(obs)]
+        qs = qml.tape.QuantumScript(ops, meas)
 
         res = simulate(qs)
         expected = 7 * (-np.sin(0.123) * np.cos(0.123))
@@ -172,9 +157,9 @@ class TestMeasurements:
     @pytest.mark.parametrize(
         "obs, expected",
         [
-            (qp.sum(qp.PauliY(0), qp.PauliZ(0)), -np.sin(0.123) + np.cos(0.123)),
+            (qml.sum(qml.PauliY(0), qml.PauliZ(0)), -np.sin(0.123) + np.cos(0.123)),
             (
-                qp.sum(*(qp.PauliZ(i) for i in range(8))),
+                qml.sum(*(qml.PauliZ(i) for i in range(8))),
                 sum(np.sin(i * np.pi / 2 + 0.123) for i in range(8)),
             ),
         ],
@@ -182,9 +167,9 @@ class TestMeasurements:
     def test_sum_expval_eigs(self, obs, expected):
         """Test that `Sum` expectation values are correct when eigenvalues are used
         for computation."""
-        ops = [qp.RX(i * np.pi / 2 + 0.123, wires=i) for i in range(8)]
-        meas = [qp.expval(obs)]
-        qs = qp.tape.QuantumScript(ops, meas)
+        ops = [qml.RX(i * np.pi / 2 + 0.123, wires=i) for i in range(8)]
+        meas = [qml.expval(obs)]
+        qs = qml.tape.QuantumScript(ops, meas)
 
         res = simulate(qs)
         assert np.allclose(res, expected)
@@ -193,24 +178,17 @@ class TestMeasurements:
     def test_op_math_observable_jit_compatible(self):
         import jax
 
-        dev = qp.device("default.qubit", wires=4)
+        dev = qml.device("default.qubit", wires=4)
 
-        @qp.qnode(dev, interface="jax")
+        O1 = qml.X(0)
+        O2 = qml.X(0)
+
+        @qml.qnode(dev, interface="jax")
         def qnode(t1, t2):
-            return qp.expval((t1 * qp.X(0)) @ (t2 * qp.Y(1)))
+            return qml.expval(qml.prod(O1, qml.RX(t1, 0), O2, qml.RX(t2, 0)))
 
         t1, t2 = 0.5, 1.0
-        assert qp.math.allclose(qnode(t1, t2), jax.jit(qnode)(t1, t2))
-
-    def test_measure_identity_no_wires(self):
-        """Test that measure can handle the expectation value of identity on no wires."""
-
-        state = np.random.random([2, 2, 2])
-        out = measure(qp.measurements.ExpectationMP(qp.I()), state)
-        assert qp.math.allclose(out, 1.0)
-
-        out2 = measure(qp.measurements.ExpectationMP(2 * qp.I()), state)
-        assert qp.math.allclose(out2, 2)
+        assert qml.math.allclose(qnode(t1, t2), jax.jit(qnode)(t1, t2))
 
 
 class TestBroadcasting:
@@ -220,7 +198,7 @@ class TestBroadcasting:
         "measurement, expected",
         [
             (
-                qp.state(),
+                qml.state(),
                 np.array(
                     [
                         [0, 0, 0, 1],
@@ -230,7 +208,7 @@ class TestBroadcasting:
                 ),
             ),
             (
-                qp.density_matrix(wires=[0, 1]),
+                qml.density_matrix(wires=[0, 1]),
                 np.array(
                     [
                         [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]],
@@ -245,11 +223,11 @@ class TestBroadcasting:
                 ),
             ),
             (
-                qp.probs(wires=[0, 1]),
+                qml.probs(wires=[0, 1]),
                 np.array([[0, 0, 0, 1], [1 / 2, 0, 1 / 2, 0], [1 / 4, 1 / 4, 1 / 4, 1 / 4]]),
             ),
-            (qp.expval(qp.PauliZ(1)), np.array([-1, 1, 0])),
-            (qp.var(qp.PauliZ(1)), np.array([0, 0, 1])),
+            (qml.expval(qml.PauliZ(1)), np.array([-1, 1, 0])),
+            (qml.var(qml.PauliZ(1)), np.array([0, 0, 1])),
         ],
     )
     def test_state_measurement(self, measurement, expected):
@@ -266,8 +244,8 @@ class TestBroadcasting:
 
     def test_sparse_hamiltonian(self):
         """Test that broadcasting works for expectation values of SparseHamiltonians"""
-        H = qp.Hamiltonian([2], [qp.PauliZ(1)])
-        measurement = qp.expval(H)
+        H = qml.Hamiltonian([2], [qml.PauliZ(1)])
+        measurement = qml.expval(H)
 
         state = [
             np.array([[0, 0], [0, 1]]),
@@ -291,61 +269,61 @@ class TestNaNMeasurements:
     @pytest.mark.parametrize(
         "mp",
         [
-            qp.expval(qp.PauliZ(0)),
-            qp.expval(
-                qp.Hamiltonian(
+            qml.expval(qml.PauliZ(0)),
+            qml.expval(
+                qml.Hamiltonian(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
-            qp.expval(
-                qp.dot(
+            qml.expval(
+                qml.dot(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
-            qp.var(qp.PauliZ(0)),
-            qp.var(
-                qp.dot(
+            qml.var(qml.PauliZ(0)),
+            qml.var(
+                qml.dot(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
         ],
     )
-    @pytest.mark.parametrize("interface", ["numpy", "autograd", "torch"])
+    @pytest.mark.parametrize("interface", ["numpy", "autograd", "torch", "tensorflow"])
     def test_nan_float_result(self, mp, interface):
         """Test that the result of circuits with 0 probability postselections is NaN with the
         expected shape."""
-        state = qp.math.full((2, 2), np.nan, like=interface)
+        state = qml.math.full((2, 2), np.NaN, like=interface)
         res = measure(mp, state, is_state_batched=False)
 
-        assert qp.math.ndim(res) == 0
-        assert qp.math.isnan(res)
-        assert qp.math.get_interface(res) == interface
+        assert qml.math.ndim(res) == 0
+        assert qml.math.isnan(res)
+        assert qml.math.get_interface(res) == interface
 
     @pytest.mark.jax
     @pytest.mark.parametrize(
         "mp",
         [
-            qp.expval(qp.PauliZ(0)),
-            qp.expval(
-                qp.Hamiltonian(
+            qml.expval(qml.PauliZ(0)),
+            qml.expval(
+                qml.Hamiltonian(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
-            qp.expval(
-                qp.dot(
+            qml.expval(
+                qml.dot(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
-            qp.var(qp.PauliZ(0)),
-            qp.var(
-                qp.dot(
+            qml.var(qml.PauliZ(0)),
+            qml.var(
+                qml.dot(
                     [1.0, 2.0, 3.0, 4.0],
-                    [qp.PauliZ(0) @ qp.PauliX(1), qp.PauliX(1), qp.PauliZ(1), qp.PauliY(1)],
+                    [qml.PauliZ(0) @ qml.PauliX(1), qml.PauliX(1), qml.PauliZ(1), qml.PauliY(1)],
                 )
             ),
         ],
@@ -354,7 +332,7 @@ class TestNaNMeasurements:
     def test_nan_float_result_jax(self, mp, use_jit):
         """Test that the result of circuits with 0 probability postselections is NaN with the
         expected shape."""
-        state = qp.math.full((2, 2), np.nan, like="jax")
+        state = qml.math.full((2, 2), np.NaN, like="jax")
         if use_jit:
             import jax
 
@@ -362,35 +340,35 @@ class TestNaNMeasurements:
         else:
             res = measure(mp, state, is_state_batched=False)
 
-        assert qp.math.ndim(res) == 0
+        assert qml.math.ndim(res) == 0
 
-        assert qp.math.isnan(res)
-        assert qp.math.get_interface(res) == "jax"
+        assert qml.math.isnan(res)
+        assert qml.math.get_interface(res) == "jax"
 
     @pytest.mark.all_interfaces
     @pytest.mark.parametrize(
-        "mp", [qp.probs(wires=0), qp.probs(op=qp.PauliZ(0)), qp.probs(wires=[0, 1])]
+        "mp", [qml.probs(wires=0), qml.probs(op=qml.PauliZ(0)), qml.probs(wires=[0, 1])]
     )
-    @pytest.mark.parametrize("interface", ["numpy", "autograd", "torch"])
+    @pytest.mark.parametrize("interface", ["numpy", "autograd", "torch", "tensorflow"])
     def test_nan_probs(self, mp, interface):
         """Test that the result of circuits with 0 probability postselections is NaN with the
         expected shape."""
-        state = qp.math.full((2, 2), np.nan, like=interface)
+        state = qml.math.full((2, 2), np.NaN, like=interface)
         res = measure(mp, state, is_state_batched=False)
 
-        assert qp.math.shape(res) == (2 ** len(mp.wires),)
-        assert qp.math.all(qp.math.isnan(res))
-        assert qp.math.get_interface(res) == interface
+        assert qml.math.shape(res) == (2 ** len(mp.wires),)
+        assert qml.math.all(qml.math.isnan(res))
+        assert qml.math.get_interface(res) == interface
 
     @pytest.mark.jax
     @pytest.mark.parametrize(
-        "mp", [qp.probs(wires=0), qp.probs(op=qp.PauliZ(0)), qp.probs(wires=[0, 1])]
+        "mp", [qml.probs(wires=0), qml.probs(op=qml.PauliZ(0)), qml.probs(wires=[0, 1])]
     )
     @pytest.mark.parametrize("use_jit", [True, False])
     def test_nan_probs_jax(self, mp, use_jit):
         """Test that the result of circuits with 0 probability postselections is NaN with the
         expected shape."""
-        state = qp.math.full((2, 2), np.nan, like="jax")
+        state = qml.math.full((2, 2), np.NaN, like="jax")
         if use_jit:
             import jax
 
@@ -398,57 +376,57 @@ class TestNaNMeasurements:
         else:
             res = measure(mp, state, is_state_batched=False)
 
-        assert qp.math.shape(res) == (2 ** len(mp.wires),)
-        assert qp.math.all(qp.math.isnan(res))
-        assert qp.math.get_interface(res) == "jax"
+        assert qml.math.shape(res) == (2 ** len(mp.wires),)
+        assert qml.math.all(qml.math.isnan(res))
+        assert qml.math.get_interface(res) == "jax"
 
 
 class TestSumOfTermsDifferentiability:
     @staticmethod
     def f(scale, coeffs, n_wires=10, offset=0.1, convert_to_hamiltonian=False):
-        ops = [qp.RX(offset + scale * i, wires=i) for i in range(n_wires)]
+        ops = [qml.RX(offset + scale * i, wires=i) for i in range(n_wires)]
 
         if convert_to_hamiltonian:
-            H = qp.Hamiltonian(
+            H = qml.Hamiltonian(
                 coeffs,
                 [
-                    qp.prod(*(qp.PauliZ(i) for i in range(n_wires))),
-                    qp.prod(*(qp.PauliY(i) for i in range(n_wires))),
+                    qml.operation.Tensor(*(qml.PauliZ(i) for i in range(n_wires))),
+                    qml.operation.Tensor(*(qml.PauliY(i) for i in range(n_wires))),
                 ],
             )
         else:
-            t1 = qp.s_prod(coeffs[0], qp.prod(*(qp.PauliZ(i) for i in range(n_wires))))
-            t2 = qp.s_prod(coeffs[1], qp.prod(*(qp.PauliY(i) for i in range(n_wires))))
+            t1 = qml.s_prod(coeffs[0], qml.prod(*(qml.PauliZ(i) for i in range(n_wires))))
+            t2 = qml.s_prod(coeffs[1], qml.prod(*(qml.PauliY(i) for i in range(n_wires))))
             H = t1 + t2
-        qs = qp.tape.QuantumScript(ops, [qp.expval(H)])
+        qs = qml.tape.QuantumScript(ops, [qml.expval(H)])
         return simulate(qs)
 
     @staticmethod
     def expected(scale, coeffs, n_wires=10, offset=0.1, like="numpy"):
-        phase = offset + scale * qp.math.asarray(range(n_wires), like=like)
-        cosines = qp.math.cos(phase)
-        sines = qp.math.sin(phase)
-        return coeffs[0] * qp.math.prod(cosines) + coeffs[1] * qp.math.prod(sines)
+        phase = offset + scale * qml.math.asarray(range(n_wires), like=like)
+        cosines = qml.math.cos(phase)
+        sines = qml.math.sin(phase)
+        return coeffs[0] * qml.math.prod(cosines) + coeffs[1] * qml.math.prod(sines)
 
     @pytest.mark.autograd
     @pytest.mark.parametrize("convert_to_hamiltonian", (True, False))
     @pytest.mark.parametrize(
         "coeffs",
         [
-            (qp.numpy.array(2.5), qp.numpy.array(6.2)),
-            (qp.numpy.array(2.5, requires_grad=False), qp.numpy.array(6.2, requires_grad=False)),
+            (qml.numpy.array(2.5), qml.numpy.array(6.2)),
+            (qml.numpy.array(2.5, requires_grad=False), qml.numpy.array(6.2, requires_grad=False)),
         ],
     )
     def test_autograd_backprop(self, convert_to_hamiltonian, coeffs):
         """Test that backpropagation derivatives work in autograd with hamiltonians and large sums."""
-        x = qp.numpy.array(0.52)
+        x = qml.numpy.array(0.52)
         out = self.f(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
         expected_out = self.expected(x, coeffs)
-        assert qp.math.allclose(out, expected_out)
+        assert qml.math.allclose(out, expected_out)
 
-        g = qp.grad(self.f)(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
-        expected_g = qp.grad(self.expected)(x, coeffs)
-        assert qp.math.allclose(g, expected_g)
+        g = qml.grad(self.f)(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
+        expected_g = qml.grad(self.expected)(x, coeffs)
+        assert qml.math.allclose(g, expected_g)
 
     @pytest.mark.jax
     @pytest.mark.parametrize("use_jit", (True, False))
@@ -465,11 +443,11 @@ class TestSumOfTermsDifferentiability:
 
         out = f(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
         expected_out = self.expected(x, coeffs)
-        assert qp.math.allclose(out, expected_out)
+        assert qml.math.allclose(out, expected_out)
 
         g = jax.grad(f)(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
         expected_g = jax.grad(self.expected)(x, coeffs)
-        assert qp.math.allclose(g, expected_g)
+        assert qml.math.allclose(g, expected_g)
 
     @pytest.mark.torch
     @pytest.mark.parametrize("convert_to_hamiltonian", (True, False))
@@ -486,8 +464,28 @@ class TestSumOfTermsDifferentiability:
         x2 = torch.tensor(-0.289, requires_grad=True, dtype=torch.float64)
         out = self.f(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
         expected_out = self.expected(x2, coeffs, like="torch")
-        assert qp.math.allclose(out, expected_out)
+        assert qml.math.allclose(out, expected_out)
 
         out.backward()
         expected_out.backward()
-        assert qp.math.allclose(x.grad, x2.grad)
+        assert qml.math.allclose(x.grad, x2.grad)
+
+    @pytest.mark.tf
+    @pytest.mark.parametrize("convert_to_hamiltonian", (True, False))
+    def test_tf_backprop(self, convert_to_hamiltonian):
+        """Test that backpropagation derivatives work with tensorflow with hamiltonians and large sums."""
+        import tensorflow as tf
+
+        x = tf.Variable(0.5)
+        coeffs = [8.3, 5.7]
+
+        with tf.GradientTape() as tape1:
+            out = self.f(x, coeffs, convert_to_hamiltonian=convert_to_hamiltonian)
+
+        with tf.GradientTape() as tape2:
+            expected_out = self.expected(x, coeffs)
+
+        assert qml.math.allclose(out, expected_out)
+        g1 = tape1.gradient(out, x)
+        g2 = tape2.gradient(expected_out, x)
+        assert qml.math.allclose(g1, g2)

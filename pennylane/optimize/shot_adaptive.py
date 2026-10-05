@@ -12,21 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Shot adaptive optimizer"""
-
-# pylint: disable=too-many-instance-attributes,too-many-arguments
-
-
+# pylint: disable=too-many-instance-attributes,too-many-arguments,too-many-branches
 from copy import copy
-
 import numpy as np
-import scipy as sp
+from scipy.stats import multinomial
 
-from pennylane import math, measurements
-from pennylane._grad import jacobian
-from pennylane.core.qscript import make_qscript
-from pennylane.core.queuing import apply
-from pennylane.ops import LinearCombination
-from pennylane.workflow import QNode, construct_tape, set_shots
+import pennylane as qml
 
 from .gradient_descent import GradientDescentOptimizer
 
@@ -48,17 +39,17 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
         The bound device must also be instantiated with a finite number of shots.
 
     Args:
-        min_shots (int): the minimum number of shots used to estimate the expectations
+        min_shots (int): The minimum number of shots used to estimate the expectations
             of each term in the Hamiltonian. Note that this must be larger than 2 for the variance
             of the gradients to be computed.
-        term_sampling (str): the random sampling algorithm to multinomially distribute the shot
+        mu (float): The running average constant :math:`\mu \in [0, 1]`. Used to control how
+            quickly the number of shots recommended for each gradient component changes.
+        b (float): Regularization bias. The bias should be kept small, but non-zero.
+        term_sampling (str): The random sampling algorithm to multinomially distribute the shot
             budget across terms in the Hamiltonian expectation value. Currently, only
             ``"weighted_random_sampling"`` is supported. The default value is ``None``, which
             disables the random sampling behaviour.
-        mu (float): the running average constant :math:`\mu \in [0, 1]`. Used to control how
-            quickly the number of shots recommended for each gradient component changes (default value: 0.99).
-        b (float): the regularization bias. The bias should be kept small, but non-zero (default value: 1e-06).
-        stepsize (float): the learning rate :math:`\eta` (default value: 0.07). The learning rate *must* be such
+        stepsize (float): The learning rate :math:`\eta`. The learning rate *must* be such
             that :math:`\eta < 2/L = 2/\sum_i|c_i|`, where:
 
             * :math:`L \leq \sum_i|c_i|` is the bound on the `Lipschitz constant
@@ -70,34 +61,32 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
     **Example**
 
     For VQE/VQE-like problems, the objective function for the optimizer can be realized
-    as a :class:`~.QNode` object measuring the expectation of a :class:`~.ops.LinearCombination`.
+    as a :class:`~.QNode` object measuring the expectation of a :class:`~.Hamiltonian`.
 
     >>> from pennylane import numpy as np
-    >>> from functools import partial
     >>> coeffs = [2, 4, -1, 5, 2]
     >>> obs = [
-    ...   qp.X(1),
-    ...   qp.Z(1),
-    ...   qp.X(0) @ qp.X(1),
-    ...   qp.Y(0) @ qp.Y(1),
-    ...   qp.Z(0) @ qp.Z(1)
+    ...   qml.X(1),
+    ...   qml.Z(1),
+    ...   qml.X(0) @ qml.X(1),
+    ...   qml.Y(0) @ qml.Y(1),
+    ...   qml.Z(0) @ qml.Z(1)
     ... ]
-    >>> H = qp.Hamiltonian(coeffs, obs)
-    >>> dev = qp.device("default.qubit", wires=2)
-    >>> @qp.set_shots(shots=100)
-    ... @qp.qnode(dev)
-    ... def cost(weights):
-    ...     qp.StronglyEntanglingLayers(weights, wires=range(2))
-    ...     return qp.expval(H)
+    >>> H = qml.Hamiltonian(coeffs, obs)
+    >>> dev = qml.device("default.qubit", wires=2, shots=100)
+    >>> @qml.qnode(dev)
+    >>> def cost(weights):
+    ...     qml.StronglyEntanglingLayers(weights, wires=range(2))
+    ...     return qml.expval(H)
 
     Once constructed, the cost function can be passed directly to the
     optimizer's ``step`` method. The attributes ``opt.shots_used`` and
     ``opt.total_shots_used`` can be used to track the number of shots per
     iteration, and across the life of the optimizer, respectively.
 
-    >>> shape = qp.templates.StronglyEntanglingLayers.shape(n_layers=2, n_wires=2)
+    >>> shape = qml.templates.StronglyEntanglingLayers.shape(n_layers=2, n_wires=2)
     >>> params = np.random.random(shape)
-    >>> opt = qp.ShotAdaptiveOptimizer(min_shots=10, term_sampling="weighted_random_sampling")
+    >>> opt = qml.ShotAdaptiveOptimizer(min_shots=10, term_sampling="weighted_random_sampling")
     >>> for i in range(60):
     ...    params = opt.step(cost, params)
     ...    print(f"Step {i}: cost = {cost(params):.2f}, shots_used = {opt.total_shots_used}")
@@ -184,7 +173,6 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
           <https://quantum-journal.org/papers/q-2020-05-11-263/>`__ (2020).
     """
 
-    # pylint: disable = too-many-positional-arguments
     def __init__(self, min_shots, term_sampling=None, mu=0.99, b=1e-6, stepsize=0.07):
         self.term_sampling = term_sampling
         self.trainable_args = set()
@@ -224,7 +212,7 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
         Args:
             qnode (.QNode): A QNode that returns the expectation value of a Hamiltonian.
             coeffs (List[float]): The coefficients of the Hamiltonian being measured
-            observables (List[Operator]]): The terms of the Hamiltonian being measured
+            observables (List[Observable]): The terms of the Hamiltonian being measured
             shots (int): The number of shots used to estimate the Hamiltonian expectation
                 value. These shots are distributed over the terms in the Hamiltonian,
                 as per a Multinomial distribution.
@@ -243,37 +231,36 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
 
         # construct the multinomial distribution, and sample
         # from it to determine how many shots to apply per term
-        si = sp.stats.multinomial(n=shots, p=prob_shots)
+        si = multinomial(n=shots, p=prob_shots)
         shots_per_term = si.rvs()[0]
 
         grads = []
 
-        for o, c, p, s in zip(observables, coeffs, prob_shots, shots_per_term, strict=True):
+        for o, c, p, s in zip(observables, coeffs, prob_shots, shots_per_term):
             # if the number of shots is 0, do nothing
             if s == 0:
                 continue
 
             def func(*qnode_args, **qnode_kwargs):
-                qs = make_qscript(base_func)(*qnode_args, **qnode_kwargs)
+                qs = qml.tape.make_qscript(base_func)(*qnode_args, **qnode_kwargs)
                 for op in qs.operations:
-                    apply(op)
-                return measurements.expval(o)  # pylint:disable=cell-var-from-loop
-
-            new_shots = 1 if s == 1 else [(1, int(s))]
+                    qml.apply(op)
+                return qml.expval(o)  # pylint:disable=cell-var-from-loop
 
             qnode.func = func
-            qnode = set_shots(qnode, shots=new_shots)
+
+            new_shots = 1 if s == 1 else [(1, int(s))]
 
             if s > 1:
 
                 def cost(*args, **kwargs):
-
-                    return math.stack(qnode(*args, **kwargs))
+                    # pylint: disable=cell-var-from-loop
+                    return qml.math.stack(qnode(*args, **kwargs))
 
             else:
                 cost = qnode
 
-            jacs = jacobian(cost, argnums=argnums)(*args, **kwargs)
+            jacs = qml.jacobian(cost, argnum=argnums)(*args, **kwargs, shots=new_shots)
 
             if s == 1:
                 jacs = [np.expand_dims(j, 0) for j in jacs]
@@ -282,7 +269,23 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
             # because we are sampling one at a time.
             grads.append([(c * j / p) for j in jacs])
 
-        return [np.concatenate(i) for i in zip(*grads, strict=True)]
+        return [np.concatenate(i) for i in zip(*grads)]
+
+    @staticmethod
+    def check_device(dev):
+        r"""Verifies that the device used by the objective function is non-analytic.
+
+        Args:
+            dev (.Device): the device to verify
+
+        Raises:
+            ValueError: if the device is analytic
+        """
+        if not dev.shots:
+            raise ValueError(
+                "The Rosalin optimizer can only be used with devices "
+                "that estimate expectation values with a finite number of shots."
+            )
 
     def check_learning_rate(self, coeffs):
         r"""Verifies that the learning rate is less than 2 over the Lipschitz constant,
@@ -302,17 +305,13 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
 
     def _single_shot_qnode_gradients(self, qnode, args, kwargs):
         """Compute the single shot gradients of a QNode."""
-        tape = construct_tape(qnode)(*args, **kwargs)
-        if not tape.shots:
-            raise ValueError(
-                "The Rosalin optimizer can only be used with qnodes "
-                "that estimate expectation values with a finite number of shots."
-            )
+        self.check_device(qnode.device)
+
+        qnode.construct(args, kwargs)
+        tape = qnode.tape
         [expval] = tape.measurements
         coeffs, observables = (
-            expval.obs.terms()
-            if isinstance(expval.obs, LinearCombination)
-            else ([1.0], [expval.obs])
+            expval.obs.terms() if isinstance(expval.obs, qml.Hamiltonian) else ([1.0], [expval.obs])
         )
 
         if self.lipschitz is None:
@@ -332,14 +331,16 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
         new_shots = [(1, int(self.max_shots))]
 
         def cost(*args, **kwargs):
-            return math.stack(set_shots(qnode, shots=new_shots)(*args, **kwargs))
+            return qml.math.stack(qnode(*args, **kwargs, shots=new_shots))
 
-        grads = [jacobian(cost, argnums=i)(*args, **kwargs) for i in self.trainable_args]
+        grads = [qml.jacobian(cost, argnum=i)(*args, **kwargs) for i in self.trainable_args]
 
         return grads
 
-    def compute_grad(self, objective_fn, args, kwargs):  # pylint: disable=arguments-renamed
-        r"""Compute the gradient of the objective function, as well as the variance of the gradient,
+    def compute_grad(
+        self, objective_fn, args, kwargs
+    ):  # pylint: disable=signature-differs,arguments-differ,arguments-renamed
+        r"""Compute gradient of the objective function, as well as the variance of the gradient,
         at the given point.
 
         Args:
@@ -351,7 +352,7 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
             tuple[array[float], array[float]]: a tuple of NumPy arrays containing the gradient
             :math:`\nabla f(x^{(t)})` and the variance of the gradient
         """
-        if isinstance(objective_fn, QNode) or hasattr(objective_fn, "device"):
+        if isinstance(objective_fn, qml.QNode) or hasattr(objective_fn, "device"):
             grads = self._single_shot_qnode_gradients(objective_fn, args, kwargs)
         else:
             raise ValueError(
@@ -423,14 +424,12 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
             self.xi = [np.zeros_like(g, dtype=np.float64) for g in grads]
 
         # running average of the gradient
-        self.chi = [self.mu * c + (1 - self.mu) * g for c, g in zip(self.chi, grads, strict=True)]
+        self.chi = [self.mu * c + (1 - self.mu) * g for c, g in zip(self.chi, grads)]
 
         # running average of the gradient variance
-        self.xi = [
-            self.mu * x + (1 - self.mu) * v for x, v in zip(self.xi, grad_variances, strict=True)
-        ]
+        self.xi = [self.mu * x + (1 - self.mu) * v for x, v in zip(self.xi, grad_variances)]
 
-        for idx, (c, x) in enumerate(zip(self.chi, self.xi, strict=True)):
+        for idx, (c, x) in enumerate(zip(self.chi, self.xi)):
             xi = x / (1 - self.mu ** (self.k + 1))
             chi = c / (1 - self.mu ** (self.k + 1))
 
@@ -487,5 +486,5 @@ class ShotAdaptiveOptimizer(GradientDescentOptimizer):
             If single arg is provided, list [array] is replaced by array.
         """
         new_args = self.step(objective_fn, *args, **kwargs)
-        forward = set_shots(objective_fn, shots=int(self.max_shots))(*args, **kwargs)
+        forward = objective_fn(*args, **kwargs, shots=int(self.max_shots))
         return new_args, forward

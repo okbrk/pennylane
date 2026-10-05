@@ -12,20 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utility functions"""
+import warnings
 
-import numbers
-
-# pylint: disable=wrong-import-order
 import autoray as ar
-import jax
 import numpy as _np
-import scipy as sp
 
 # pylint: disable=import-outside-toplevel
 from autograd.numpy.numpy_boxes import ArrayBox
 from autoray import numpy as np
 
-from pennylane import math
+from . import single_dispatch  # pylint:disable=unused-import
 
 
 def allequal(tensor1, tensor2, **kwargs):
@@ -59,156 +55,12 @@ def allequal(tensor1, tensor2, **kwargs):
     return np.all(t1 == t2, **kwargs)
 
 
-def _allclose_sparse(a, b, rtol=1e-05, atol=1e-08):
-    """Compare two sparse matrices for approximate equality.
-
-    Args:
-        a, b: scipy sparse matrices to compare
-        rtol (float): relative tolerance
-        atol (float): absolute tolerance
-
-    Returns:
-        bool: True if matrices are approximately equal
-    """
-    if (a != b).nnz == 0:
-        return True
-
-    diff = abs(a - b)
-
-    # Handle cases where the matrix might be empty
-    max_diff = diff.data.max() if diff.nnz > 0 else 0
-    max_b = abs(b).data.max() if b.nnz > 0 else 0
-
-    return max_diff <= atol + rtol * max_b
-
-
-def _mixed_shape_match(a, b):
-    """Check if the shapes of two matrices of mixed types are compatible for comparison.
-
-    Args:
-        a, b: matrices to compare
-
-    Returns:
-        bool: True if the shapes are compatible
-    """
-    a_shapes = a.shape
-    b_shapes = b.shape
-    # Take the product, if inequal then false
-    if np.prod(a_shapes) != np.prod(b_shapes):
-        return False
-    # Make the sets of shapes, and ignore '1'
-    a_shape_set = set(a_shapes) - {1}
-    b_shape_set = set(b_shapes) - {1}
-    if len(a_shape_set) == len(b_shape_set) == 1:
-        return True  # For intrinsic one-dimensional arrays
-    return a_shapes == b_shapes
-
-
-def _allclose_mixed(a, b, rtol=1e-05, atol=1e-08, b_is_sparse=True):
-    """Helper function for comparing dense and sparse matrices with correct tolerance reference.
-
-    Args:
-        a: first matrix (dense or sparse)
-        b: second matrix (sparse or dense)
-        rtol: relative tolerance
-        atol: absolute tolerance
-        b_is_sparse: True if b is sparse matrix, False if a is sparse matrix
-
-    Returns:
-        bool: True if matrices are approximately equal
-    """
-    sparse = b if b_is_sparse else a
-    dense = a if b_is_sparse else b
-
-    if sparse.nnz == 0:
-        return np.allclose(dense, 0, rtol=rtol, atol=atol)
-
-    if not _mixed_shape_match(dense, sparse):
-        return False
-
-    SIZE_THRESHOLD = 10000
-    if np.prod(dense.shape) < SIZE_THRESHOLD:
-        # Use dense comparison but maintain b as reference
-        if b_is_sparse:
-            return np.allclose(a, sparse.toarray(), rtol=rtol, atol=atol)
-        return np.allclose(sparse.toarray(), b, rtol=rtol, atol=atol)
-
-    dense_coords = dense.nonzero()
-    sparse_coords = sparse.nonzero()
-
-    coord_diff = set(zip(*dense_coords, strict=True)) ^ set(zip(*sparse_coords, strict=True))
-    if coord_diff:
-        return False
-
-    # Maintain asymmetric comparison with correct reference
-    if b_is_sparse:
-        a_data = dense[dense_coords]
-        b_data = sparse.data
-    else:
-        a_data = sparse.data
-        b_data = dense[sparse_coords]
-    return np.allclose(a_data, b_data, rtol=rtol, atol=atol)
-
-
-def _allclose_sparse_scalar(sparse_mat, scalar, rtol=1e-05, atol=1e-08):
-    """Compare a sparse matrix to a scalar value.
-
-    This function checks if a sparse matrix is approximately equal to a scalar value
-    by considering three cases:
-    1. Empty/zero sparse matrix compared to any scalar -> scalar must be close to zero
-    2. Sparse matrix with non-zero values compared to a scalar -> all non-zero values must match
-    3. Following case 2, if scalar is zero, any sparsity pattern is allowed
-    4. If the scalar is non-zero, all elements must be non-zero, e.g. size match nnz
-
-
-    Args:
-        sparse_mat: A scipy sparse matrix
-        scalar: A scalar value to compare against
-        rtol: Relative tolerance
-        atol: Absolute tolerance
-
-    Returns:
-        bool: True if the sparse matrix is approximately equal to the scalar
-    """
-    # Case 1: Empty sparse matrix - only close to zero scalar
-    if sparse_mat.nnz == 0:
-        return np.isclose(scalar, 0, rtol=rtol, atol=atol)
-
-    # Case 2: Sparse matrix with all non-zero values matching scalar
-    # Check if all non-zeros in the sparse matrix match the scalar
-    if not np.allclose(sparse_mat.data, scalar, rtol=rtol, atol=atol):
-        return False
-
-    # Note that from this step all the data already close to scalar
-    # Case 3: Special handling for scalar = 0 or fully populated sparse matrix
-    # If scalar is approximately zero, allow any sparsity pattern
-    if np.isclose(scalar, 0, rtol=rtol, atol=atol):
-        return True
-
-    # If scalar is non-zero, all elements must be non-zero
-    # Use size property for efficiency with very large matrices
-    return sparse_mat.nnz == np.prod(sparse_mat.shape)
-
-
 def allclose(a, b, rtol=1e-05, atol=1e-08, **kwargs):
     """Wrapper around np.allclose, allowing tensors ``a`` and ``b``
     to differ in type"""
     try:
         # Some frameworks may provide their own allclose implementation.
         # Try and use it if available.
-        if sp.sparse.issparse(a) and sp.sparse.issparse(b):
-            return _allclose_sparse(a, b, rtol=rtol, atol=atol)
-        # Add handling for sparse matrix compared with scalar
-        if sp.sparse.issparse(a) and np.isscalar(b):
-            return _allclose_sparse_scalar(a, b, rtol=rtol, atol=atol)
-        if sp.sparse.issparse(b) and np.isscalar(a):
-            return _allclose_sparse_scalar(b, a, rtol=rtol, atol=atol)
-
-        if sp.sparse.issparse(a):
-
-            return _allclose_mixed(a, b, rtol=rtol, atol=atol, b_is_sparse=False)
-        if sp.sparse.issparse(b):
-            return _allclose_mixed(a, b, rtol=rtol, atol=atol, b_is_sparse=True)
         res = np.allclose(a, b, rtol=rtol, atol=atol, **kwargs)
     except (TypeError, AttributeError, ImportError, RuntimeError):
         # Otherwise, convert the input to NumPy arrays.
@@ -252,9 +104,9 @@ def cast(tensor, dtype):
 
     We can also use strings:
 
-    >>> x = torch.tensor([1, 2])
+    >>> x = tf.Variable([1, 2])
     >>> cast(x, "complex128")
-    tensor([1.+0.j, 2.+0.j], dtype=torch.complex128)
+    <tf.Tensor: shape=(2,), dtype=complex128, numpy=array([1.+0.j, 2.+0.j])>
     """
     if isinstance(tensor, (list, tuple, int, float, complex)):
         tensor = np.asarray(tensor)
@@ -264,9 +116,6 @@ def cast(tensor, dtype):
             dtype = np.dtype(dtype).name
         except (AttributeError, TypeError, ImportError):
             dtype = getattr(dtype, "name", dtype)
-
-        if math.get_interface(dtype) == "torch":
-            tensor = np.asarray(tensor, like="torch")
 
     return ar.astype(tensor, ar.to_backend_dtype(dtype, like=ar.infer_backend(tensor)))
 
@@ -291,17 +140,12 @@ def cast_like(tensor1, tensor2):
     """
     if isinstance(tensor2, tuple) and len(tensor2) > 0:
         tensor2 = tensor2[0]
-
-    # Check for abstract tensors FIRST before trying to convert to numpy
-    # This is important for JAX 0.7.0+ which has additional tracer types
-    if is_abstract(tensor2):
-        dtype = tensor2.dtype
-    elif isinstance(tensor2, ArrayBox):
+    if isinstance(tensor2, ArrayBox):
         dtype = ar.to_numpy(tensor2._value).dtype.type  # pylint: disable=protected-access
-    elif hasattr(tensor2, "dtype"):
-        dtype = tensor2.dtype
-    else:
+    elif not is_abstract(tensor2):
         dtype = ar.to_numpy(tensor2).dtype.type
+    else:
+        dtype = tensor2.dtype
     return cast(tensor1, dtype)
 
 
@@ -319,20 +163,153 @@ def convert_like(tensor1, tensor2):
     **Example**
 
     >>> x = np.array([1, 2])
-    >>> y = torch.tensor([3, 4])
+    >>> y = tf.Variable([3, 4])
     >>> convert_like(x, y)
-    tensor([1, 2])
+    <tf.Tensor: shape=(2,), dtype=int64, numpy=array([1, 2])>
     """
-    interface = math.get_interface(tensor2)
+    interface = get_interface(tensor2)
 
     if interface == "torch":
         dev = tensor2.device
         return np.asarray(tensor1, device=dev, like=interface)
 
-    if interface == "scipy":
-        return sp.sparse.csr_matrix(tensor1)
-
     return np.asarray(tensor1, like=interface)
+
+
+def get_interface(*values):
+    """Determines the correct framework to dispatch to given a tensor-like object or a
+    sequence of tensor-like objects.
+
+    Args:
+        *values (tensor_like): variable length argument list with single tensor-like objects
+
+    Returns:
+        str: the name of the interface
+
+    To determine the framework to dispatch to, the following rules
+    are applied:
+
+    * Tensors that are incompatible (such as Torch, TensorFlow and Jax tensors)
+      cannot both be present.
+
+    * Autograd tensors *may* be present alongside Torch, TensorFlow and Jax tensors,
+      but Torch, TensorFlow and Jax take precendence; the autograd arrays will
+      be treated as non-differentiable NumPy arrays. A warning will be raised
+      suggesting that vanilla NumPy be used instead.
+
+    * Vanilla NumPy arrays and SciPy sparse matrices can be used alongside other tensor objects;
+      they will always be treated as non-differentiable constants.
+
+    .. warning::
+        ``get_interface`` defaults to ``"numpy"`` whenever Python built-in objects are passed.
+        I.e. a list or tuple of ``torch`` tensors will be identified as ``"numpy"``:
+
+        >>> get_interface([torch.tensor([1]), torch.tensor([1])])
+        "numpy"
+
+        The correct usage in that case is to unpack the arguments ``get_interface(*[torch.tensor([1]), torch.tensor([1])])``.
+
+    """
+
+    if len(values) == 1:
+        return _get_interface_of_single_tensor(values[0])
+
+    interfaces = {_get_interface_of_single_tensor(v) for v in values}
+
+    if len(interfaces - {"numpy", "scipy", "autograd"}) > 1:
+        # contains multiple non-autograd interfaces
+        raise ValueError("Tensors contain mixed types; cannot determine dispatch library")
+
+    non_numpy_scipy_interfaces = set(interfaces) - {"numpy", "scipy"}
+
+    if len(non_numpy_scipy_interfaces) > 1:
+        # contains autograd and another interface
+        warnings.warn(
+            f"Contains tensors of types {non_numpy_scipy_interfaces}; dispatch will prioritize "
+            "TensorFlow, PyTorch, and  Jax over Autograd. Consider replacing Autograd with vanilla NumPy.",
+            UserWarning,
+        )
+
+    if "tensorflow" in interfaces:
+        return "tensorflow"
+
+    if "torch" in interfaces:
+        return "torch"
+
+    if "jax" in interfaces:
+        return "jax"
+
+    if "autograd" in interfaces:
+        return "autograd"
+
+    return "numpy"
+
+
+def _get_interface_of_single_tensor(tensor):
+    """Returns the name of the package that any array/tensor manipulations
+    will dispatch to. The returned strings correspond to those used for PennyLane
+    :doc:`interfaces </introduction/interfaces>`.
+
+    Args:
+        tensor (tensor_like): tensor input
+
+    Returns:
+        str: name of the interface
+
+    **Example**
+
+    >>> x = torch.tensor([1., 2.])
+    >>> get_interface(x)
+    'torch'
+    >>> from pennylane import numpy as np
+    >>> x = np.array([4, 5], requires_grad=True)
+    >>> get_interface(x)
+    'autograd'
+    """
+    namespace = tensor.__class__.__module__.split(".")[0]
+
+    if namespace in ("pennylane", "autograd"):
+        return "autograd"
+
+    res = ar.infer_backend(tensor)
+
+    if res == "builtins":
+        return "numpy"
+
+    return res
+
+
+def get_deep_interface(value):
+    """
+    Given a deep data structure with interface-specific scalars at the bottom, return their
+    interface name.
+
+    Args:
+        value (list, tuple): A deep list-of-lists, tuple-of-tuples, or combination with
+            interface-specific data hidden within it
+
+    Returns:
+        str: The name of the interface deep within the value
+
+    **Example**
+
+    >>> x = [[jax.numpy.array(1), jax.numpy.array(2)], [jax.numpy.array(3), jax.numpy.array(4)]]
+    >>> get_deep_interface(x)
+    'jax'
+
+    This can be especially useful when converting to the appropriate interface:
+
+    >>> qml.math.asarray(x, like=qml.math.get_deep_interface(x))
+    Array([[1, 2],
+       [3, 4]], dtype=int64)
+
+    """
+    itr = value
+    while isinstance(itr, (list, tuple)):
+        if len(itr) == 0:
+            return "builtins"
+        itr = itr[0]
+    return ar.infer_backend(itr)
 
 
 def is_abstract(tensor, like=None):
@@ -343,7 +320,7 @@ def is_abstract(tensor, like=None):
     (JIT) compilation.
 
     Abstract tensors most commonly occur within a function that has been
-    decorated using ``@jax.jit``.
+    decorated using ``@tf.function`` or ``@jax.jit``.
 
     .. note::
 
@@ -373,7 +350,7 @@ def is_abstract(tensor, like=None):
 
         def function(x):
             print("Value:", x)
-            print("Abstract:", qp.math.is_abstract(x))
+            print("Abstract:", qml.math.is_abstract(x))
             return jnp.sum(x ** 2)
 
     When we execute it, we see that the tensor is not abstract; it has known value:
@@ -395,20 +372,57 @@ def is_abstract(tensor, like=None):
     Note that JAX uses an abstract *shaped* array, so although we won't be able to
     include conditionals within our function that depend on the value of the tensor,
     we *can* include conditionals that depend on the shape of the tensor.
+
+    Similarly, consider the following TensorFlow function:
+
+    .. code-block:: python
+
+        import tensorflow as tf
+
+        def function(x):
+            print("Value:", x)
+            print("Abstract:", qml.math.is_abstract(x))
+            return tf.reduce_sum(x ** 2)
+
+    >>> x = tf.Variable([0.5, 0.1])
+    >>> function(x)
+    Value: <tf.Variable 'Variable:0' shape=(2,) dtype=float32, numpy=array([0.5, 0.1], dtype=float32)>
+    Abstract: False
+    <tf.Tensor: shape=(), dtype=float32, numpy=0.26>
+
+    If we apply the ``@tf.function`` decorator, the tensor will now be abstract:
+
+    >>> tf.function(function)(x)
+    Value: <tf.Variable 'Variable:0' shape=(2,) dtype=float32>
+    Abstract: True
+    <tf.Tensor: shape=(), dtype=float32, numpy=0.26>
     """
-    interface = like or math.get_interface(tensor)
+    interface = like or get_interface(tensor)
 
     if interface == "jax":
+        import jax
+        from jax.interpreters.partial_eval import DynamicJaxprTracer
 
-        # Use jax.core.Tracer as base class to catch all tracer types including new ones in JAX 0.7.0+
-        # (e.g., LinearizeTracer, JVPTracer, BatchTracer, JaxprTracer, DynamicJaxprTracer, etc.)
-        if isinstance(tensor, jax.core.Tracer):
+        if isinstance(
+            tensor,
+            (
+                jax.interpreters.ad.JVPTracer,
+                jax.interpreters.batching.BatchTracer,
+                jax.interpreters.partial_eval.JaxprTracer,
+            ),
+        ):
             # Tracer objects will be used when computing gradients or applying transforms.
-            # If the value of the tracer is known, jax.core.is_concrete will return True.
+            # If the value of the tracer is known, it will contain a ConcreteArray.
             # Otherwise, it will be abstract.
-            return not jax.core.is_concrete(tensor)
+            return not isinstance(tensor.aval, jax.core.ConcreteArray)
 
-        return False
+        return isinstance(tensor, DynamicJaxprTracer)
+
+    if interface == "tensorflow":
+        import tensorflow as tf
+        from tensorflow.python.framework.ops import EagerTensor
+
+        return not isinstance(tf.convert_to_tensor(tensor), EagerTensor)
 
     # Autograd does not have a JIT
 
@@ -416,6 +430,22 @@ def is_abstract(tensor, like=None):
     #   NotSupportedError: Compiled functions can't take variable number of arguments or
     #   use keyword-only arguments with defaults.
     return False
+
+
+def import_should_record_backprop():  # pragma: no cover
+    """Return should_record_backprop or an equivalent function from TensorFlow."""
+    import tensorflow.python as tfpy
+
+    if hasattr(tfpy.eager.tape, "should_record_backprop"):
+        from tensorflow.python.eager.tape import should_record_backprop
+    elif hasattr(tfpy.eager.tape, "should_record"):
+        from tensorflow.python.eager.tape import should_record as should_record_backprop
+    elif hasattr(tfpy.eager.record, "should_record_backprop"):
+        from tensorflow.python.eager.record import should_record_backprop
+    else:
+        raise ImportError("Cannot import should_record_backprop from TensorFlow.")
+
+    return should_record_backprop
 
 
 def requires_grad(tensor, interface=None):
@@ -427,15 +457,13 @@ def requires_grad(tensor, interface=None):
         may be context dependent.
 
         For example, Torch tensors and PennyLane tensors track trainability
-        as a property of the tensor itself.
+        as a property of the tensor itself. TensorFlow, on the other hand,
+        only tracks trainability if being watched by a gradient tape.
 
     Args:
         tensor (tensor_like): input tensor
         interface (str): The name of the interface. Will be determined automatically
             if not provided.
-
-    Returns:
-        bool: whether the tensor is trainable or not.
 
     **Example**
 
@@ -449,8 +477,36 @@ def requires_grad(tensor, interface=None):
     False
 
     PyTorch has similar behaviour.
+
+    With TensorFlow, the output is dependent on whether the tensor
+    is currently being watched by a gradient tape:
+
+    >>> x = tf.Variable([0.6, 0.1])
+    >>> requires_grad(x)
+    False
+    >>> with tf.GradientTape() as tape:
+    ...     print(requires_grad(x))
+    True
+
+    While TensorFlow constants are by default not trainable, they can be
+    manually watched by the gradient tape:
+
+    >>> x = tf.constant([0.6, 0.1])
+    >>> with tf.GradientTape() as tape:
+    ...     print(requires_grad(x))
+    False
+    >>> with tf.GradientTape() as tape:
+    ...     tape.watch([x])
+    ...     print(requires_grad(x))
+    True
     """
-    interface = interface or math.get_interface(tensor)
+    interface = interface or get_interface(tensor)
+
+    if interface == "tensorflow":
+        import tensorflow as tf
+
+        should_record_backprop = import_should_record_backprop()
+        return should_record_backprop([tf.convert_to_tensor(tensor)])
 
     if interface == "autograd":
         if isinstance(tensor, ArrayBox):
@@ -465,6 +521,7 @@ def requires_grad(tensor, interface=None):
         return False
 
     if interface == "jax":
+        import jax
 
         return isinstance(tensor, jax.core.Tracer)
 
@@ -472,8 +529,8 @@ def requires_grad(tensor, interface=None):
 
 
 def in_backprop(tensor, interface=None):
-    """Returns True if the tensor is considered to be in a backpropagation environment, it works for Autograd
-    and Jax. It is not only checking the differentiability of the tensor like :func:`~.requires_grad`, but
+    """Returns True if the tensor is considered to be in a backpropagation environment, it works for Autograd,
+    TensorFlow and Jax. It is not only checking the differentiability of the tensor like :func:`~.requires_grad`, but
     rather checking if the gradient is actually calculated.
 
     Args:
@@ -481,30 +538,30 @@ def in_backprop(tensor, interface=None):
         interface (str): The name of the interface. Will be determined automatically
             if not provided.
 
-    Returns:
-        bool: whether the tensor is in a backpropagation environment or not.
-
     **Example**
 
-    >>> from pennylane import numpy as np
-    >>> x = np.array(0.6, requires_grad=True)
-    >>> in_backprop(x)
+    >>> x = tf.Variable([0.6, 0.1])
+    >>> requires_grad(x)
     False
-    >>> def cost(x):
-    ...     print(in_backprop(x))
-    ...     return x ** 2
-    >>> qp.grad(cost)(x)
+    >>> with tf.GradientTape() as tape:
+    ...     print(requires_grad(x))
     True
-    tensor(1.2, requires_grad=True)
 
     .. seealso:: :func:`~.requires_grad`
     """
-    interface = interface or math.get_interface(tensor)
+    interface = interface or get_interface(tensor)
+
+    if interface == "tensorflow":
+        import tensorflow as tf
+
+        should_record_backprop = import_should_record_backprop()
+        return should_record_backprop([tf.convert_to_tensor(tensor)])
 
     if interface == "autograd":
         return isinstance(tensor, ArrayBox)
 
     if interface == "jax":
+        import jax
 
         return isinstance(tensor, jax.core.Tracer)
 
@@ -512,131 +569,3 @@ def in_backprop(tensor, interface=None):
         return False
 
     raise ValueError(f"Cannot determine if {tensor} is in backpropagation.")
-
-
-def ceil_log2(n: numbers.Real) -> int:
-    """Compute the ceiling of the base-2 logarithm of a number, with integer as output data type.
-
-    Args:
-        n (int or float): Number to compute the rounded-up base-2 logarithm of.
-            Traced inputs must have an integer data type.
-
-    Returns:
-        int: Rounded-up base-2 logarithm of ``n``.
-
-    .. warning::
-
-        Under just-in-time (JIT) compilation with JAX, this function will not raise an error
-        for the input ``0``:
-
-        >>> import jax
-        >>> jax.jit(qp.math.ceil_log2)(0)
-        Array(-2147483648, dtype=int32)
-
-    **Example**
-
-    On powers of two, ``ceil_log2`` simply acts like ``np.log2`` whose result was converted to
-    an ``int``:
-
-    >>> qp.math.ceil_log2(8)
-    3
-
-    On other numbers, the rounding of the logarithm becomes visible:
-
-    >>> qp.math.log2(14)
-    3.807354922057604
-    >>> qp.math.ceil_log2(14)
-    4
-
-    Note that we always round up:
-
-    >>> qp.math.round(qp.math.log2(9))
-    3.0
-    >>> qp.math.ceil_log2(9)
-    4
-
-    The result is exact even for inputs with more significant bits than a float can hold:
-
-    >>> qp.math.ceil_log2(2**53 + 1)
-    54
-
-    For simple ``int`` inputs, this function computes the same as ``(n - 1).bit_length()``, which
-    does not work for inputs like ``np.int64``.
-    """
-    if is_abstract(n):
-        # The ceiling exceeds the floor by one unless n is a power of two, which is the
-        # case if and only if n & (n - 1) vanishes
-        return floor_log2(n) + ((n & (n - 1)) != 0)
-    # np.log2 loses precision for inputs with more than 53 significant bits, so that its rounded
-    # result may be off by one. Comparing to the neighbouring powers of two corrects this.
-    exponent = int(np.ceil(np.log2(n)))
-    if (1 << exponent) < n:
-        return exponent + 1
-    return exponent
-
-
-def floor_log2(n: numbers.Real) -> int:
-    """Compute the floor of the base-2 logarithm of a number, with integer as output data type.
-
-    Args:
-        n (int or float): Number to compute the rounded-down base-2 logarithm of.
-            Traced inputs must have an integer data type.
-
-    Returns:
-        int: Rounded-down base-2 logarithm of ``n``.
-
-
-    .. warning::
-
-        Under just-in-time (JIT) compilation with JAX, this function will not raise an error
-        for the input ``0``:
-
-        >>> import jax
-        >>> jax.jit(qp.math.floor_log2)(0)
-        Array(2147483647, dtype=int32)
-
-    **Example**
-
-    On powers of two, ``floor_log2`` simply acts like ``np.log2`` whose result was converted to
-    an ``int``:
-
-    >>> qp.math.floor_log2(8)
-    3
-
-    On other numbers, the rounding of the logarithm becomes visible:
-
-    >>> qp.math.log2(14)
-    3.807354922057604
-    >>> qp.math.floor_log2(14)
-    3
-
-    Note that we always round down:
-
-    >>> qp.math.round(qp.math.log2(15))
-    4.0
-    >>> qp.math.floor_log2(15)
-    3
-
-    The result is exact even for inputs with more significant bits than a float can hold:
-
-    >>> qp.math.floor_log2(2**53 - 1)
-    52
-
-    For simple ``int`` inputs, this function computes the same as ``n.bit_length() - 1``, which
-    does not work for inputs like ``np.int64``.
-    """
-    # np.log2 loses precision for inputs with more than 53 significant bits, so that its rounded
-    # result may be off by one. Comparing to the neighbouring powers of two corrects this.
-    if is_abstract(n):
-        exponent = np.floor(np.log2(n)).astype(int)
-        # Shifting compares n to 2 ** exponent without forming the power itself, which could
-        # exceed the integer data type
-        shifted = n >> exponent
-        return exponent - (shifted == 0) + (shifted >= 2)
-
-    exponent = int(np.floor(np.log2(n)))
-    if (1 << (exponent + 1)) <= n:
-        return exponent + 1
-    if (1 << exponent) > n:
-        return exponent - 1
-    return exponent

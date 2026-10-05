@@ -14,13 +14,13 @@
 """
 Unit tests for functions needed for computing the spin observables.
 """
-
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import Identity, PauliX, PauliY, PauliZ
 from pennylane import numpy as np
-from pennylane import qchem, simplify
+from pennylane import qchem
+from pennylane.operation import enable_new_opmath, disable_new_opmath
 
 
 @pytest.mark.parametrize(
@@ -174,15 +174,18 @@ def test_spin2(electrons, orbitals, coeffs_ref, ops_ref):
     built by the function `'spin2'`.
     """
     s2 = qchem.spin.spin2(electrons, orbitals)
-    sops = list(map(simplify, ops_ref))
-    s2_ref = qp.dot(coeffs_ref, sops)
-    qp.assert_equal(s2_ref, s2)
-    assert isinstance(s2, qp.ops.Sum)
+    s2_ref = qml.Hamiltonian(coeffs_ref, ops_ref)
+    assert s2.compare(s2_ref)
+
+    enable_new_opmath()
+    s2_pl_op = qchem.spin.spin2(electrons, orbitals)
+    disable_new_opmath()
 
     wire_order = s2_ref.wires
+    assert not isinstance(s2_pl_op, qml.Hamiltonian)
     assert np.allclose(
-        qp.matrix(s2, wire_order=wire_order),
-        qp.matrix(s2_ref, wire_order=wire_order),
+        qml.matrix(s2_pl_op, wire_order=wire_order),
+        qml.matrix(s2_ref, wire_order=wire_order),
     )
 
 
@@ -230,14 +233,19 @@ def test_spinz(orbitals, coeffs_ref, ops_ref):
     function `'spin_z'`.
     """
     sz = qchem.spin.spinz(orbitals)
-    sz_ref = qp.dot(coeffs_ref, ops_ref)
-    assert sz_ref == (sz)
-    assert isinstance(sz, qp.ops.Sum)
+    sz_ref = qml.Hamiltonian(coeffs_ref, ops_ref)
+    assert sz.compare(sz_ref)
+
+    enable_new_opmath()
+    sz_pl_op = qchem.spin.spinz(orbitals)
+    disable_new_opmath()
+    sz_ref_pl_op = qml.dot(coeffs_ref, ops_ref)
 
     wire_order = sz_ref.wires
+    assert not isinstance(sz_pl_op, qml.Hamiltonian)
     assert np.allclose(
-        qp.matrix(sz, wire_order=wire_order),
-        qp.matrix(sz_ref, wire_order=wire_order),
+        qml.matrix(sz_pl_op, wire_order=wire_order),
+        qml.matrix(sz_ref_pl_op, wire_order=wire_order),
     )
 
 

@@ -15,7 +15,7 @@
 
 import pytest
 
-from pennylane.fermi.fermionic import FermiA, FermiC, FermiWord
+from pennylane.fermi.fermionic import FermiWord, FermiC, FermiA
 
 # pylint: disable=too-few-public-methods
 

@@ -16,13 +16,8 @@ State preperations are templates that prepare a given quantum state,
 by decomposing it into elementary operations.
 """
 
-from .arbitrary_state_preparation import ArbitraryStatePreparation
-from .cosine_window import CosineWindow
 from .mottonen import MottonenStatePreparation
-from .superposition import Superposition, order_states
-from .qrom_state_prep import QROMStatePreparation
-from .state_prep_mps import MPSPrep, right_canonicalize_mps
-from .multiplexer_state_prep import MultiplexerStatePreparation
-from .sum_of_slaters import SumOfSlatersPrep, compute_sos_encoding, select_sos_rows
-from .partial_unary import PartialUnaryStatePreparation, PUIsometryFinder
-from .phase_gradient import PhaseGradientStatePrep
+from .basis import BasisStatePreparation
+from .arbitrary_state_preparation import ArbitraryStatePreparation
+from .basis_qutrit import QutritBasisStatePreparation
+from .cosine_window import CosineWindow

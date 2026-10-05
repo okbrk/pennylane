@@ -16,22 +16,10 @@
 This submodule contains the template for Amplitude Amplification.
 """
 
-# pylint: disable-msg=too-many-arguments,too-many-positional-arguments
-import copy
-
+# pylint: disable-msg=too-many-arguments
 import numpy as np
-
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation, abstractify
-from pennylane.core.queuing import QueuingManager, apply
-from pennylane.decomposition import add_decomps, register_resources, resource_rep
-from pennylane.ops import Hadamard, PhaseShift
-from pennylane.ops.op_math import ctrl
-from pennylane.ops.op_math.controlled2 import _ctrl_abstract
-from pennylane.typing import Wire
-from pennylane.wires import WireError, Wires
-
-from .reflection import Reflection
+from pennylane.operation import Operation
+import pennylane as qml
 
 
 def _get_fixed_point_angles(iters, p_min):
@@ -44,7 +32,7 @@ def _get_fixed_point_angles(iters, p_min):
     gamma = np.cos(np.arccos(1 / delta, dtype=np.complex128) / iters, dtype=np.complex128) ** -1
 
     alphas = [
-        np.real(2 * np.arctan(1 / (np.tan(2 * np.pi * j / iters) * np.sqrt(1 - gamma**2))))
+        2 * np.arctan(1 / (np.tan(2 * np.pi * j / iters) * np.sqrt(1 - gamma**2)))
         for j in range(1, iters // 2 + 1)
     ]
     betas = [-alphas[-j] for j in range(1, iters // 2 + 1)]
@@ -84,56 +72,44 @@ class AmplitudeAmplification(Operation):
     Amplification of state :math:`|2\rangle` using Grover's algorithm with 3 qubits.
     The state :math:`|\Psi\rangle` is constructed as a uniform superposition of basis states.
 
-    .. code-block:: python
+    .. code-block::
 
-        @qp.prod
+        @qml.prod
         def generator(wires):
             for wire in wires:
-                qp.Hadamard(wires=wire)
+                qml.Hadamard(wires=wire)
 
         U = generator(wires=range(3))
-        O = qp.FlipSign(2, wires=range(3))
+        O = qml.FlipSign(2, wires=range(3))
 
-        dev = qp.device("default.qubit")
+        dev = qml.device("default.qubit")
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
 
             generator(wires=range(3))
-            qp.AmplitudeAmplification(U, O, iters=5, fixed_point=True, work_wire=3)
+            qml.AmplitudeAmplification(U, O, iters=5, fixed_point=True, work_wire=3)
 
-            return qp.probs(wires=range(3))
+            return qml.probs(wires=range(3))
 
-    >>> print(np.round(circuit(),3))
-    [0.013 0.013 0.91  0.013 0.013 0.013 0.013 0.013]
+    .. code-block:: pycon
+
+        >>> print(np.round(circuit(),3))
+        [0.013, 0.013, 0.91, 0.013, 0.013, 0.013, 0.013, 0.013]
     """
-
-    grad_method = None
-
-    resource_keys = {"fixed_point", "O", "iters", "num_reflection_wires", "U"}
 
     def _flatten(self):
         data = (self.hyperparameters["U"], self.hyperparameters["O"])
-        metadata = tuple(item for item in self.hyperparameters.items() if item[0] not in ["O", "U"])
+        metadata = tuple(
+            (key, value) for key, value in self.hyperparameters.items() if key not in ["O", "U"]
+        )
         return data, metadata
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "fixed_point": self.hyperparameters["fixed_point"],
-            "O": self.hyperparameters["O"],
-            "iters": self.hyperparameters["iters"],
-            "num_reflection_wires": len(self.hyperparameters["reflection_wires"]),
-            "U": self.hyperparameters["U"],
-        }
-
-    @classmethod
-    def _primitive_bind_call(cls, *args, **kwargs):
-        return cls._primitive.bind(*args, **kwargs)
 
     @classmethod
     def _unflatten(cls, data, metadata):
-        return cls(*data, **dict(metadata))
+        U, O = (data[0], data[1])
+        hyperparams_dict = dict(metadata)
+        return cls(U, O, **hyperparams_dict)
 
     def __init__(
         self, U, O, iters=1, fixed_point=False, work_wire=None, p_min=0.9, reflection_wires=None
@@ -143,13 +119,13 @@ class AmplitudeAmplification(Operation):
             reflection_wires = U.wires
 
         if fixed_point and work_wire is None:
-            raise WireError("work_wire must be specified if fixed_point == True.")
+            raise qml.wires.WireError("work_wire must be specified if fixed_point == True.")
 
-        if fixed_point and len(O.wires + Wires(work_wire)) == len(O.wires):
+        if fixed_point and len(O.wires + qml.wires.Wires(work_wire)) == len(O.wires):
             raise ValueError("work_wire must be different from the wires of O.")
 
         if fixed_point:
-            wires = U.wires + Wires(work_wire)
+            wires = U.wires + qml.wires.Wires(work_wire)
         else:
             wires = U.wires
 
@@ -159,12 +135,13 @@ class AmplitudeAmplification(Operation):
         self.hyperparameters["fixed_point"] = fixed_point
         self.hyperparameters["work_wire"] = work_wire
         self.hyperparameters["p_min"] = p_min
-        self.hyperparameters["reflection_wires"] = Wires(reflection_wires)
+        self.hyperparameters["reflection_wires"] = qml.wires.Wires(reflection_wires)
 
-        super().__init__(*U.data, *O.data, wires=wires)
+        super().__init__(wires=wires)
 
+    # pylint:disable=arguments-differ
     @staticmethod
-    def compute_decomposition(*_, **kwargs):
+    def compute_decomposition(**kwargs):
         U = kwargs["U"]
         O = kwargs["O"]
         iters = kwargs["iters"]
@@ -178,117 +155,25 @@ class AmplitudeAmplification(Operation):
         if fixed_point:
             alphas, betas = _get_fixed_point_angles(iters, p_min)
 
-            for it in range(iters // 2):
-                ops.append(Hadamard(wires=work_wire))
-                ops.append(ctrl(O, control=work_wire))
-                ops.append(Hadamard(wires=work_wire))
-                ops.append(PhaseShift(betas[it], wires=work_wire))
-                ops.append(Hadamard(wires=work_wire))
-                ops.append(ctrl(O, control=work_wire))
-                ops.append(Hadamard(wires=work_wire))
+            for iter in range(iters // 2):
+                ops.append(qml.Hadamard(wires=work_wire))
+                ops.append(qml.ctrl(O, control=work_wire))
+                ops.append(qml.Hadamard(wires=work_wire))
+                ops.append(qml.PhaseShift(betas[iter], wires=work_wire))
+                ops.append(qml.Hadamard(wires=work_wire))
+                ops.append(qml.ctrl(O, control=work_wire))
+                ops.append(qml.Hadamard(wires=work_wire))
 
-                ops.append(Reflection(U, -alphas[it], reflection_wires=reflection_wires))
+                ops.append(qml.Reflection(U, -alphas[iter], reflection_wires=reflection_wires))
         else:
             for _ in range(iters):
                 ops.append(O)
-                if QueuingManager.recording():
-                    apply(O)
-                ops.append(Reflection(U, np.pi, reflection_wires=reflection_wires))
+                ops.append(qml.Reflection(U, np.pi, reflection_wires=reflection_wires))
 
         return ops
 
-    def map_wires(self, wire_map: dict):
-        # pylint: disable=protected-access
-        new_op = copy.deepcopy(self)
-        new_op._wires = Wires([wire_map.get(wire, wire) for wire in self.wires])
-        new_op._hyperparameters["U"] = new_op._hyperparameters["U"].map_wires(wire_map)
-        new_op._hyperparameters["O"] = new_op._hyperparameters["O"].map_wires(wire_map)
-        new_op._hyperparameters["reflection_wires"] = Wires(
-            [wire_map.get(wire, wire) for wire in new_op._hyperparameters["reflection_wires"]]
-        )
-        new_op._hyperparameters["work_wire"] = wire_map.get(
-            w := new_op._hyperparameters["work_wire"], w
-        )
-        return new_op
-
-    def queue(self, context=QueuingManager):
+    def queue(self, context=qml.QueuingManager):
         for op in [self.hyperparameters["U"], self.hyperparameters["O"]]:
             context.remove(op)
         context.append(self)
         return self
-
-
-def _amplitude_amplification_resources(fixed_point, O, iters, num_reflection_wires, U):
-    resources = {}
-
-    if fixed_point and iters // 2 > 0:
-
-        resources[Hadamard] = 4 * (iters // 2)
-        resources[_ctrl_abstract(O, Wire[1])] = 2 * (iters // 2)
-        resources[PhaseShift] = iters // 2
-        resources[
-            resource_rep(
-                Reflection,
-                base_rep=abstractify(U),
-                num_wires=len(U.wires),
-                num_reflection_wires=num_reflection_wires,
-            )
-        ] = (
-            iters // 2
-        )
-    elif not fixed_point and iters > 0:
-        resources[abstractify(O)] = iters
-        resources[
-            resource_rep(
-                Reflection,
-                base_rep=abstractify(U),
-                num_wires=len(U.wires),
-                num_reflection_wires=num_reflection_wires,
-            )
-        ] = iters
-
-    return resources
-
-
-@register_resources(_amplitude_amplification_resources)
-def _amplitude_amplification_decomposition(
-    *_, U, O, iters, fixed_point, work_wire, p_min, reflection_wires, **__
-):
-
-    delta = np.sqrt(1 - p_min)
-    gamma = np.cos(np.arccos(1 / delta, dtype=np.complex128) / iters, dtype=np.complex128) ** -1
-
-    if fixed_point:
-
-        def alpha(it):
-            return np.real(
-                2 * np.arctan(1 / (np.tan(2 * np.pi * it / iters) * np.sqrt(1 - gamma**2)))
-            )
-
-        def beta(it):
-            return -alpha(iters // 2 + 1 - it)
-
-        @for_loop(1, iters // 2 + 1)
-        def half_iter_loop(it):
-            Hadamard(wires=work_wire)
-            ctrl(O, control=work_wire)
-            Hadamard(wires=work_wire)
-            PhaseShift(beta(it), wires=work_wire)
-            Hadamard(wires=work_wire)
-            ctrl(O, control=work_wire)
-            Hadamard(wires=work_wire)
-
-            Reflection(U, -alpha(it), reflection_wires=reflection_wires)
-
-        half_iter_loop()  # pylint: disable=no-value-for-parameter
-    else:
-
-        @for_loop(iters)
-        def iter_loop(_):
-            apply(O)
-            Reflection(U, np.pi, reflection_wires=reflection_wires)
-
-        iter_loop()  # pylint: disable=no-value-for-parameter
-
-
-add_decomps(AmplitudeAmplification, _amplitude_amplification_decomposition)

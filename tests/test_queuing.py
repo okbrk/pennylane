@@ -14,55 +14,58 @@
 """
 Unit tests for the :mod:`pennylane` :class:`QueuingManager` class.
 """
-
 from multiprocessing.dummy import Pool as ThreadPool
-
-import numpy as np
 import pytest
+import numpy as np
+import pennylane as qml
 
-import pennylane as qp
-from pennylane.core.queuing import AnnotatedQueue, QueuingManager, WrappedObj
-from pennylane.exceptions import QueuingError
+from pennylane.queuing import (
+    AnnotatedQueue,
+    QueuingManager,
+    QueuingError,
+    WrappedObj,
+)
 
 
-# pylint: disable=use-implicit-booleaness-not-comparison, unnecessary-dunder-call
 class TestStopRecording:
     """Test the stop_recording method of QueuingManager."""
 
     def test_stop_recording_on_function_inside_QNode(self):
         """Test that the stop_recording transform when applied to a function
         is not recorded by a QNode"""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
         @QueuingManager.stop_recording()
         def my_op():
-            return [qp.RX(0.123, wires=0), qp.RY(2.32, wires=0), qp.RZ(1.95, wires=0)]
+            return [qml.RX(0.123, wires=0), qml.RY(2.32, wires=0), qml.RZ(1.95, wires=0)]
 
         res = []
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def my_circuit():
             res.extend(my_op())
-            return qp.expval(qp.PauliZ(0))
+            return qml.expval(qml.PauliZ(0))
 
-        tape = qp.workflow.construct_tape(my_circuit)()
+        my_circuit.construct([], {})
+        tape = my_circuit.qtape
 
         assert len(tape.operations) == 0
         assert len(res) == 3
 
     def test_stop_recording_directly_on_op(self):
         """Test that stop_recording transform works when directly applied to an op"""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
         res = []
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def my_circuit():
-            op1 = QueuingManager.stop_recording()(qp.RX)(np.pi / 4.0, wires=0)
-            op2 = qp.RY(np.pi / 4.0, wires=0)
+            op1 = QueuingManager.stop_recording()(qml.RX)(np.pi / 4.0, wires=0)
+            op2 = qml.RY(np.pi / 4.0, wires=0)
             res.extend([op1, op2])
-            return qp.expval(qp.PauliZ(0))
+            return qml.expval(qml.PauliZ(0))
 
-        tape = qp.workflow.construct_tape(my_circuit)()
+        my_circuit.construct([], {})
+        tape = my_circuit.qtape
 
         assert len(tape.operations) == 1
         assert tape.operations[0] == res[1]
@@ -75,43 +78,61 @@ class TestStopRecording:
         @QueuingManager.stop_recording()
         def my_op():
             return [
-                qp.RX(0.123, wires=0),
-                qp.RY(2.32, wires=0),
-                qp.RZ(1.95, wires=0),
+                qml.RX(0.123, wires=0),
+                qml.RY(2.32, wires=0),
+                qml.RZ(1.95, wires=0),
             ]
 
         # the stop_recording function will still work outside of any queuing contexts
         res = my_op()
         assert len(res) == 3
 
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def my_circuit():
             my_op()
 
             with QueuingManager.stop_recording():
-                qp.PauliX(wires=0)
+                qml.PauliX(wires=0)
                 my_op()
 
-            qp.Hadamard(wires=0)
+            qml.Hadamard(wires=0)
             my_op()
-            return qp.state()
+            return qml.state()
 
-        tape = qp.workflow.construct_tape(my_circuit)()
+        my_circuit.construct([], {})
+        tape = my_circuit.qtape
 
         assert len(tape.operations) == 1
         assert tape.operations[0].name == "Hadamard"
 
+    def test_stop_recording_qnode_qfunc(self):
+        """A QNode with a stop_recording qfunc will result in no quantum measurements."""
+        dev = qml.device("default.qubit", wires=1)
+
+        @qml.qnode(dev)
+        @QueuingManager.stop_recording()
+        def my_circuit():
+            qml.PauliX(wires=0)
+            return qml.expval(qml.PauliZ(0))
+
+        result = my_circuit()
+        assert len(result) == 0
+
+        tape = my_circuit.qtape
+        assert len(tape.operations) == 0
+        assert len(tape.measurements) == 0
+
     def test_stop_recording_qnode(self):
         """A stop_recording QNode is unaffected"""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
         @QueuingManager.stop_recording()
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def my_circuit():
-            qp.RX(np.pi, wires=0)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(np.pi, wires=0)
+            return qml.expval(qml.PauliZ(0))
 
         result = my_circuit()
         assert result == -1.0
@@ -132,12 +153,12 @@ class TestQueuingManager:
     def test_append_no_context(self):
         """Test that append does not fail when no context is present."""
 
-        QueuingManager.append(qp.PauliZ(0))
+        QueuingManager.append(qml.PauliZ(0))
 
     def test_remove_no_context(self):
         """Test that remove does not fail when no context is present."""
 
-        QueuingManager.remove(qp.PauliZ(0))
+        QueuingManager.remove(qml.PauliZ(0))
 
     def test_no_active_context(self):
         """Test that if there are no active contexts, active_context() returns None"""
@@ -151,17 +172,17 @@ class TestAnnotatedQueue:
         """Test that remove passes silently if the object is not in the queue"""
 
         q2 = AnnotatedQueue()
-        q2.remove(qp.PauliX(0))
+        q2.remove(qml.PauliX(0))
 
     def test_append_qubit_gates(self):
         """Test that gates are successfully appended to the queue."""
         with AnnotatedQueue() as q:
             ops = [
-                qp.RX(0.5, wires=0),
-                qp.RY(-10.1, wires=1),
-                qp.CNOT(wires=[0, 1]),
-                qp.PhaseShift(-1.1, wires=18),
-                qp.T(wires=99),
+                qml.RX(0.5, wires=0),
+                qml.RY(-10.1, wires=1),
+                qml.CNOT(wires=[0, 1]),
+                qml.PhaseShift(-1.1, wires=18),
+                qml.T(wires=99),
             ]
         assert q.queue == ops
 
@@ -172,27 +193,38 @@ class TestAnnotatedQueue:
             # wire repetition is deliberate, Queue contains no checks/logic
             # for circuits
             ops = [
-                qp.Hadamard(wires=0),
-                qp.PauliX(wires=1),
-                qp.PauliY(wires=1),
-                qp.Hermitian(np.ones([2, 2]), wires=7),
+                qml.Hadamard(wires=0),
+                qml.PauliX(wires=1),
+                qml.PauliY(wires=1),
+                qml.Hermitian(np.ones([2, 2]), wires=7),
             ]
         assert q.queue == ops
 
-    def test_append_prod_ops_overloaded(self):
-        """Test that Prod ops created using `@`
-        are successfully added to the queue, as well as the `Prod` object."""
+    def test_append_tensor_ops(self):
+        """Test that ops which are used as inputs to `Tensor`
+        are successfully added to the queue, as well as the `Tensor` object."""
 
         with AnnotatedQueue() as q:
-            A = qp.PauliZ(0)
-            B = qp.PauliY(1)
-            prod_op = A @ B
-        assert q.queue == [prod_op]
-        assert prod_op.operands == (A, B)
+            A = qml.PauliZ(0)
+            B = qml.PauliY(1)
+            tensor_op = qml.operation.Tensor(A, B)
+        assert q.queue == [tensor_op]
+        assert tensor_op.obs == [A, B]
+
+    def test_append_tensor_ops_overloaded(self):
+        """Test that Tensor ops created using `@`
+        are successfully added to the queue, as well as the `Tensor` object."""
+
+        with AnnotatedQueue() as q:
+            A = qml.PauliZ(0)
+            B = qml.PauliY(1)
+            tensor_op = A @ B
+        assert q.queue == [tensor_op]
+        assert tensor_op.obs == [A, B]
 
     def test_get_info(self):
         """Test that get_info correctly returns an annotation"""
-        A = qp.RZ(0.5, wires=1)
+        A = qml.RZ(0.5, wires=1)
 
         with AnnotatedQueue() as q:
             q.append(A, inv=True)
@@ -204,16 +236,16 @@ class TestAnnotatedQueue:
         for a non-existent object"""
 
         with AnnotatedQueue() as q:
-            qp.PauliZ(0)
+            qml.PauliZ(0)
 
-        B = qp.PauliY(1)
+        B = qml.PauliY(1)
 
         with pytest.raises(QueuingError, match="not in the queue"):
             q.get_info(B)
 
     def test_get_info_none(self):
         """Test that get_info returns None if there is no active queuing context"""
-        A = qp.RZ(0.5, wires=1)
+        A = qml.RZ(0.5, wires=1)
 
         with AnnotatedQueue() as q:
             q.append(A, inv=True)
@@ -222,7 +254,7 @@ class TestAnnotatedQueue:
 
     def test_update_info(self):
         """Test that update_info correctly updates an annotation"""
-        A = qp.RZ(0.5, wires=1)
+        A = qml.RZ(0.5, wires=1)
 
         with AnnotatedQueue() as q:
             q.append(A, inv=True)
@@ -243,12 +275,22 @@ class TestAnnotatedQueue:
         for a non-existent object."""
 
         with AnnotatedQueue() as q:
-            qp.PauliZ(0)
+            qml.PauliZ(0)
 
-        B = qp.PauliY(1)
+        B = qml.PauliY(1)
 
         q.update_info(B, inv=True)
         assert len(q.queue) == 1
+
+    def test_append_annotating_object(self):
+        """Test appending an object that writes annotations when queuing itself"""
+
+        with AnnotatedQueue() as q:
+            A = qml.PauliZ(0)
+            B = qml.PauliY(1)
+            tensor_op = qml.operation.Tensor(A, B)
+
+        assert q.queue == [tensor_op]
 
     def test_parallel_queues_are_isolated(self):
         """Tests that parallel queues do not queue each other's constituents."""
@@ -262,7 +304,7 @@ class TestAnnotatedQueue:
                 for _ in range(n):
                     pauli(0)
 
-        args = [(q1, qp.PauliX), (q2, qp.PauliY)]
+        args = [(q1, qml.PauliX), (q2, qml.PauliY)]
         ThreadPool(2).map(queue_pauli, args)
         assert len(q1) == n
         assert len(q2) == n
@@ -271,8 +313,12 @@ class TestAnnotatedQueue:
 
 
 test_observables = [
-    qp.PauliZ(0) @ qp.PauliZ(1),
-    qp.Hamiltonian([0.1, 0.2, 0.3], [qp.PauliZ(0) @ qp.PauliZ(1), qp.PauliY(1), qp.Identity(2)]),
+    qml.PauliZ(0) @ qml.PauliZ(1),
+    qml.operation.Tensor(qml.PauliZ(0), qml.PauliX(1)),
+    qml.operation.Tensor(qml.PauliZ(0), qml.PauliX(1)) @ qml.Hadamard(2),
+    qml.Hamiltonian(
+        [0.1, 0.2, 0.3], [qml.PauliZ(0) @ qml.PauliZ(1), qml.PauliY(1), qml.Identity(2)]
+    ),
 ]
 
 
@@ -283,39 +329,39 @@ class TestApplyOp:
         """Test that applying an operation without an active
         context raises an error"""
         with pytest.raises(RuntimeError, match="No queuing context"):
-            qp.apply(qp.PauliZ(0))
+            qml.apply(qml.PauliZ(0))
 
     def test_default_queue_operation_inside(self):
         """Test applying an operation instantiated within the queuing
         context to the existing active queue"""
-        with qp.queuing.AnnotatedQueue() as q:
-            op1 = qp.PauliZ(0)
-            op2 = qp.apply(op1)
+        with qml.queuing.AnnotatedQueue() as q:
+            op1 = qml.PauliZ(0)
+            op2 = qml.apply(op1)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         assert tape.operations == [op1, op2]
 
     def test_default_queue_operation_outside(self):
         """Test applying an operation instantiated outside a queuing context
         to an existing active queue"""
-        op = qp.PauliZ(0)
+        op = qml.PauliZ(0)
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.apply(op)
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.apply(op)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         assert tape.operations == [op]
 
     @pytest.mark.parametrize("obs", test_observables)
     def test_default_queue_measurements_outside(self, obs):
         """Test applying a measurement instantiated outside a queuing context
         to an existing active queue"""
-        op = qp.expval(obs)
+        op = qml.expval(obs)
 
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.apply(op)
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.apply(op)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         assert tape.measurements == [op]
 
     @pytest.mark.parametrize("obs", test_observables)
@@ -323,37 +369,37 @@ class TestApplyOp:
         """Test applying a measurement instantiated inside a queuing context
         to an existing active queue"""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            op1 = qp.expval(obs)
-            op2 = qp.apply(op1)
+        with qml.queuing.AnnotatedQueue() as q:
+            op1 = qml.expval(obs)
+            op2 = qml.apply(op1)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q)
         assert tape.measurements == [op1, op2]
 
     def test_different_queue_operation_inside(self):
         """Test applying an operation instantiated within the queuing
         context to a specfied queuing context"""
-        with qp.queuing.AnnotatedQueue() as q1:
-            with qp.queuing.AnnotatedQueue() as q2:
-                op1 = qp.PauliZ(0)
-                op2 = qp.apply(op1, q1)
+        with qml.queuing.AnnotatedQueue() as q1:
+            with qml.queuing.AnnotatedQueue() as q2:
+                op1 = qml.PauliZ(0)
+                op2 = qml.apply(op1, q1)
 
-            tape2 = qp.tape.QuantumScript.from_queue(q2)
-        tape1 = qp.tape.QuantumScript.from_queue(q1)
+            tape2 = qml.tape.QuantumScript.from_queue(q2)
+        tape1 = qml.tape.QuantumScript.from_queue(q1)
         assert tape1.operations == [op2]
         assert tape2.operations == [op1]
 
     def test_different_queue_operation_outside(self):
         """Test applying an operation instantiated outside a queuing context
         to a specfied queuing context"""
-        op = qp.PauliZ(0)
+        op = qml.PauliZ(0)
 
-        with qp.queuing.AnnotatedQueue() as q1:
-            with qp.queuing.AnnotatedQueue() as q2:
-                qp.apply(op, q1)
+        with qml.queuing.AnnotatedQueue() as q1:
+            with qml.queuing.AnnotatedQueue() as q2:
+                qml.apply(op, q1)
 
-            tape2 = qp.tape.QuantumScript.from_queue(q2)
-        tape1 = qp.tape.QuantumScript.from_queue(q1)
+            tape2 = qml.tape.QuantumScript.from_queue(q2)
+        tape1 = qml.tape.QuantumScript.from_queue(q1)
         assert tape1.operations == [op]
         assert tape2.operations == []
 
@@ -361,14 +407,14 @@ class TestApplyOp:
     def test_different_queue_measurements_outside(self, obs):
         """Test applying a measurement instantiated outside a queuing context
         to a specfied queuing context"""
-        op = qp.expval(obs)
+        op = qml.expval(obs)
 
-        with qp.queuing.AnnotatedQueue() as q1:
-            with qp.queuing.AnnotatedQueue() as q2:
-                qp.apply(op, q1)
+        with qml.queuing.AnnotatedQueue() as q1:
+            with qml.queuing.AnnotatedQueue() as q2:
+                qml.apply(op, q1)
 
-            tape2 = qp.tape.QuantumScript.from_queue(q2)
-        tape1 = qp.tape.QuantumScript.from_queue(q1)
+            tape2 = qml.tape.QuantumScript.from_queue(q2)
+        tape1 = qml.tape.QuantumScript.from_queue(q1)
         assert tape1.measurements == [op]
         assert tape2.measurements == []
 
@@ -377,160 +423,41 @@ class TestApplyOp:
         """Test applying a measurement instantiated inside a queuing context
         to a specfied queuing context"""
 
-        with qp.queuing.AnnotatedQueue() as q1:
-            with qp.queuing.AnnotatedQueue() as q2:
-                op1 = qp.expval(obs)
-                op2 = qp.apply(op1, q1)
+        with qml.queuing.AnnotatedQueue() as q1:
+            with qml.queuing.AnnotatedQueue() as q2:
+                op1 = qml.expval(obs)
+                op2 = qml.apply(op1, q1)
 
-            tape2 = qp.tape.QuantumScript.from_queue(q2)
-        tape1 = qp.tape.QuantumScript.from_queue(q1)
+            tape2 = qml.tape.QuantumScript.from_queue(q2)
+        tape1 = qml.tape.QuantumScript.from_queue(q1)
         assert tape1.measurements == [op2]
         assert tape2.measurements == [op1]
 
     def test_apply_no_queue_method(self):
         """Test that an object with no queue method is still
         added to the queuing context"""
-        with qp.queuing.AnnotatedQueue() as q1:
-            with qp.queuing.AnnotatedQueue() as q2:
-                op1 = qp.apply(5)
-                op2 = qp.apply(6, q1)
+        with qml.queuing.AnnotatedQueue() as q1:
+            with qml.queuing.AnnotatedQueue() as q2:
+                op1 = qml.apply(5)
+                op2 = qml.apply(6, q1)
 
+            tape2 = qml.tape.QuantumScript.from_queue(q2)
+        tape1 = qml.tape.QuantumScript.from_queue(q1)
         assert q1.queue == [op2]
         assert q2.queue == [op1]
 
-    def test_apply_plus_dequeuing(self):
-        """Test that operations queued with qp.apply don't get dequeued by subsequent ops."""
-
-        h = qp.H(0)
-        with qp.queuing.AnnotatedQueue() as q1:
-            op1 = qp.apply(h)
-            op2 = qp.adjoint(h)
-
-        assert q1.queue == [op1, op2]
-
-    @pytest.mark.capture
-    def test_global_op_used_in_two_different_captures(self):
-        """Regression test for a global operator used by two different workflows."""
-        import jax
-
-        global_op = qp.X(0)
-
-        def workflow1():
-            qp.apply(global_op)
-
-        def workflow2():
-            qp.apply(global_op)
-            qp.adjoint(global_op)
-
-        cjaxpr1 = jax.make_jaxpr(workflow1)()
-        assert global_op.tracer is None
-        assert [e.params["op_cls"] for e in cjaxpr1.eqns] == [qp.X]
-
-        cjaxpr2 = jax.make_jaxpr(workflow2)()
-        assert global_op.tracer is None
-        assert [(e.params["op_cls"], e.params["adjoint"]) for e in cjaxpr2.eqns] == [
-            (qp.X, False),
-            (qp.X, True),
-        ]
-
-    @pytest.mark.capture
-    def test_apply_returns_a_copy(self):
-        """Test that 'apply' will return a new object, not the operator it was given."""
-        import jax
-
-        results = {}
-
-        def f():
-            op = qp.X(0)
-            results["is_same"] = qp.apply(op) is op
-
-        _ = jax.make_jaxpr(f)()
-        assert results["is_same"] is False
-
-    @pytest.mark.capture
-    def test_apply_does_not_bind_input_operator(self):
-        """Test that apply does not leave its tracer on the caller's operator."""
-        import jax
-
-        op = qp.X(0)
-        assert op.tracer is None
-
-        _ = jax.make_jaxpr(lambda: qp.apply(op))()
-
-        assert op.tracer is None
-
-    @pytest.mark.capture
-    def test_apply_raises_outside_a_trace_for_prev_traced_op(self):
-        """Tests that a stale tracer from an earlier trace doesn't satisfy the guard."""
-
-        import jax
-
-        op = qp.X(0)
-        _ = jax.make_jaxpr(lambda: qp.apply(op))()
-
-        with pytest.raises(RuntimeError, match="non-tracing context"):
-            qp.apply(op)
-
-    @pytest.mark.capture
-    def test_apply_then_adjoint(self):
-        """Tests that apply and then adjoint records both properly."""
-
-        import jax
-
-        op = qp.X(0)
-
-        def f():
-            qp.apply(op)
-            qp.adjoint(op)
-
-        cjaxpr = jax.make_jaxpr(f)()
-
-        assert len(cjaxpr.eqns) == 2
-        info = [(eqn.params["op_cls"], bool(eqn.params["adjoint"])) for eqn in cjaxpr.eqns]
-        assert info == [(qp.X, False), (qp.X, True)]
-
-    @pytest.mark.capture
-    def test_apply_then_ctrl(self):
-        """Tests that apply and then ctrl records both properly."""
-
-        import jax
-
-        op = qp.X(0)
-
-        def f():
-            qp.apply(op)
-            qp.ctrl(op, control=1)
-
-        cjaxpr = jax.make_jaxpr(f)()
-
-        assert len(cjaxpr.eqns) == 2
-        info = [eqn.params["op_cls"] for eqn in cjaxpr.eqns]
-        # C(PauliX) automatically gets dispatched to CNOT
-        assert info == [qp.X, qp.CNOT]
-
-    @pytest.mark.capture
-    def test_apply_twice(self):
-        """Tests that apply can be applied twice."""
-
-        import jax
-
-        op = qp.X(0)
-
-        def f():
-            qp.apply(op)
-            qp.apply(op)
-
-        cjaxpr = jax.make_jaxpr(f)()
-
-        assert len(cjaxpr.eqns) == 2
-        info = [eqn.params["op_cls"] for eqn in cjaxpr.eqns]
-        assert info == [qp.X, qp.X]
+        # note that tapes don't know how to process integers,
+        # so they are not included after queue processing
+        assert tape1.operations == []
+        assert tape2.operations == []
 
 
 class TestWrappedObj:
     """Tests for the ``WrappedObj`` class"""
 
-    @pytest.mark.parametrize("obj", [qp.PauliX(0), qp.expval(qp.PauliZ(0)), [0, 1, 2], ("a", "b")])
+    @pytest.mark.parametrize(
+        "obj", [qml.PauliX(0), qml.expval(qml.PauliZ(0)), [0, 1, 2], ("a", "b")]
+    )
     def test_wrapped_obj_init(self, obj):
         """Test that ``WrappedObj`` is initialized correctly"""
         wo = WrappedObj(obj)
@@ -538,7 +465,7 @@ class TestWrappedObj:
 
     @pytest.mark.parametrize(
         "obj1, obj2",
-        [(qp.PauliX(0), qp.PauliZ(0)), (qp.PauliX(0), qp.PauliX(0)), ((1,), (1, 2))],
+        [(qml.PauliX(0), qml.PauliZ(0)), (qml.PauliX(0), qml.PauliX(0)), ((1,), (1, 2))],
     )
     def test_wrapped_obj_eq_false(self, obj1, obj2):
         """Test that ``WrappedObj.__eq__`` returns False when expected."""
@@ -549,16 +476,18 @@ class TestWrappedObj:
     def test_wrapped_obj_eq_false_other_obj(self):
         """Test that WrappedObj.__eq__ returns False when the object being compared is not
         a WrappedObj."""
-        op = qp.PauliX(0)
+        op = qml.PauliX(0)
         wo = WrappedObj(op)
         assert wo != op
 
     def test_wrapped_obj_eq_true(self):
         """Test that ``WrappedObj.__eq__`` returns True when expected."""
-        op = qp.PauliX(0)
+        op = qml.PauliX(0)
         assert WrappedObj(op) == WrappedObj(op)
 
-    @pytest.mark.parametrize("obj", [qp.PauliX(0), qp.expval(qp.PauliZ(0)), [0, 1, 2], ("a", "b")])
+    @pytest.mark.parametrize(
+        "obj", [qml.PauliX(0), qml.expval(qml.PauliZ(0)), [0, 1, 2], ("a", "b")]
+    )
     def test_wrapped_obj_hash(self, obj):
         """Test that ``WrappedObj.__hash__`` is the object id."""
         wo = WrappedObj(obj)
@@ -577,17 +506,3 @@ class TestWrappedObj:
         obj = Dummy()
         wo = WrappedObj(obj)
         assert wo.__repr__() == "Wrapped(test_repr)"
-
-
-def test_error_on_process_queue():
-    """Test that an informative error is raised indicating that process_queue has moved."""
-
-    with pytest.raises(AttributeError, match="has been moved to qp.tape.qscript.from_queue"):
-        _ = qp.queuing.process_queue
-
-
-def test_error_on_nonexistent_item():
-    """Test an AttributeError is raised if an object does not exist."""
-
-    with pytest.raises(AttributeError, match="module 'pennylane.queuing' has no attribute 'thing'"):
-        _ = qp.queuing.thing

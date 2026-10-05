@@ -3,38 +3,38 @@ Software tests
 
 Requirements
 ~~~~~~~~~~~~
-The PennyLane test suite requires the Python ``pytest`` package, as well as
-some extentions thereof, for example:
+The PennyLane test suite requires the Python ``pytest`` package, as well as:
 
 * ``pytest-cov``: determines test coverage
 * ``pytest-mock``: allows replacing components with dummy/mock objects
 * ``flaky``: manages tests with non-deterministic behaviour
-* ``pytest-benchmark``: benchmarks the performance of functions, and can be used to ensure consistent runtime
-* ``pytest-xdist``: currently used to force some tests to run on the same thread to avoid race conditions
 
-If you properly followed the :doc:`installation guide <./installation>`, you should have all of these packages and others installed in your
-environment, so you can go ahead and put your code to the test!
+These requirements can be installed via ``pip``:
+
+.. code-block:: bash
+
+    pip install pytest pytest-cov pytest-mock flaky
 
 Creating a test
 ~~~~~~~~~~~~~~~
-Every test has to be added to the PennyLane `test folder <https://github.com/PennyLaneAI/pennylane/tree/main/tests>`__.
+Every test has to be added to the PennyLane `test folder <https://github.com/PennyLaneAI/pennylane/tree/master/tests>`__.
 The test folder follows the structure of the PennyLane module folder. Therefore, tests needs to be added to the corresponding subfolder of the functionality they are testing.
 
-Most tests typically will not require the use of an interface or autodifferentiation framework (such as Autograd, PyTorch, and JAX). Tests without an interface will be marked
+Most tests typically will not require the use of an interface or autodifferentiation framework (such as Autograd, Torch, TensorFlow and Jax). Tests without an interface will be marked
 as a ``core`` test automatically by pytest (the functionality for this is located in ``conftest.py``). For such general tests, you can follow the structure of the example below,
 where it is recommended that you follow general `pytest guidelines <https://docs.pytest.org/>`__:
 
 .. code-block:: python
 
-    import pennylane as qp
+    import pennylane as qml
 
     def test_circuit_expval(self):
         """ Test that the circuit expectation value for PauliX is 0."""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
-            return qp.expval(qp.PauliX(0))
+            return qml.expval(qml.PauliX(0))
 
         expval = circuit()
 
@@ -47,7 +47,9 @@ Tests involving interfaces have to be marked with their respective marker:
 
 - ``@pytest.mark.autograd``,
 
-- ``@pytest.mark.torch``, and
+- ``@pytest.mark.torch``,
+
+- ``@pytest.mark.tf``, and
 
 - ``@pytest.mark.jax``.
 
@@ -67,14 +69,14 @@ Below you can find an example for testing a PennyLane template with Jax:
 .. code-block:: python
 
     def circuit_template(features):
-        qp.AngleEmbedding(features, range(3))
-        return qp.expval(qp.PauliZ(0))
+        qml.AngleEmbedding(features, range(3))
+        return qml.expval(qml.PauliZ(0))
 
     def circuit_decomposed(features):
-        qp.RX(features[0], wires=0)
-        qp.RX(features[1], wires=1)
-        qp.RX(features[2], wires=2)
-        return qp.expval(qp.PauliZ(0))
+        qml.RX(features[0], wires=0)
+        qml.RX(features[1], wires=1)
+        qml.RX(features[2], wires=2)
+        return qml.expval(qml.PauliZ(0))
 
     @pytest.mark.jax
     def test_jax(self, tol):
@@ -85,50 +87,47 @@ Below you can find an example for testing a PennyLane template with Jax:
 
         features = jnp.array([1.0, 1.0, 1.0])
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        circuit = qp.QNode(circuit_template, dev, interface="jax")
-        circuit2 = qp.QNode(circuit_decomposed, dev, interface="jax")
+        circuit = qml.QNode(circuit_template, dev, interface="jax")
+        circuit2 = qml.QNode(circuit_decomposed, dev, interface="jax")
 
         res = circuit(features)
         res2 = circuit2(features)
-        assert qp.math.allclose(res, res2, atol=tol, rtol=0)
+        assert qml.math.allclose(res, res2, atol=tol, rtol=0)
 
 Another example of a test involving multiple interfaces is shown below:
 
 .. code-block:: python
 
         def circuit(features):
-            qp.AngleEmbedding(features, range(3))
-            return qp.expval(qp.PauliZ(0))
+            qml.AngleEmbedding(features, range(3))
+            return qml.expval(qml.PauliZ(0))
 
-        @pytest.mark.parametrize("interface",[
-            pytest.param("jax", marks=pytest.mark.jax),
-            pytest.param("torch", marks=pytest.mark.torch),
-        ])
+        @pytest.mark.all_interfaces
         def test_all_interfaces_gradient_agree(self):
-            """Test the results are similar between torch and jax"""
+            """Test the results are similar between torch and tf"""
             import torch
-            import jax.numpy as jnp
+            import tensorflow as tf
 
-            dev = qp.device("default.qubit", wires=3)
+            dev = qml.device("default.qubit", wires=3)
 
             features_torch = torch.Tensor([1.0, 1.0, 1.0])
-            features_jax = jnp.array([1.0, 1.0, 1.0])
+            features_tf = tf.Variable([1.0, 1.0, 1.0], dtype=tf.float64)
 
-            circuit_torch = qp.QNode(circuit, dev, interface="torch")
-            circuit_jax = qp.QNode(circuit, dev, interface="jax")
+            circuit_torch = qml.QNode(circuit, dev, interface="torch")
+            circuit_tf = qml.QNode(circuit, dev, interface="tf")
 
             res_torch = circuit_torch(features_torch)
-            res_jax = circuit_jax(features_torch)
+            res_tf = circuit_tf(features_tf)
 
-            assert np.allclose(res_torch, res_jax)
+            assert np.allclose(res_torch, res_tf)
 
 
 Running the tests
 ~~~~~~~~~~~~~~~~~
 
-The `tests <https://github.com/PennyLaneAI/pennylane/tree/main/tests>`__ folder of the root PennyLane directory contains the PennyLane test suite. Run all tests in this folder via:
+The `tests <https://github.com/PennyLaneAI/pennylane/tree/master/tests>`__ folder of the root PennyLane directory contains the PennyLane test suite. Run all tests in this folder via:
 
 .. code-block:: bash
 
@@ -150,7 +149,7 @@ if Jax is installed and a developer wants to run only Jax related tests, they co
     python -m pytest tests -m "jax"
 
 There exists markers for interfaces (``autograd``, ``torch``, ``tf``, ``jax``), for multiple interfaces (``all_interfaces``) and
-also for certain PennyLane submodules (``qchem``).
+also for certain PennyLane submodules (``qchem`` and ``qcut``).
 
 For running ``qchem`` tests, one can run the following:
 
@@ -164,12 +163,12 @@ The slowest tests are marked with ``slow`` and can be deselected by:
 
     python -m pytest -m "not slow" tests
 
-The ``pytest -m`` option supports Boolean combinations of markers. It is therefore possible to run both JAX and PyTorch
+The ``pytest -m`` option supports Boolean combinations of markers. It is therefore possible to run both Jax and TensorFlow
 tests by writing:
 
 .. code-block:: bash
 
-    python -m pytest -m "jax and torch" tests
+    python -m pytest -m "jax and tf" tests
 
 or Jax tests that are not slow:
 

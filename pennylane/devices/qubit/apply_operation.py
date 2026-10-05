@@ -12,35 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Functions to apply an operation to a state vector."""
-
 # pylint: disable=unused-argument
 
 from functools import singledispatch
 from string import ascii_letters as alphabet
-
 import numpy as np
-import scipy as sp
-from jax.lax import cond
-from jax.random import binomial
 
-import pennylane as qp
-from pennylane import math, ops
-from pennylane.core.operator import Operator
-from pennylane.ops import Conditional, MidMeasure
+import pennylane as qml
+
+from pennylane import math
+from pennylane.measurements import MidMeasureMP
+from pennylane.ops import Conditional
+
+SQRT2INV = 1 / math.sqrt(2)
 
 EINSUM_OP_WIRECOUNT_PERF_THRESHOLD = 3
 EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD = 13
-
-_INV_SQRT2 = 1 / np.sqrt(2)
-
-_HADAMARD_MAT = np.array(
-    [[_INV_SQRT2, _INV_SQRT2], [_INV_SQRT2, -_INV_SQRT2]],
-    dtype=np.complex128,
-)
-_HADAMARD_CACHE = {
-    np.dtype("complex64"): _HADAMARD_MAT.astype(np.complex64),
-    np.dtype("complex128"): _HADAMARD_MAT,
-}
 
 
 def _get_slice(index, axis, num_axes):
@@ -72,85 +59,7 @@ def _get_slice(index, axis, num_axes):
     return tuple(idx)
 
 
-def _apply_single_qubit_np(mat, state, axis):
-    """Apply a 2x2 numpy matrix to ``state`` via ``np.tensordot``.
-
-    This is the NumPy-only contraction path for single-qubit gates. Callers must
-    verify the interface is ``"numpy"`` before calling; autodiff tensors
-    will lose gradient tracking.
-
-    Args:
-        mat (np.ndarray): A ``(2, 2)`` unitary matrix
-        state (np.ndarray): Input quantum state
-        axis (int): The axis (wire) to contract on, already batch-offset
-
-    Returns:
-        np.ndarray: output state
-    """
-    return np.moveaxis(np.tensordot(mat, state, axes=[[1], [axis]]), 0, axis)
-
-
-def _align_torch_interfaces(params, state0, state1, state_interface, param_interface):
-    """Align torch/non-torch interface mismatches for non-batched parametric ops.
-
-    Args:
-        params (tensor_like): Operation parameters, already cast to complex
-        state0 (tensor_like): Slice of state for the ``|0>`` component
-        state1 (tensor_like): Slice of state for the ``|1>`` component
-        state_interface (str): Interface of the state tensor
-        param_interface (str): Interface of the parameters
-
-    Returns:
-        tuple: ``(params, state0, state1)`` with aligned interfaces
-    """
-    # Only torch requires explicit alignment because it cannot interoperate
-    # with other frameworks in math.multiply. Other mismatches (e.g. autograd
-    # state + numpy params) work without conversion via math.* dispatch.
-    if state_interface != param_interface:
-        if state_interface == "torch":
-            params = math.array(params, like=state_interface)
-        elif param_interface == "torch":
-            state0 = math.array(state0, like="torch")
-            state1 = math.array(state1, like="torch")
-    return params, state0, state1
-
-
-def _prepare_batched_params(  # pylint: disable=too-many-arguments
-    params, state, state0, state1, axis, n_dim, is_state_batched
-):
-    """Prepare parameters and state slices for batched parametric operations.
-
-    Args:
-        params (tensor_like): Operation parameters, already cast to complex
-        state (tensor_like): Full state tensor
-        state0 (tensor_like): Slice of state for the ``|0>`` component
-        state1 (tensor_like): Slice of state for the ``|1>`` component
-        axis (int): The axis along which the operation acts
-        n_dim (int): Number of dimensions of the state
-        is_state_batched (bool): Whether the state itself is batched
-
-    Returns:
-        tuple: ``(params, state0, state1, axis)`` with aligned interfaces and shapes
-    """
-    interface = math.get_interface(state, params)
-    if interface == "torch":
-        if math.get_interface(params) != "torch":
-            params = math.array(params, like=interface)
-        if math.get_interface(state0) != "torch":
-            state0 = math.array(state0, like=interface)
-        if math.get_interface(state1) != "torch":
-            state1 = math.array(state1, like=interface)
-    if is_state_batched:
-        params = math.reshape(params, (-1,) + (1,) * (n_dim - 2))
-    else:
-        axis = axis + 1
-        params = math.reshape(params, (-1,) + (1,) * (n_dim - 1))
-        state0 = math.expand_dims(state0, 0) + math.zeros_like(params)
-        state1 = math.expand_dims(state1, 0)
-    return params, state0, state1, axis
-
-
-def apply_operation_einsum(op: Operator, state, is_state_batched: bool = False):
+def apply_operation_einsum(op: qml.operation.Operator, state, is_state_batched: bool = False):
     """Apply ``Operator`` to ``state`` using ``einsum``. This is more efficent at lower qubit
     numbers.
 
@@ -162,10 +71,7 @@ def apply_operation_einsum(op: Operator, state, is_state_batched: bool = False):
     Returns:
         array[complex]: output_state
     """
-    # We use this implicit casting strategy as autograd raises ComplexWarnings
-    # when backpropagating if casting explicitly. Some type of casting is needed
-    # to prevent ComplexWarnings with backpropagation with other interfaces
-    mat = op.matrix() + 0j
+    mat = op.matrix()
 
     total_indices = len(state.shape) - is_state_batched
     num_indices = len(op.wires)
@@ -176,7 +82,7 @@ def apply_operation_einsum(op: Operator, state, is_state_batched: bool = False):
     new_indices = alphabet[total_indices : total_indices + num_indices]
 
     new_state_indices = state_indices
-    for old, new in zip(affected_indices, new_indices, strict=True):
+    for old, new in zip(affected_indices, new_indices):
         new_state_indices = new_state_indices.replace(old, new)
 
     einsum_indices = (
@@ -196,7 +102,7 @@ def apply_operation_einsum(op: Operator, state, is_state_batched: bool = False):
     return math.einsum(einsum_indices, reshaped_mat, state)
 
 
-def apply_operation_tensordot(op: Operator, state, is_state_batched: bool = False):
+def apply_operation_tensordot(op: qml.operation.Operator, state, is_state_batched: bool = False):
     """Apply ``Operator`` to ``state`` using ``math.tensordot``. This is more efficent at higher qubit
     numbers.
 
@@ -208,11 +114,7 @@ def apply_operation_tensordot(op: Operator, state, is_state_batched: bool = Fals
     Returns:
         array[complex]: output_state
     """
-    # We use this implicit casting strategy as autograd raises ComplexWarnings
-    # when backpropagating if casting explicitly. Some type of casting is needed
-    # to prevent ComplexWarnings with backpropagation with other interfaces
-    mat = op.matrix() + 0j
-
+    mat = op.matrix()
     total_indices = len(state.shape) - is_state_batched
     num_indices = len(op.wires)
 
@@ -249,7 +151,7 @@ def apply_operation_tensordot(op: Operator, state, is_state_batched: bool = Fals
 
 @singledispatch
 def apply_operation(
-    op: Operator,
+    op: qml.operation.Operator,
     state,
     is_state_batched: bool = False,
     debugger=None,
@@ -262,20 +164,6 @@ def apply_operation(
         state (TensorLike): The starting state.
         is_state_batched (bool): Boolean representing whether the state is batched or not
         debugger (_Debugger): The debugger to use
-        **execution_kwargs (Optional[dict]): Optional keyword arguments needed for applying
-            some operations described below.
-
-    Keyword Arguments:
-        mid_measurements (dict, None): Mid-circuit measurement dictionary mutated to record the sampled value
-        interface (str): The machine learning interface of the state
-        postselect_mode (str): Configuration for handling shots with mid-circuit measurement
-            postselection. Use ``"hw-like"`` to discard invalid shots and ``"fill-shots"`` to
-            keep the same number of shots. ``None`` by default.
-        rng (Optional[numpy.random._generator.Generator]): A NumPy random number generator.
-        prng_key (Optional[jax.random.PRNGKey]): An optional ``jax.random.PRNGKey``. This is
-            the key to the JAX pseudo random number generator. Only for simulation using JAX.
-            If None, a ``numpy.random.default_rng`` will be used for sampling.
-        tape_shots (Shots): the shots object of the tape
 
     Returns:
         ndarray: output state
@@ -295,7 +183,7 @@ def apply_operation(
     This is a ``functools.singledispatch`` function, so additional specialized kernels
     for specific operations can be registered like:
 
-    .. code-block:: py
+    .. code-block:: python
 
         @apply_operation.register
         def _(op: type_op, state):
@@ -306,35 +194,19 @@ def apply_operation(
     >>> state = np.zeros((2,2))
     >>> state[0][0] = 1
     >>> state
-    array([[1., 0.],
-           [0., 0.]])
-    >>> apply_operation(qp.X(0), state)
-    array([[0., 0.],
-           [1., 0.]])
+    tensor([[1., 0.],
+        [0., 0.]], requires_grad=True)
+    >>> apply_operation(qml.X(0), state)
+    tensor([[0., 0.],
+        [1., 0.]], requires_grad=True)
 
     """
     return _apply_operation_default(op, state, is_state_batched, debugger)
 
 
-def apply_operation_csr_matrix(op, state, is_state_batched: bool = False):
-    """The csr_matrix specialized version apply operation."""
-    # State is numpy array, should have been stored in tensor version
-    # remember the initial shape and recover in the end
-    if sp.sparse.issparse(state):
-        raise TypeError("State should not be sparse in default qubit pipeline")
-    original_shape = math.shape(state)
-    num_wires = len(original_shape) - int(is_state_batched)
-    full_state = math.reshape(state, [-1, 2**num_wires])  # expected: [batch_size, 2**num_wires]
-    state_opT = full_state @ op.sparse_matrix(wire_order=range(num_wires)).T
-    state_reshaped = math.reshape(state_opT, original_shape)
-    return state_reshaped
-
-
 def _apply_operation_default(op, state, is_state_batched, debugger):
     """The default behaviour of apply_operation, accessed through the standard dispatch
     of apply_operation, as well as conditionally in other dispatches."""
-    if op.has_sparse_matrix and not op.has_matrix:
-        return apply_operation_csr_matrix(op, state, is_state_batched=is_state_batched)
     if (
         len(op.wires) < EINSUM_OP_WIRECOUNT_PERF_THRESHOLD
         and math.ndim(state) < EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD
@@ -345,11 +217,7 @@ def _apply_operation_default(op, state, is_state_batched, debugger):
 
 @apply_operation.register
 def apply_conditional(
-    op: Conditional,
-    state,
-    is_state_batched: bool = False,
-    debugger=None,
-    **execution_kwargs,
+    op: Conditional, state, is_state_batched: bool = False, debugger=None, mid_measurements=None
 ):
     """Applies a conditional operation.
 
@@ -359,51 +227,24 @@ def apply_conditional(
         is_state_batched (bool): Boolean representing whether the state is batched or not
         debugger (_Debugger): The debugger to use
         mid_measurements (dict, None): Mid-circuit measurement dictionary mutated to record the sampled value
-        interface (str): The machine learning interface of the state
-        rng (Optional[numpy.random._generator.Generator]): A NumPy random number generator.
-        prng_key (Optional[jax.random.PRNGKey]): An optional ``jax.random.PRNGKey``. This is
-            the key to the JAX pseudo random number generator. Only for simulation using JAX.
-            If None, a ``numpy.random.default_rng`` will be used for sampling.
 
     Returns:
         ndarray: output state
     """
-    mid_measurements = execution_kwargs.get("mid_measurements", None)
-    rng = execution_kwargs.get("rng", None)
-    prng_key = execution_kwargs.get("prng_key", None)
-    interface = math.get_deep_interface(state)
-    if interface == "jax":
-
-        return cond(
-            op.meas_val.concretize(mid_measurements),
-            lambda x: apply_operation(
-                op.base,
-                x,
-                is_state_batched=is_state_batched,
-                debugger=debugger,
-                mid_measurements=mid_measurements,
-                rng=rng,
-                prng_key=prng_key,
-            ),
-            lambda x: x,
-            state,
-        )
     if op.meas_val.concretize(mid_measurements):
         return apply_operation(
-            op.base,
+            op.then_op,
             state,
             is_state_batched=is_state_batched,
             debugger=debugger,
             mid_measurements=mid_measurements,
-            rng=rng,
-            prng_key=prng_key,
         )
     return state
 
 
 @apply_operation.register
 def apply_mid_measure(
-    op: MidMeasure, state, is_state_batched: bool = False, debugger=None, **execution_kwargs
+    op: MidMeasureMP, state, is_state_batched: bool = False, debugger=None, mid_measurements=None
 ):
     """Applies a native mid-circuit measurement.
 
@@ -413,111 +254,64 @@ def apply_mid_measure(
         is_state_batched (bool): Boolean representing whether the state is batched or not
         debugger (_Debugger): The debugger to use
         mid_measurements (dict, None): Mid-circuit measurement dictionary mutated to record the sampled value
-        postselect_mode (str): Configuration for handling shots with mid-circuit measurement
-            postselection. Use ``"hw-like"`` to discard invalid shots and ``"fill-shots"`` to
-            keep the same number of shots. ``None`` by default.
-        rng (Optional[numpy.random._generator.Generator]): A NumPy random number generator.
-        prng_key (Optional[jax.random.PRNGKey]): An optional ``jax.random.PRNGKey``. This is
-            the key to the JAX pseudo random number generator. Only for simulation using JAX.
-            If None, a ``numpy.random.default_rng`` will be used for sampling.
 
     Returns:
         ndarray: output state
     """
-    mid_measurements = execution_kwargs.get("mid_measurements", None)
-    rng = execution_kwargs.get("rng", None)
-    prng_key = execution_kwargs.get("prng_key", None)
-
     if is_state_batched:
-        raise ValueError("MidMeasure cannot be applied to batched states.")
+        raise ValueError("MidMeasureMP cannot be applied to batched states.")
+    if not np.allclose(np.linalg.norm(state), 1.0):
+        mid_measurements[op] = 0
+        return np.zeros_like(state)
     wire = op.wires
-    interface = math.get_deep_interface(state)
-
-    axis = wire.toarray()[0]
-    slices = [slice(None)] * math.ndim(state)
-    slices[axis] = 0
-    prob0 = math.real(math.norm(state[tuple(slices)])) ** 2
-
-    if interface == "numpy":
-        norm = math.sum(prob0, axis=-1)
-        eps = 10 * math.finfo(state.dtype).eps
-        if (norm - 1) > eps:
-            raise ValueError(f"probabilities greater than 1. Got norm {norm}.")
-        if norm > 1:
-            prob0 = prob0 / norm
-
-    if prng_key is not None:
-
-        def binomial_fn(n, p):
-            return binomial(prng_key, n, p).astype(int)
-
-    else:
-        binomial_fn = np.random.binomial if rng is None else rng.binomial
-
-    sample = binomial_fn(1, 1 - prob0)
-
-    assert mid_measurements is not None
+    probs = qml.devices.qubit.measure(qml.probs(wire), state)
+    sample = np.random.binomial(1, probs[1])
     mid_measurements[op] = sample
-
-    # Using apply_operation(qp.QubitUnitary,...) instead of apply_operation(qp.Projector([sample], wire),...)
-    # to select the sample branch enables jax.jit and prevents it from using Python callbacks
-    matrix = math.array([[(sample + 1) % 2, 0.0], [0.0, (sample) % 2]], like=interface)
-    state = apply_operation(
-        ops.QubitUnitary(matrix, wire),
-        state,
-        is_state_batched=is_state_batched,
-        debugger=debugger,
-    )
-    state = state / math.norm(state)
-
-    # Using apply_operation(qp.QubitUnitary,...) instead of apply_operation(qp.X(wire), ...)
-    # to reset enables jax.jit and prevents it from using Python callbacks
-    element = op.reset and sample == 1
-    matrix = math.array(
-        [[(element + 1) % 2, (element) % 2], [(element) % 2, (element + 1) % 2]],
-        like=interface,
-        dtype=float,
-    )
-    state = apply_operation(
-        ops.QubitUnitary(matrix, wire), state, is_state_batched=is_state_batched, debugger=debugger
-    )
-
+    if op.postselect is not None and sample != op.postselect:
+        return np.zeros_like(state)
+    axis = wire.toarray()[0]
+    slices = [slice(None)] * qml.math.ndim(state)
+    slices[axis] = int(not sample)
+    state[tuple(slices)] = 0.0
+    state_norm = np.linalg.norm(state)
+    state = state / state_norm
+    if op.reset and sample == 1:
+        state = apply_operation(
+            qml.X(wire), state, is_state_batched=is_state_batched, debugger=debugger
+        )
     return state
 
 
 @apply_operation.register
-def apply_identity(op: ops.Identity, state, is_state_batched: bool = False, debugger=None, **_):
+def apply_identity(op: qml.Identity, state, is_state_batched: bool = False, debugger=None, **_):
     """Applies a :class:`~.Identity` operation by just returning the input state."""
     return state
 
 
 @apply_operation.register
 def apply_global_phase(
-    op: ops.GlobalPhase, state, is_state_batched: bool = False, debugger=None, **_
+    op: qml.GlobalPhase, state, is_state_batched: bool = False, debugger=None, **_
 ):
-    """Applies a :class:`~.GlobalPhase` operation by multiplying the
-    state by ``exp(-1j * op.data[0])``"""
-    phase = math.exp(-1j * math.cast(op.data[0], complex))
-    if phase.ndim > 0:
-        if not is_state_batched:
-            state = state.reshape((1,) + state.shape)
-        phase = phase.reshape((-1,) + (1,) * (state.ndim - 1))
-    return phase * state
+    """Applies a :class:`~.GlobalPhase` operation by multiplying the state by ``exp(1j * op.data[0])``"""
+    return qml.math.exp(-1j * qml.math.cast(op.data[0], complex)) * state
 
 
 @apply_operation.register
-def apply_paulix(op: ops.X, state, is_state_batched: bool = False, debugger=None, **_):
+def apply_paulix(op: qml.X, state, is_state_batched: bool = False, debugger=None, **_):
     """Apply :class:`pennylane.PauliX` operator to the quantum state"""
     axis = op.wires[0] + is_state_batched
     return math.roll(state, 1, axis)
 
 
 @apply_operation.register
-def apply_pauliz(op: ops.Z, state, is_state_batched: bool = False, debugger=None, **_):
+def apply_pauliz(op: qml.Z, state, is_state_batched: bool = False, debugger=None, **_):
     """Apply pauliz to state."""
 
     axis = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
+
+    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+        return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, axis, n_dim)
     sl_1 = _get_slice(1, axis, n_dim)
@@ -528,201 +322,14 @@ def apply_pauliz(op: ops.Z, state, is_state_batched: bool = False, debugger=None
 
 
 @apply_operation.register
-def apply_phaseshift(op: ops.PhaseShift, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply PhaseShift to state."""
-
-    n_dim = math.ndim(state)
-
-    axis = op.wires[0] + is_state_batched
-
-    sl_0 = _get_slice(0, axis, n_dim)
-    sl_1 = _get_slice(1, axis, n_dim)
-
-    params = math.cast(op.parameters[0], dtype=complex)
-    state0 = state[sl_0]
-    state1 = state[sl_1]
-    if op.batch_size is not None:
-        params, state0, state1, axis = _prepare_batched_params(
-            params, state, state0, state1, axis, n_dim, is_state_batched
-        )
-    state1 = math.multiply(math.cast(state1, dtype=complex), math.exp(1.0j * params))
-    return math.stack([state0, state1], axis=axis)
-
-
-@apply_operation.register
-def apply_T(op: ops.T, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply T to state."""
-
-    axis = op.wires[0] + is_state_batched
-    n_dim = math.ndim(state)
-
-    sl_0 = _get_slice(0, axis, n_dim)
-    sl_1 = _get_slice(1, axis, n_dim)
-
-    state1 = math.multiply(math.cast(state[sl_1], dtype=complex), math.exp(0.25j * np.pi))
-    return math.stack([state[sl_0], state1], axis=axis)
-
-
-@apply_operation.register
-def apply_S(op: ops.S, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply S to state."""
-
-    axis = op.wires[0] + is_state_batched
-    n_dim = math.ndim(state)
-
-    sl_0 = _get_slice(0, axis, n_dim)
-    sl_1 = _get_slice(1, axis, n_dim)
-
-    state1 = math.multiply(math.cast(state[sl_1], dtype=complex), 1j)
-    return math.stack([state[sl_0], state1], axis=axis)
-
-
-@apply_operation.register
-def apply_hadamard(op: ops.Hadamard, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply Hadamard to state."""
-
-    n_dim = math.ndim(state)
-    state_interface = math.get_interface(state)
-
-    if state_interface == "autograd":
-        if n_dim < EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD:
-            return apply_operation_einsum(op, state, is_state_batched=is_state_batched)
-        return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
-
-    if state_interface == "numpy":
-        # H uses direct matrix application since its coefficients are constant;
-        # no parameter-dependent logic needed unlike RX/RY/RZ.
-        axis = op.wires[0] + is_state_batched
-        state_dtype = np.dtype(state.dtype)
-        mat = _HADAMARD_CACHE.get(state_dtype)
-        if mat is None:
-            mat = _HADAMARD_MAT.astype(state_dtype, copy=False)
-            _HADAMARD_CACHE[state_dtype] = mat
-        return _apply_single_qubit_np(mat, state, axis)
-
-    if n_dim < EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD:
-        return apply_operation_einsum(op, state, is_state_batched=is_state_batched)
-    return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
-
-
-def _apply_rotation_1q(  # pylint: disable=too-many-return-statements
-    op, state, is_state_batched, compute_coeffs
-):
-    """Shared implementation for single-qubit parametric rotations (RX, RY, RZ).
-
-    Args:
-        op (Operator): The rotation gate
-        state (tensor_like): Input quantum state
-        is_state_batched (bool): Whether the state has a leading batch dimension
-        compute_coeffs (callable): ``(params, lib) -> (a, b, c, d)`` returning the
-            four entries of the 2×2 matrix ``[[a, b], [c, d]]``. ``lib`` is either
-            the ``np`` or ``math`` module depending on the code path.
-
-    Returns:
-        tensor_like: output state
-    """
-    n_dim = math.ndim(state)
-    state_interface = math.get_interface(state)
-
-    if state_interface == "autograd":
-        if n_dim < EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD:
-            return apply_operation_einsum(op, state, is_state_batched=is_state_batched)
-        return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
-
-    axis = op.wires[0] + is_state_batched
-
-    sl_0 = _get_slice(0, axis, n_dim)
-    sl_1 = _get_slice(1, axis, n_dim)
-
-    params = op.parameters[0]
-    state0 = state[sl_0]
-    state1 = state[sl_1]
-    param_interface = math.get_interface(params)
-
-    state_dtype = state.dtype
-
-    if op.batch_size is not None:
-        params = params if param_interface == "torch" else math.cast(params, dtype=complex)
-        params, state0, state1, axis = _prepare_batched_params(
-            params, state, state0, state1, axis, n_dim, is_state_batched
-        )
-        a, b, c, d = compute_coeffs(params, math)
-        if state_interface != "torch":
-            state0 = math.cast(state0, dtype=complex)
-            state1 = math.cast(state1, dtype=complex)
-        new0 = math.multiply(state0, a) + math.multiply(state1, b)
-        new1 = math.multiply(state0, c) + math.multiply(state1, d)
-        return math.stack([new0, new1], axis=axis)
-
-    if state_interface == "numpy" and param_interface == "numpy":
-        p = np.asarray(params, dtype=state_dtype)
-        a, b, c, d = compute_coeffs(p, np)
-        if n_dim < EINSUM_STATE_WIRECOUNT_PERF_THRESHOLD:
-            return np.stack(
-                [
-                    np.multiply(state0, a) + np.multiply(state1, b),
-                    np.multiply(state0, c) + np.multiply(state1, d),
-                ],
-                axis=axis,
-            )
-        mat = np.array([[a, b], [c, d]], dtype=state_dtype)
-        return _apply_single_qubit_np(mat, state, axis)
-
-    params = params if param_interface == "torch" else math.cast(params, dtype=complex)
-    params, state0, state1 = _align_torch_interfaces(
-        params, state0, state1, state_interface, param_interface
-    )
-    a, b, c, d = compute_coeffs(params, math)
-    if state_interface != "torch":
-        state0 = math.cast(state0, dtype=complex)
-        state1 = math.cast(state1, dtype=complex)
-    new0 = math.multiply(state0, a) + math.multiply(state1, b)
-    new1 = math.multiply(state0, c) + math.multiply(state1, d)
-    return math.stack([new0, new1], axis=axis)
-
-
-def _rz_coeffs(params, lib):
-    e = lib.exp(-0.5j * params)
-    z = lib.zeros_like(e)
-    return e, z, z, lib.conj(e)
-
-
-def _rx_coeffs(params, lib):
-    c = lib.cos(params / 2)
-    js = -1j * lib.sin(params / 2)
-    return c, js, js, c
-
-
-def _ry_coeffs(params, lib):
-    c = lib.cos(params / 2)
-    s = lib.sin(params / 2)
-    return c, -s, s, c
-
-
-@apply_operation.register
-def apply_rz(op: ops.RZ, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply RZ to state."""
-    return _apply_rotation_1q(op, state, is_state_batched, _rz_coeffs)
-
-
-@apply_operation.register
-def apply_rx(op: ops.RX, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply RX to state."""
-    return _apply_rotation_1q(op, state, is_state_batched, _rx_coeffs)
-
-
-@apply_operation.register
-def apply_ry(op: ops.RY, state, is_state_batched: bool = False, debugger=None, **_):
-    """Apply RY to state."""
-    return _apply_rotation_1q(op, state, is_state_batched, _ry_coeffs)
-
-
-@apply_operation.register
-def apply_cnot(op: ops.CNOT, state, is_state_batched: bool = False, debugger=None, **_):
+def apply_cnot(op: qml.CNOT, state, is_state_batched: bool = False, debugger=None, **_):
     """Apply cnot gate to state."""
     target_axes = (op.wires[1] - 1 if op.wires[1] > op.wires[0] else op.wires[1]) + is_state_batched
     control_axes = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
+
+    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+        return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, control_axes, n_dim)
     sl_1 = _get_slice(1, control_axes, n_dim)
@@ -733,7 +340,7 @@ def apply_cnot(op: ops.CNOT, state, is_state_batched: bool = False, debugger=Non
 
 @apply_operation.register
 def apply_multicontrolledx(
-    op: ops.MultiControlledX,
+    op: qml.MultiControlledX,
     state,
     is_state_batched: bool = False,
     debugger=None,
@@ -746,7 +353,7 @@ def apply_multicontrolledx(
         return _apply_operation_default(op, state, is_state_batched, debugger)
     ctrl_wires = [w + is_state_batched for w in op.control_wires]
     # apply x on all control wires with control value 0
-    roll_axes = [w for val, w in zip(op.control_values, ctrl_wires, strict=True) if not val]
+    roll_axes = [w for val, w in zip(op.control_values, ctrl_wires) if val is False]
     for ax in roll_axes:
         state = math.roll(state, 1, ax)
 
@@ -787,7 +394,7 @@ def apply_multicontrolledx(
 
 @apply_operation.register
 def apply_grover(
-    op: qp.GroverOperator,
+    op: qml.GroverOperator,
     state,
     is_state_batched: bool = False,
     debugger=None,
@@ -816,52 +423,128 @@ def _apply_grover_without_matrix(state, op_wires, is_state_batched):
     sum_axes = [w + is_state_batched for w in op_wires]
     collapsed = math.sum(state, axis=tuple(sum_axes))
 
-    if num_wires == (len(math.shape(state)) - is_state_batched):
+    if num_wires == (len(qml.math.shape(state)) - is_state_batched):
         # If the operation acts on all wires, we can skip the tensor product with all-ones state
         new_shape = (-1,) + (1,) * num_wires if is_state_batched else (1,) * num_wires
         return prefactor * math.reshape(collapsed, new_shape) - state
+        # [todo]: Once Tensorflow support expand_dims with multiple axes in the second argument,
+        # use the following line instead of the two above.
+        # return prefactor * math.expand_dims(collapsed, sum_axes) - state
 
     all_plus = math.cast_like(math.full([2] * num_wires, prefactor), state)
     # After the Kronecker product (realized with tensordot with axes=0), we need to move
     # the new axes to the summed-away axes' positions. Finally, subtract the original state.
     source = list(range(math.ndim(collapsed), math.ndim(state)))
     # Probably it will be better to use math.full or math.tile to create the outer product
-    # here computed with math.tensordot. However, Torch does not have full support.
+    # here computed with math.tensordot. However, Tensorflow and Torch do not have full support
     return math.moveaxis(math.tensordot(collapsed, all_plus, axes=0), source, sum_axes) - state
 
 
 @apply_operation.register
-def apply_snapshot(
-    op: ops.Snapshot, state, is_state_batched: bool = False, debugger=None, **execution_kwargs
-):
-    """Take a snapshot of the state."""
-    if debugger is None or not debugger.active:
-        return state
-    measurement = op.hyperparameters["measurement"]
-    if op.hyperparameters["shots"] == "workflow":
-        shots = execution_kwargs.get("tape_shots")
-    else:
-        shots = op.hyperparameters["shots"]
-
-    if shots:
-        snapshot = qp.devices.qubit.measure_with_samples(
-            [measurement],
-            state,
-            shots,
-            is_state_batched,
-            execution_kwargs.get("rng"),
-            execution_kwargs.get("prng_key"),
-        )[0]
-    else:
-        snapshot = qp.devices.qubit.measure(measurement, state, is_state_batched)
-
-    if op.tag is None:
-        debugger.snapshots[len(debugger.snapshots)] = snapshot
-    elif op.tag not in debugger.snapshots:
-        debugger.snapshots[op.tag] = snapshot
-    elif isinstance(debugger.snapshots[op.tag], list):
-        debugger.snapshots[op.tag].append(snapshot)
-    else:
-        debugger.snapshots[op.tag] = [debugger.snapshots[op.tag], snapshot]
-
+def apply_snapshot(op: qml.Snapshot, state, is_state_batched: bool = False, debugger=None, **_):
+    """Take a snapshot of the state"""
+    if debugger is not None and debugger.active:
+        measurement = op.hyperparameters["measurement"]
+        if measurement:
+            snapshot = qml.devices.qubit.measure(measurement, state)
+        else:
+            flat_shape = (math.shape(state)[0], -1) if is_state_batched else (-1,)
+            snapshot = math.cast(math.reshape(state, flat_shape), complex)
+        if op.tag:
+            debugger.snapshots[op.tag] = snapshot
+        else:
+            debugger.snapshots[len(debugger.snapshots)] = snapshot
     return state
+
+
+# pylint:disable = no-value-for-parameter, import-outside-toplevel
+@apply_operation.register
+def apply_parametrized_evolution(
+    op: qml.pulse.ParametrizedEvolution,
+    state,
+    is_state_batched: bool = False,
+    debugger=None,
+    **_,
+):
+    """Apply ParametrizedEvolution by evolving the state rather than the operator matrix
+    if we are operating on more than half of the subsystem"""
+
+    # shape(state) is static (not a tracer), we can use an if statement
+    num_wires = len(qml.math.shape(state)) - is_state_batched
+    state = qml.math.cast(state, complex)
+    if (
+        2 * len(op.wires) <= num_wires
+        or op.hyperparameters["complementary"]
+        or (is_state_batched and op.hyperparameters["return_intermediate"])
+    ):
+        # the subsystem operated on is half as big as the total system, or less
+        # or we want complementary time evolution
+        # or both the state and the operation have a batch dimension
+        # --> evolve matrix
+        return _apply_operation_default(op, state, is_state_batched, debugger)
+    # otherwise --> evolve state
+    return _evolve_state_vector_under_parametrized_evolution(op, state, num_wires, is_state_batched)
+
+
+def _evolve_state_vector_under_parametrized_evolution(
+    operation: qml.pulse.ParametrizedEvolution, state, num_wires, is_state_batched
+):
+    """Uses an odeint solver to compute the evolution of the input ``state`` under the given
+    ``ParametrizedEvolution`` operation.
+
+    Args:
+        state (array[complex]): input state
+        operation (ParametrizedEvolution): operation to apply on the state
+
+    Raises:
+        ValueError: If the parameters and time windows of the ``ParametrizedEvolution`` are
+            not defined.
+
+    Returns:
+        TensorLike[complex]: output state
+    """
+
+    try:
+        import jax
+        from jax.experimental.ode import odeint
+
+        from pennylane.pulse.parametrized_hamiltonian_pytree import ParametrizedHamiltonianPytree
+
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "Module jax is required for the ``ParametrizedEvolution`` class. "
+            "You can install jax via: pip install jax"
+        ) from e
+
+    if operation.data is None or operation.t is None:
+        raise ValueError(
+            "The parameters and the time window are required to execute a ParametrizedEvolution "
+            "You can update these values by calling the ParametrizedEvolution class: EV(params, t)."
+        )
+
+    if is_state_batched:
+        batch_dim = state.shape[0]
+        state = qml.math.moveaxis(state.reshape((batch_dim, 2**num_wires)), 1, 0)
+        out_shape = [2] * num_wires + [batch_dim]  # this shape is before moving the batch_dim back
+    else:
+        state = state.flatten()
+        out_shape = [2] * num_wires
+
+    with jax.ensure_compile_time_eval():
+        H_jax = ParametrizedHamiltonianPytree.from_hamiltonian(  # pragma: no cover
+            operation.H,
+            dense=operation.dense,
+            wire_order=list(np.arange(num_wires)),
+        )
+
+    def fun(y, t):
+        """dy/dt = -i H(t) y"""
+        return (-1j * H_jax(operation.data, t=t)) @ y
+
+    result = odeint(fun, state, operation.t, **operation.odeint_kwargs)
+    if operation.hyperparameters["return_intermediate"]:
+        return qml.math.reshape(result, [-1] + out_shape)
+    result = qml.math.reshape(result[-1], out_shape)
+    if is_state_batched:
+        return qml.math.moveaxis(result, -1, 0)
+    return result

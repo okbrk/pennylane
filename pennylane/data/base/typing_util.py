@@ -16,9 +16,23 @@ and converting them to strings."""
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any, ForwardRef, Literal, Optional, TypeVar, _SpecialForm, get_args, get_origin
+from typing import (
+    Any,
+    Dict,
+    ForwardRef,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    _SpecialForm,
+    get_args,
+    get_origin,
+)
 
-JSON = Optional[str | int | bool | float | dict[str, Any] | list[Any]]
+JSON = Union[str, int, bool, float, None, Dict[str, Any], List[Any]]
 
 # Generic type variable
 T = TypeVar("T")
@@ -40,7 +54,7 @@ class UnsetType(Enum):
 UNSET = UnsetType.UNSET
 
 
-def get_type(type_or_obj: object | type) -> type:
+def get_type(type_or_obj: Union[object, Type]) -> Type:
     """Given an object or an object type, returns the underlying class.
 
     Examples:
@@ -66,7 +80,7 @@ def get_type(type_or_obj: object | type) -> type:
 
 
 @lru_cache
-def get_type_str(cls: type | str | None) -> str:  # pylint: disable=too-many-return-statements
+def get_type_str(cls: Union[type, str, None]) -> str:  # pylint: disable=too-many-return-statements
     """Return a string representing the type ``cls``.
 
     If cls is a built-in type, such as 'str', returns the unqualified
@@ -77,9 +91,6 @@ def get_type_str(cls: type | str | None) -> str:  # pylint: disable=too-many-ret
 
     Otherwise, returns the fully-qualified class name, including the module.
     """
-    # pylint: disable=unidiomatic-typecheck
-    # Keep this check as it ensures that get_type_str(type(None)) = 'None'
-    # rather than `NoneType`.
     if cls is None or cls is type(None):
         return "None"
 
@@ -100,14 +111,6 @@ def get_type_str(cls: type | str | None) -> str:  # pylint: disable=too-many-ret
         # This is either a parametrized generic or parametrized special form
         orig_args = get_args(cls)
         if orig_args:
-            # Special handling for Union types in Python 3.14+
-            # In Python 3.14, get_origin(Union[...]) returns typing.Union as a regular class,
-            # not a _SpecialForm, so we need to check for it explicitly
-            if (
-                getattr(orig_type, "__module__", None) == "typing"
-                and getattr(orig_type, "__name__", None) == "Union"
-            ):
-                return f"Union[{', '.join(get_type_str(arg) for arg in orig_args)}]"
             return f"{get_type_str(orig_type)}[{', '.join(get_type_str(arg) for arg in orig_args)}]"
 
         return get_type_str(orig_type)
@@ -120,7 +123,7 @@ def get_type_str(cls: type | str | None) -> str:  # pylint: disable=too-many-ret
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
-def resolve_special_type(type_: Any) -> tuple[type, list[type]] | None:
+def resolve_special_type(type_: Any) -> Optional[Tuple[type, List[type]]]:
     """Converts special typing forms (Union[...], Optional[...]), and parametrized
     generics (List[...], Dict[...]) into a 2-tuple of its base type and arguments.
     If ``type_`` is a regular type, or an object, this function will return

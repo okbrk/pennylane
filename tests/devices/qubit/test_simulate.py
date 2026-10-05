@@ -13,34 +13,12 @@
 # limitations under the License.
 """Unit tests for simulate in devices/qubit."""
 
-import mcm_utils
-import numpy as np
 import pytest
-import scipy as sp
-from dummy_debugger import Debugger
-from stat_utils import fisher_exact_test
 
-import pennylane as qp
-from pennylane.devices.qubit import get_final_state, measure_final_state, simulate
-from pennylane.devices.qubit.simulate import (
-    TreeTraversalStack,
-    _find_post_processed_mcms,
-    _FlexShots,
-    branch_state,
-    combine_measurements_core,
-    counts_to_probs,
-    samples_to_counts,
-    simulate_one_shot_native_mcm,
-    simulate_tree_mcm,
-    split_circuit_at_mcms,
-)
+import numpy as np
 
-ml_frameworks_list = [
-    "numpy",
-    pytest.param("autograd", marks=pytest.mark.autograd),
-    pytest.param("jax", marks=pytest.mark.jax),
-    pytest.param("torch", marks=pytest.mark.torch),
-]
+import pennylane as qml
+from pennylane.devices.qubit import simulate, get_final_state, measure_final_state
 
 
 class TestCurrentlyUnsupportedCases:
@@ -48,7 +26,7 @@ class TestCurrentlyUnsupportedCases:
     def test_sample_based_observable(self):
         """Test sample-only measurements raise a notimplementedError."""
 
-        qs = qp.tape.QuantumScript(measurements=[qp.sample(wires=0)])
+        qs = qml.tape.QuantumScript(measurements=[qml.sample(wires=0)])
         with pytest.raises(NotImplementedError):
             simulate(qs)
 
@@ -57,59 +35,17 @@ def test_custom_operation():
     """Test execution works with a manually defined operator if it has a matrix."""
 
     # pylint: disable=too-few-public-methods
-    class MyOperator(qp.operation.Operator):
+    class MyOperator(qml.operation.Operator):
         num_wires = 1
 
         @staticmethod
         def compute_matrix():
-            return qp.PauliX.compute_matrix()
+            return qml.PauliX.compute_matrix()
 
-    qs = qp.tape.QuantumScript([MyOperator(0)], [qp.expval(qp.PauliZ(0))])
+    qs = qml.tape.QuantumScript([MyOperator(0)], [qml.expval(qml.PauliZ(0))])
 
     result = simulate(qs)
-    assert qp.math.allclose(result, -1.0)
-
-
-# pylint: disable=too-few-public-methods
-class TestSparsePipeline:
-    """System tests for the sparse pipelines."""
-
-    ground_state = np.array([1, 0, 0, 0, 0, 0, 0, 0])
-    cat_state = np.array([1, 0, 0, 0, 0, 0, 0, 1]) / np.sqrt(2)
-
-    @pytest.mark.parametrize(
-        "state",
-        [
-            ground_state,
-            cat_state,
-        ],
-    )
-    def test_sparse_op(self, state):
-        """Test that a sparse QubitUnitary operation works on default.qubit with expval measurement."""
-        mat = sp.sparse.csr_matrix([[0, 1], [1, 0]])
-        op = qp.QubitUnitary(mat, wires=[0])
-        qs = qp.tape.QuantumScript(
-            ops=[qp.StatePrep(state, wires=range(8), pad_with=0), op],
-            measurements=[qp.expval(qp.Z(0))],
-        )
-
-        result = simulate(qs)
-
-        assert qp.math.allclose(result, -1)
-
-    def test_sparse_state_prep(self):
-        """Test a spares state prep can be acted upon by later operations."""
-        state = sp.sparse.csr_matrix([0, 0, 0, 1])
-        qp.StatePrep(state, wires=(0, 1))
-
-        tape = qp.tape.QuantumScript(
-            [qp.StatePrep(state, wires=(0, 1)), qp.X(0), qp.RX(0.0, 0)],
-            [qp.probs(wires=(0, 1))],
-        )
-
-        res = simulate(tape)
-        expected = np.array([0, 1, 0, 0])
-        assert qp.math.allclose(res, expected)
+    assert qml.math.allclose(result, -1.0)
 
 
 # pylint: disable=too-few-public-methods
@@ -118,35 +54,23 @@ class TestStatePrepBase:
 
     def test_basis_state(self):
         """Test that the BasisState operator prepares the desired state."""
-        qs = qp.tape.QuantumScript(
-            ops=[qp.BasisState([0, 1], wires=(0, 1))], measurements=[qp.probs(wires=(0, 1, 2))]
+        qs = qml.tape.QuantumScript(
+            ops=[qml.BasisState([0, 1], wires=(0, 1))], measurements=[qml.probs(wires=(0, 1, 2))]
         )
         probs = simulate(qs)
         expected = np.zeros(8)
         expected[2] = 1.0
-        assert qp.math.allclose(probs, expected)
+        assert qml.math.allclose(probs, expected)
 
 
 class TestBasicCircuit:
     """Tests a basic circuit with one rx gate and two simple expectation values."""
 
-    def test_analytic_mid_meas_raise(self):
-        """Test measure_final_state raises an error when getting a mid-measurement dictionary."""
-        phi = np.array(0.397)
-        qs = qp.tape.QuantumScript(
-            [qp.RX(phi, wires=0)], [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))]
-        )
-        state, is_state_batched = get_final_state(qs)
-        with pytest.raises(
-            TypeError, match="Native mid-circuit measurements are only supported with finite shots."
-        ):
-            _ = measure_final_state(qs, state, is_state_batched, mid_measurements={})
-
     def test_basic_circuit_numpy(self):
         """Test execution with a basic circuit."""
         phi = np.array(0.397)
-        qs = qp.tape.QuantumScript(
-            [qp.RX(phi, wires=0)], [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))]
+        qs = qml.tape.QuantumScript(
+            [qml.RX(phi, wires=0)], [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))]
         )
         result = simulate(qs)
 
@@ -170,21 +94,21 @@ class TestBasicCircuit:
     @pytest.mark.autograd
     def test_autograd_results_and_backprop(self):
         """Tests execution and gradients with autograd"""
-        phi = qp.numpy.array(-0.52)
+        phi = qml.numpy.array(-0.52)
 
         def f(x):
-            qs = qp.tape.QuantumScript(
-                [qp.RX(x, wires=0)], [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))]
+            qs = qml.tape.QuantumScript(
+                [qml.RX(x, wires=0)], [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))]
             )
-            return qp.numpy.array(simulate(qs))
+            return qml.numpy.array(simulate(qs))
 
         result = f(phi)
         expected = np.array([-np.sin(phi), np.cos(phi)])
-        assert qp.math.allclose(result, expected)
+        assert qml.math.allclose(result, expected)
 
-        g = qp.jacobian(f)(phi)
+        g = qml.jacobian(f)(phi)
         expected = np.array([-np.cos(phi), -np.sin(phi)])
-        assert qp.math.allclose(g, expected)
+        assert qml.math.allclose(g, expected)
 
     @pytest.mark.jax
     @pytest.mark.parametrize("use_jit", (True, False))
@@ -195,8 +119,8 @@ class TestBasicCircuit:
         phi = jax.numpy.array(0.678)
 
         def f(x):
-            qs = qp.tape.QuantumScript(
-                [qp.RX(x, wires=0)], [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))]
+            qs = qml.tape.QuantumScript(
+                [qml.RX(x, wires=0)], [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))]
             )
             return simulate(qs)
 
@@ -204,12 +128,12 @@ class TestBasicCircuit:
             f = jax.jit(f)
 
         result = f(phi)
-        assert qp.math.allclose(result[0], -np.sin(phi))
-        assert qp.math.allclose(result[1], np.cos(phi))
+        assert qml.math.allclose(result[0], -np.sin(phi))
+        assert qml.math.allclose(result[1], np.cos(phi))
 
         g = jax.jacobian(f)(phi)
-        assert qp.math.allclose(g[0], -np.cos(phi))
-        assert qp.math.allclose(g[1], -np.sin(phi))
+        assert qml.math.allclose(g[0], -np.cos(phi))
+        assert qml.math.allclose(g[1], -np.sin(phi))
 
     @pytest.mark.torch
     def test_torch_results_and_backprop(self):
@@ -220,40 +144,60 @@ class TestBasicCircuit:
         phi = torch.tensor(-0.526, requires_grad=True)
 
         def f(x):
-            qs = qp.tape.QuantumScript(
-                [qp.RX(qp.math.cast(x, "float64"), wires=0)],
-                [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))],
+            qs = qml.tape.QuantumScript(
+                [qml.RX(x, wires=0)], [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))]
             )
             return simulate(qs)
 
         result = f(phi)
-        assert qp.math.allclose(result[0], -torch.sin(phi))
-        assert qp.math.allclose(result[1], torch.cos(phi))
+        assert qml.math.allclose(result[0], -torch.sin(phi))
+        assert qml.math.allclose(result[1], torch.cos(phi))
 
         g = torch.autograd.functional.jacobian(f, phi + 0j)
-        assert qp.math.allclose(g[0], -torch.cos(phi))
-        assert qp.math.allclose(g[1], -torch.sin(phi))
+        assert qml.math.allclose(g[0], -torch.cos(phi))
+        assert qml.math.allclose(g[1], -torch.sin(phi))
 
     # pylint: disable=invalid-unary-operand-type
+    @pytest.mark.tf
+    def test_tf_results_and_backprop(self):
+        """Tests execution and gradients of a simple circuit with tensorflow."""
+        import tensorflow as tf
+
+        phi = tf.Variable(4.873)
+
+        with tf.GradientTape(persistent=True) as grad_tape:
+            qs = qml.tape.QuantumScript(
+                [qml.RX(phi, wires=0)], [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))]
+            )
+            result = simulate(qs)
+
+        assert qml.math.allclose(result[0], -tf.sin(phi))
+        assert qml.math.allclose(result[1], tf.cos(phi))
+
+        grad0 = grad_tape.jacobian(result[0], [phi])
+        grad1 = grad_tape.jacobian(result[1], [phi])
+
+        assert qml.math.allclose(grad0[0], -tf.cos(phi))
+        assert qml.math.allclose(grad1[0], -tf.sin(phi))
 
     @pytest.mark.jax
-    @pytest.mark.parametrize("op", [qp.RX(np.pi, 0), qp.BasisState([1], 0)])
+    @pytest.mark.parametrize("op", [qml.RX(np.pi, 0), qml.BasisState([1], 0)])
     def test_result_has_correct_interface(self, op):
         """Test that even if no interface parameters are given, result is correct."""
-        qs = qp.tape.QuantumScript([op], [qp.expval(qp.PauliZ(0))])
+        qs = qml.tape.QuantumScript([op], [qml.expval(qml.PauliZ(0))])
         res = simulate(qs, interface="jax")
-        assert qp.math.get_interface(res) == "jax"
-        assert qp.math.allclose(res, -1)
+        assert qml.math.get_interface(res) == "jax"
+        assert qml.math.allclose(res, -1)
 
     def test_expand_state_keeps_autograd_interface(self):
         """Test that expand_state doesn't convert autograd to numpy."""
 
-        @qp.qnode(qp.device("default.qubit", wires=2), interface="autograd")
+        @qml.qnode(qml.device("default.qubit", wires=2))
         def circuit(x):
-            qp.RX(x, 0)
-            return qp.probs(wires=[0, 1])
+            qml.RX(x, 0)
+            return qml.probs(wires=[0, 1])
 
-        assert qp.math.get_interface(circuit(1.5)) == "autograd"
+        assert qml.math.get_interface(circuit(1.5)) == "autograd"
 
 
 class TestBroadcasting:
@@ -264,11 +208,11 @@ class TestBroadcasting:
         when the state prep has broadcasted parameters"""
         x = np.array(1.2)
 
-        ops = [qp.RY(x, wires=0), qp.CNOT(wires=[0, 1])]
-        measurements = [qp.expval(qp.PauliZ(i)) for i in range(2)]
-        prep = [qp.StatePrep(np.eye(4), wires=[0, 1])]
+        ops = [qml.RY(x, wires=0), qml.CNOT(wires=[0, 1])]
+        measurements = [qml.expval(qml.PauliZ(i)) for i in range(2)]
+        prep = [qml.StatePrep(np.eye(4), wires=[0, 1])]
 
-        qs = qp.tape.QuantumScript(prep + ops, measurements)
+        qs = qml.tape.QuantumScript(prep + ops, measurements)
         res = simulate(qs)
 
         assert isinstance(res, tuple)
@@ -299,10 +243,10 @@ class TestBroadcasting:
         when an operation has broadcasted parameters"""
         x = np.array([0.8, 1.0, 1.2, 1.4])
 
-        ops = [qp.PauliX(wires=1), qp.RY(x, wires=0), qp.CNOT(wires=[0, 1])]
-        measurements = [qp.expval(qp.PauliZ(i)) for i in range(2)]
+        ops = [qml.PauliX(wires=1), qml.RY(x, wires=0), qml.CNOT(wires=[0, 1])]
+        measurements = [qml.expval(qml.PauliZ(i)) for i in range(2)]
 
-        qs = qp.tape.QuantumScript(ops, measurements)
+        qs = qml.tape.QuantumScript(ops, measurements)
         res = simulate(qs)
 
         assert isinstance(res, tuple)
@@ -324,17 +268,17 @@ class TestBroadcasting:
         assert np.allclose(res[0], np.cos(x))
         assert np.allclose(res[1], -np.cos(x))
 
-    def test_broadcasted_prep_sample(self, seed):
+    def test_broadcasted_prep_sample(self):
         """Test that simulate works for sample measurements
         when the state prep has broadcasted parameters"""
         x = np.array(1.2)
 
-        ops = [qp.RY(x, wires=0), qp.CNOT(wires=[0, 1])]
-        measurements = [qp.expval(qp.PauliZ(i)) for i in range(2)]
-        prep = [qp.StatePrep(np.eye(4), wires=[0, 1])]
+        ops = [qml.RY(x, wires=0), qml.CNOT(wires=[0, 1])]
+        measurements = [qml.expval(qml.PauliZ(i)) for i in range(2)]
+        prep = [qml.StatePrep(np.eye(4), wires=[0, 1])]
 
-        qs = qp.tape.QuantumScript(prep + ops, measurements, shots=qp.measurements.Shots(5000))
-        res = simulate(qs, rng=seed)
+        qs = qml.tape.QuantumScript(prep + ops, measurements, shots=qml.measurements.Shots(10000))
+        res = simulate(qs, rng=123)
 
         assert isinstance(res, tuple)
         assert len(res) == 2
@@ -346,7 +290,7 @@ class TestBroadcasting:
         )
 
         state, is_state_batched = get_final_state(qs)
-        res = measure_final_state(qs, state, is_state_batched, rng=seed)
+        res = measure_final_state(qs, state, is_state_batched, rng=123)
         expected_state = np.array(
             [
                 [np.cos(x / 2), 0, 0, np.sin(x / 2)],
@@ -367,16 +311,16 @@ class TestBroadcasting:
             res[1], np.array([np.cos(x), -np.cos(x), -np.cos(x), np.cos(x)]), atol=0.05
         )
 
-    def test_broadcasted_op_sample(self, seed):
+    def test_broadcasted_op_sample(self):
         """Test that simulate works for sample measurements
         when an operation has broadcasted parameters"""
         x = np.array([0.8, 1.0, 1.2, 1.4])
 
-        ops = [qp.PauliX(wires=1), qp.RY(x, wires=0), qp.CNOT(wires=[0, 1])]
-        measurements = [qp.expval(qp.PauliZ(i)) for i in range(2)]
+        ops = [qml.PauliX(wires=1), qml.RY(x, wires=0), qml.CNOT(wires=[0, 1])]
+        measurements = [qml.expval(qml.PauliZ(i)) for i in range(2)]
 
-        qs = qp.tape.QuantumScript(ops, measurements, shots=qp.measurements.Shots(5000))
-        res = simulate(qs, rng=seed)
+        qs = qml.tape.QuantumScript(ops, measurements, shots=qml.measurements.Shots(10000))
+        res = simulate(qs, rng=123)
 
         assert isinstance(res, tuple)
         assert len(res) == 2
@@ -384,7 +328,7 @@ class TestBroadcasting:
         assert np.allclose(res[1], -np.cos(x), atol=0.05)
 
         state, is_state_batched = get_final_state(qs)
-        res = measure_final_state(qs, state, is_state_batched, rng=seed)
+        res = measure_final_state(qs, state, is_state_batched, rng=123)
 
         expected_state = np.zeros((4, 2, 2))
         expected_state[:, 0, 1] = np.cos(x / 2)
@@ -397,15 +341,16 @@ class TestBroadcasting:
         assert np.allclose(res[0], np.cos(x), atol=0.05)
         assert np.allclose(res[1], -np.cos(x), atol=0.05)
 
-    def test_broadcasting_with_extra_measurement_wires(self):
+    def test_broadcasting_with_extra_measurement_wires(self, mocker):
         """Test that broadcasting works when the operations don't act on all wires."""
         # I can't mock anything in `simulate` because the module name is the function name
+        spy = mocker.spy(qml, "map_wires")
         x = np.array([0.8, 1.0, 1.2, 1.4])
 
-        ops = [qp.PauliX(wires=2), qp.RY(x, wires=1), qp.CNOT(wires=[1, 2])]
-        measurements = [qp.expval(qp.PauliZ(i)) for i in range(3)]
+        ops = [qml.PauliX(wires=2), qml.RY(x, wires=1), qml.CNOT(wires=[1, 2])]
+        measurements = [qml.expval(qml.PauliZ(i)) for i in range(3)]
 
-        qs = qp.tape.QuantumScript(ops, measurements)
+        qs = qml.tape.QuantumScript(ops, measurements)
         res = simulate(qs)
 
         assert isinstance(res, tuple)
@@ -413,6 +358,7 @@ class TestBroadcasting:
         assert np.allclose(res[0], 1.0)
         assert np.allclose(res[1], np.cos(x))
         assert np.allclose(res[2], -np.cos(x))
+        assert spy.call_args_list[0].args == (qs, {2: 0, 1: 1, 0: 2})
 
 
 class TestPostselection:
@@ -420,8 +366,8 @@ class TestPostselection:
 
     def test_projector_norm(self):
         """Test that the norm of the state is maintained after applying a projector"""
-        tape = qp.tape.QuantumScript(
-            [qp.PauliX(0), qp.RX(0.123, 1), qp.Projector([0], wires=1)], [qp.state()]
+        tape = qml.tape.QuantumScript(
+            [qml.PauliX(0), qml.RX(0.123, 1), qml.Projector([0], wires=1)], [qml.state()]
         )
         res = simulate(tape)
         assert np.isclose(np.linalg.norm(res), 1.0)
@@ -429,12 +375,12 @@ class TestPostselection:
     @pytest.mark.parametrize("shots", [None, 10, [10, 10]])
     def test_broadcasting_with_projector(self, shots):
         """Test that postselecting a broadcasted state raises an error"""
-        tape = qp.tape.QuantumScript(
+        tape = qml.tape.QuantumScript(
             [
-                qp.RX([0.1, 0.2], 0),
-                qp.Projector([0], wires=0),
+                qml.RX([0.1, 0.2], 0),
+                qml.Projector([0], wires=0),
             ],
-            [qp.state()],
+            [qml.state()],
             shots=shots,
         )
 
@@ -442,50 +388,33 @@ class TestPostselection:
             _ = simulate(tape)
 
     @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["numpy", "torch", "jax", "autograd"])
+    @pytest.mark.parametrize("interface", ["numpy", "torch", "jax", "tensorflow", "autograd"])
     def test_nan_state(self, interface):
         """Test that a state with nan values is returned if the probability of a postselection state
         is 0."""
-        tape = qp.tape.QuantumScript([qp.PauliX(0), qp.Projector([0], 0)])
+        tape = qml.tape.QuantumScript([qml.PauliX(0), qml.Projector([0], 0)])
 
         res, _ = get_final_state(tape, interface=interface)
-        assert qp.math.all(qp.math.isnan(res))
-
-
-class Test_FlexShots:
-    """Unit tests for _FlexShots"""
-
-    @pytest.mark.parametrize(
-        "shots, expected_shot_vector",
-        [
-            (0, (0,)),
-            ((10, 0, 5, 0), (10, 0, 5, 0)),
-            (((10, 3), (0, 5)), (10, 10, 10, 0, 0, 0, 0, 0)),
-        ],
-    )
-    def test_init_with_zero_shots(self, shots, expected_shot_vector):
-        """Test that _FlexShots is initialized correctly with zero shots"""
-        flex_shots = _FlexShots(shots)
-        shot_vector = tuple(s for s in flex_shots)
-        assert shot_vector == expected_shot_vector
-
-    def test_init_with_other_shots(self):
-        """Test that a new _FlexShots object is not created if the input is a _FlexShots object."""
-        shots = _FlexShots(10)
-        new_shots = _FlexShots(shots)
-        assert new_shots is shots
+        assert qml.math.all(qml.math.isnan(res))
 
 
 class TestDebugger:
     """Tests that the debugger works for a simple circuit"""
 
+    class Debugger:
+        """A dummy debugger class"""
+
+        def __init__(self):
+            self.active = True
+            self.snapshots = {}
+
     def test_debugger_numpy(self):
         """Test debugger with numpy"""
         phi = np.array(0.397)
-        ops = [qp.Snapshot(), qp.RX(phi, wires=0), qp.Snapshot("final_state")]
-        qs = qp.tape.QuantumScript(ops, [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))])
+        ops = [qml.Snapshot(), qml.RX(phi, wires=0), qml.Snapshot("final_state")]
+        qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))])
 
-        debugger = Debugger()
+        debugger = self.Debugger()
         result = simulate(qs, debugger=debugger)
 
         assert isinstance(result, tuple)
@@ -503,21 +432,21 @@ class TestDebugger:
     @pytest.mark.autograd
     def test_debugger_autograd(self):
         """Tests debugger with autograd"""
-        phi = qp.numpy.array(-0.52)
-        debugger = Debugger()
+        phi = qml.numpy.array(-0.52)
+        debugger = self.Debugger()
 
         def f(x):
-            ops = [qp.Snapshot(), qp.RX(x, wires=0), qp.Snapshot("final_state")]
-            qs = qp.tape.QuantumScript(ops, [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))])
-            return qp.numpy.array(simulate(qs, debugger=debugger))
+            ops = [qml.Snapshot(), qml.RX(x, wires=0), qml.Snapshot("final_state")]
+            qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))])
+            return qml.numpy.array(simulate(qs, debugger=debugger))
 
         result = f(phi)
         expected = np.array([-np.sin(phi), np.cos(phi)])
-        assert qp.math.allclose(result, expected)
+        assert qml.math.allclose(result, expected)
 
         assert list(debugger.snapshots.keys()) == [0, "final_state"]
-        assert qp.math.allclose(debugger.snapshots[0], [1, 0])
-        assert qp.math.allclose(
+        assert qml.math.allclose(debugger.snapshots[0], [1, 0])
+        assert qml.math.allclose(
             debugger.snapshots["final_state"], [np.cos(phi / 2), -np.sin(phi / 2) * 1j]
         )
 
@@ -527,20 +456,20 @@ class TestDebugger:
         import jax
 
         phi = jax.numpy.array(0.678)
-        debugger = Debugger()
+        debugger = self.Debugger()
 
         def f(x):
-            ops = [qp.Snapshot(), qp.RX(x, wires=0), qp.Snapshot("final_state")]
-            qs = qp.tape.QuantumScript(ops, [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))])
+            ops = [qml.Snapshot(), qml.RX(x, wires=0), qml.Snapshot("final_state")]
+            qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))])
             return simulate(qs, debugger=debugger)
 
         result = f(phi)
-        assert qp.math.allclose(result[0], -np.sin(phi))
-        assert qp.math.allclose(result[1], np.cos(phi))
+        assert qml.math.allclose(result[0], -np.sin(phi))
+        assert qml.math.allclose(result[1], np.cos(phi))
 
         assert list(debugger.snapshots.keys()) == [0, "final_state"]
-        assert qp.math.allclose(debugger.snapshots[0], [1, 0])
-        assert qp.math.allclose(
+        assert qml.math.allclose(debugger.snapshots[0], [1, 0])
+        assert qml.math.allclose(
             debugger.snapshots["final_state"], [np.cos(phi / 2), -np.sin(phi / 2) * 1j]
         )
 
@@ -551,26 +480,46 @@ class TestDebugger:
         import torch
 
         phi = torch.tensor(-0.526, requires_grad=True)
-        debugger = Debugger()
+        debugger = self.Debugger()
 
         def f(x):
-            ops = [qp.Snapshot(), qp.RX(x, wires=0), qp.Snapshot("final_state")]
-            qs = qp.tape.QuantumScript(ops, [qp.expval(qp.PauliY(0)), qp.expval(qp.PauliZ(0))])
+            ops = [qml.Snapshot(), qml.RX(x, wires=0), qml.Snapshot("final_state")]
+            qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))])
             return simulate(qs, debugger=debugger)
 
         result = f(phi)
-        assert qp.math.allclose(result[0], -torch.sin(phi))
-        assert qp.math.allclose(result[1], torch.cos(phi))
+        assert qml.math.allclose(result[0], -torch.sin(phi))
+        assert qml.math.allclose(result[1], torch.cos(phi))
 
         assert list(debugger.snapshots.keys()) == [0, "final_state"]
-        assert qp.math.allclose(debugger.snapshots[0], [1, 0])
+        assert qml.math.allclose(debugger.snapshots[0], [1, 0])
         print(debugger.snapshots["final_state"])
-        assert qp.math.allclose(
+        assert qml.math.allclose(
             debugger.snapshots["final_state"],
             torch.tensor([torch.cos(phi / 2), -torch.sin(phi / 2) * 1j]),
         )
 
     # pylint: disable=invalid-unary-operand-type
+    @pytest.mark.tf
+    def test_debugger_tf(self):
+        """Tests debugger with tensorflow."""
+        import tensorflow as tf
+
+        phi = tf.Variable(4.873)
+        debugger = self.Debugger()
+
+        ops = [qml.Snapshot(), qml.RX(phi, wires=0), qml.Snapshot("final_state")]
+        qs = qml.tape.QuantumScript(ops, [qml.expval(qml.PauliY(0)), qml.expval(qml.PauliZ(0))])
+        result = simulate(qs, debugger=debugger)
+
+        assert qml.math.allclose(result[0], -tf.sin(phi))
+        assert qml.math.allclose(result[1], tf.cos(phi))
+
+        assert list(debugger.snapshots.keys()) == [0, "final_state"]
+        assert qml.math.allclose(debugger.snapshots[0], [1, 0])
+        assert qml.math.allclose(
+            debugger.snapshots["final_state"], [np.cos(phi / 2), -np.sin(phi / 2) * 1j]
+        )
 
 
 class TestSampleMeasurements:
@@ -579,7 +528,7 @@ class TestSampleMeasurements:
     def test_single_expval(self):
         """Test a simple circuit with a single expval measurement"""
         x = np.array(0.732)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.expval(qp.PauliZ(0))], shots=10000)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.expval(qml.PauliZ(0))], shots=10000)
         result = simulate(qs)
 
         assert isinstance(result, np.float64)
@@ -589,7 +538,7 @@ class TestSampleMeasurements:
     def test_single_probs(self):
         """Test a simple circuit with a single prob measurement"""
         x = np.array(0.732)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.probs(wires=0)], shots=10000)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.probs(wires=0)], shots=10000)
         result = simulate(qs)
 
         assert isinstance(result, np.ndarray)
@@ -599,7 +548,7 @@ class TestSampleMeasurements:
     def test_single_sample(self):
         """Test a simple circuit with a single sample measurement"""
         x = np.array(0.732)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.sample(wires=range(2))], shots=10000)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.sample(wires=range(2))], shots=10000)
         result = simulate(qs)
 
         assert isinstance(result, np.ndarray)
@@ -611,9 +560,9 @@ class TestSampleMeasurements:
     def test_multi_measurements(self):
         """Test a simple circuit containing multiple measurements"""
         x, y = np.array(0.732), np.array(0.488)
-        qs = qp.tape.QuantumScript(
-            [qp.RX(x, wires=0), qp.CNOT(wires=[0, 1]), qp.RY(y, wires=1)],
-            [qp.expval(qp.PauliZ(0)), qp.probs(wires=range(2)), qp.sample(wires=range(2))],
+        qs = qml.tape.QuantumScript(
+            [qml.RX(x, wires=0), qml.CNOT(wires=[0, 1]), qml.RY(y, wires=1)],
+            [qml.expval(qml.PauliZ(0)), qml.probs(wires=range(2)), qml.sample(wires=range(2))],
             shots=10000,
         )
         result = simulate(qs)
@@ -642,32 +591,36 @@ class TestSampleMeasurements:
 
     def test_shots_reuse(self, mocker):
         """Test that samples are reused when two measurements commute"""
-        ops = [qp.Hadamard(0), qp.CNOT([0, 1])]
+        ops = [qml.Hadamard(0), qml.CNOT([0, 1])]
         mps = [
-            qp.expval(qp.PauliX(0)),
-            qp.expval(qp.PauliX(1)),
-            qp.expval(qp.PauliZ(0)),
-            qp.var(qp.PauliX(1)),
-            qp.var(qp.PauliY(0)),
-            qp.probs(wires=[0]),
-            qp.probs(wires=[0, 1]),
-            qp.sample(wires=[0, 1]),
-            qp.expval(qp.Hamiltonian([1.0, 2.0, 3.0], [qp.PauliX(0), qp.PauliZ(1), qp.PauliY(1)])),
-            qp.expval(qp.sum(qp.PauliX(0), qp.PauliZ(1), qp.PauliY(1))),
-            qp.expval(qp.s_prod(2.0, qp.PauliX(0))),
-            qp.expval(qp.prod(qp.PauliX(0), qp.PauliY(1))),
+            qml.expval(qml.PauliX(0)),
+            qml.expval(qml.PauliX(1)),
+            qml.expval(qml.PauliZ(0)),
+            qml.var(qml.PauliX(1)),
+            qml.var(qml.PauliY(0)),
+            qml.probs(wires=[0]),
+            qml.probs(wires=[0, 1]),
+            qml.sample(wires=[0, 1]),
+            qml.expval(
+                qml.Hamiltonian([1.0, 2.0, 3.0], [qml.PauliX(0), qml.PauliZ(1), qml.PauliY(1)])
+            ),
+            qml.expval(qml.sum(qml.PauliX(0), qml.PauliZ(1), qml.PauliY(1))),
+            qml.expval(qml.s_prod(2.0, qml.PauliX(0))),
+            qml.expval(qml.prod(qml.PauliX(0), qml.PauliY(1))),
         ]
 
-        qs = qp.tape.QuantumScript(ops, mps, shots=100)
+        qs = qml.tape.QuantumScript(ops, mps, shots=100)
 
-        spy = mocker.spy(qp.devices.qubit.sampling, "sample_state")
+        spy = mocker.spy(qml.devices.qubit.sampling, "sample_state")
         result = simulate(qs)
 
         assert isinstance(result, tuple)
         assert len(result) == len(mps)
 
         # check that samples are reused when possible
-        assert spy.call_count == 8
+        # 3 groups for expval and var, 1 group for probs and sample, 2 groups each for
+        # Hamiltonian and Sum, and 1 group each for SProd and Prod
+        assert spy.call_count == 10
 
     shots_data = [
         [10000, 10000],
@@ -681,8 +634,8 @@ class TestSampleMeasurements:
     def test_expval_shot_vector(self, shots):
         """Test a simple circuit with a single expval measurement for shot vectors"""
         x = np.array(0.732)
-        shots = qp.measurements.Shots(shots)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.expval(qp.PauliZ(0))], shots=shots)
+        shots = qml.measurements.Shots(shots)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.expval(qml.PauliZ(0))], shots=shots)
         result = simulate(qs)
 
         assert isinstance(result, tuple)
@@ -696,8 +649,8 @@ class TestSampleMeasurements:
     def test_probs_shot_vector(self, shots):
         """Test a simple circuit with a single prob measurement for shot vectors"""
         x = np.array(0.732)
-        shots = qp.measurements.Shots(shots)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.probs(wires=0)], shots=shots)
+        shots = qml.measurements.Shots(shots)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.probs(wires=0)], shots=shots)
         result = simulate(qs)
 
         assert isinstance(result, tuple)
@@ -713,8 +666,8 @@ class TestSampleMeasurements:
     def test_sample_shot_vector(self, shots):
         """Test a simple circuit with a single sample measurement for shot vectors"""
         x = np.array(0.732)
-        shots = qp.measurements.Shots(shots)
-        qs = qp.tape.QuantumScript([qp.RY(x, wires=0)], [qp.sample(wires=range(2))], shots=shots)
+        shots = qml.measurements.Shots(shots)
+        qs = qml.tape.QuantumScript([qml.RY(x, wires=0)], [qml.sample(wires=range(2))], shots=shots)
         result = simulate(qs)
 
         assert isinstance(result, tuple)
@@ -733,10 +686,10 @@ class TestSampleMeasurements:
     def test_multi_measurement_shot_vector(self, shots):
         """Test a simple circuit containing multiple measurements for shot vectors"""
         x, y = np.array(0.732), np.array(0.488)
-        shots = qp.measurements.Shots(shots)
-        qs = qp.tape.QuantumScript(
-            [qp.RX(x, wires=0), qp.CNOT(wires=[0, 1]), qp.RY(y, wires=1)],
-            [qp.expval(qp.PauliZ(0)), qp.probs(wires=range(2)), qp.sample(wires=range(2))],
+        shots = qml.measurements.Shots(shots)
+        qs = qml.tape.QuantumScript(
+            [qml.RX(x, wires=0), qml.CNOT(wires=[0, 1]), qml.RY(y, wires=1)],
+            [qml.expval(qml.PauliZ(0)), qml.probs(wires=range(2)), qml.sample(wires=range(2))],
             shots=shots,
         )
         result = simulate(qs)
@@ -771,12 +724,12 @@ class TestSampleMeasurements:
     def test_custom_wire_labels(self):
         """Test that custom wire labels works as expected"""
         x, y = np.array(0.732), np.array(0.488)
-        qs = qp.tape.QuantumScript(
-            [qp.RX(x, wires="b"), qp.CNOT(wires=["b", "a"]), qp.RY(y, wires="a")],
+        qs = qml.tape.QuantumScript(
+            [qml.RX(x, wires="b"), qml.CNOT(wires=["b", "a"]), qml.RY(y, wires="a")],
             [
-                qp.expval(qp.PauliZ("b")),
-                qp.probs(wires=["a", "b"]),
-                qp.sample(wires=["b", "a"]),
+                qml.expval(qml.PauliZ("b")),
+                qml.probs(wires=["a", "b"]),
+                qml.sample(wires=["b", "a"]),
             ],
             shots=10000,
         )
@@ -810,53 +763,53 @@ class TestOperatorArithmetic:
         """Test an operator arithmetic circuit with non-integer wires with numpy."""
         phi = 1.2
         ops = [
-            qp.PauliX("a"),
-            qp.PauliX("b"),
-            qp.ctrl(qp.RX(phi, "target") ** 2, ("a", "b", -3), control_values=[1, 1, 0]),
+            qml.PauliX("a"),
+            qml.PauliX("b"),
+            qml.ctrl(qml.RX(phi, "target") ** 2, ("a", "b", -3), control_values=[1, 1, 0]),
         ]
 
-        qs = qp.tape.QuantumScript(
+        qs = qml.tape.QuantumScript(
             ops,
             [
-                qp.expval(qp.sum(qp.PauliY("target"), qp.PauliZ("b"))),
-                qp.expval(qp.s_prod(3, qp.PauliZ("target"))),
+                qml.expval(qml.sum(qml.PauliY("target"), qml.PauliZ("b"))),
+                qml.expval(qml.s_prod(3, qml.PauliZ("target"))),
             ],
         )
 
         results = simulate(qs)
-        assert qp.math.allclose(results[0], -np.sin(2 * phi) - 1)
-        assert qp.math.allclose(results[1], 3 * np.cos(2 * phi))
+        assert qml.math.allclose(results[0], -np.sin(2 * phi) - 1)
+        assert qml.math.allclose(results[1], 3 * np.cos(2 * phi))
 
     @pytest.mark.autograd
     def test_autograd_op_arithmetic(self):
         """Test operator arithmetic circuit with non-integer wires works with autograd."""
 
-        phi = qp.numpy.array(1.2)
+        phi = qml.numpy.array(1.2)
 
         def f(x):
             ops = [
-                qp.PauliX("a"),
-                qp.PauliX("b"),
-                qp.ctrl(qp.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
+                qml.PauliX("a"),
+                qml.PauliX("b"),
+                qml.ctrl(qml.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
             ]
 
-            qs = qp.tape.QuantumScript(
+            qs = qml.tape.QuantumScript(
                 ops,
                 [
-                    qp.expval(qp.sum(qp.PauliY("target"), qp.PauliZ("b"))),
-                    qp.expval(qp.s_prod(3, qp.PauliZ("target"))),
+                    qml.expval(qml.sum(qml.PauliY("target"), qml.PauliZ("b"))),
+                    qml.expval(qml.s_prod(3, qml.PauliZ("target"))),
                 ],
             )
 
-            return qp.numpy.array(simulate(qs))
+            return qml.numpy.array(simulate(qs))
 
         results = f(phi)
-        assert qp.math.allclose(results[0], -np.sin(phi) - 1)
-        assert qp.math.allclose(results[1], 3 * np.cos(phi))
+        assert qml.math.allclose(results[0], -np.sin(phi) - 1)
+        assert qml.math.allclose(results[1], 3 * np.cos(phi))
 
-        g = qp.jacobian(f)(phi)
-        assert qp.math.allclose(g[0], -np.cos(phi))
-        assert qp.math.allclose(g[1], -3 * np.sin(phi))
+        g = qml.jacobian(f)(phi)
+        assert qml.math.allclose(g[0], -np.cos(phi))
+        assert qml.math.allclose(g[1], -3 * np.sin(phi))
 
     @pytest.mark.jax
     @pytest.mark.parametrize("use_jit", (True, False))
@@ -868,16 +821,16 @@ class TestOperatorArithmetic:
 
         def f(x):
             ops = [
-                qp.PauliX("a"),
-                qp.PauliX("b"),
-                qp.ctrl(qp.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
+                qml.PauliX("a"),
+                qml.PauliX("b"),
+                qml.ctrl(qml.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
             ]
 
-            qs = qp.tape.QuantumScript(
+            qs = qml.tape.QuantumScript(
                 ops,
                 [
-                    qp.expval(qp.sum(qp.PauliY("target"), qp.PauliZ("b"))),
-                    qp.expval(qp.s_prod(3, qp.PauliZ("target"))),
+                    qml.expval(qml.sum(qml.PauliY("target"), qml.PauliZ("b"))),
+                    qml.expval(qml.s_prod(3, qml.PauliZ("target"))),
                 ],
             )
 
@@ -887,12 +840,12 @@ class TestOperatorArithmetic:
             f = jax.jit(f)
 
         results = f(phi)
-        assert qp.math.allclose(results[0], -np.sin(phi) - 1)
-        assert qp.math.allclose(results[1], 3 * np.cos(phi))
+        assert qml.math.allclose(results[0], -np.sin(phi) - 1)
+        assert qml.math.allclose(results[1], 3 * np.cos(phi))
 
         g = jax.jacobian(f)(phi)
-        assert qp.math.allclose(g[0], -np.cos(phi))
-        assert qp.math.allclose(g[1], -3 * np.sin(phi))
+        assert qml.math.allclose(g[0], -np.cos(phi))
+        assert qml.math.allclose(g[1], -3 * np.sin(phi))
 
     @pytest.mark.torch
     def test_torch_op_arithmetic(self):
@@ -903,38 +856,73 @@ class TestOperatorArithmetic:
 
         def f(x):
             ops = [
-                qp.PauliX("a"),
-                qp.PauliX("b"),
-                qp.ctrl(qp.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
+                qml.PauliX("a"),
+                qml.PauliX("b"),
+                qml.ctrl(qml.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
             ]
 
-            qs = qp.tape.QuantumScript(
+            qs = qml.tape.QuantumScript(
                 ops,
                 [
-                    qp.expval(qp.sum(qp.PauliY("target"), qp.PauliZ("b"))),
-                    qp.expval(qp.s_prod(3, qp.PauliZ("target"))),
+                    qml.expval(qml.sum(qml.PauliY("target"), qml.PauliZ("b"))),
+                    qml.expval(qml.s_prod(3, qml.PauliZ("target"))),
                 ],
             )
 
             return simulate(qs)
 
         results = f(phi)
-        assert qp.math.allclose(results[0], -torch.sin(phi) - 1)
-        assert qp.math.allclose(results[1], 3 * torch.cos(phi))
+        assert qml.math.allclose(results[0], -torch.sin(phi) - 1)
+        assert qml.math.allclose(results[1], 3 * torch.cos(phi))
 
         g = torch.autograd.functional.jacobian(f, phi)
-        assert qp.math.allclose(g[0], -torch.cos(phi))
-        assert qp.math.allclose(g[1], -3 * torch.sin(phi))
+        assert qml.math.allclose(g[0], -torch.cos(phi))
+        assert qml.math.allclose(g[1], -3 * torch.sin(phi))
+
+    @pytest.mark.tf
+    def test_tensorflow_op_arithmetic(self):
+        """Test operator arithmetic circuit with non-integer wires works with tensorflow."""
+        import tensorflow as tf
+
+        phi = tf.Variable(0.4203)
+
+        def f(x):
+            ops = [
+                qml.PauliX("a"),
+                qml.PauliX("b"),
+                qml.ctrl(qml.RX(x, "target"), ("a", "b", -3), control_values=[1, 1, 0]),
+            ]
+
+            qs = qml.tape.QuantumScript(
+                ops,
+                [
+                    qml.expval(qml.sum(qml.PauliY("target"), qml.PauliZ("b"))),
+                    qml.expval(qml.s_prod(3, qml.PauliZ("target"))),
+                ],
+            )
+
+            return simulate(qs)
+
+        with tf.GradientTape(persistent=True) as tape:
+            results = f(phi)
+
+        assert qml.math.allclose(results[0], -np.sin(phi) - 1)
+        assert qml.math.allclose(results[1], 3 * np.cos(phi))
+
+        g0 = tape.gradient(results[0], phi)
+        assert qml.math.allclose(g0, -np.cos(phi))
+        g1 = tape.gradient(results[1], phi)
+        assert qml.math.allclose(g1, -3 * np.sin(phi))
 
 
 class TestQInfoMeasurements:
     measurements = [
-        qp.density_matrix(0),
-        qp.density_matrix(1),
-        qp.density_matrix((0, 1)),
-        qp.vn_entropy(0),
-        qp.vn_entropy(1),
-        qp.mutual_info(0, 1),
+        qml.density_matrix(0),
+        qml.density_matrix(1),
+        qml.density_matrix((0, 1)),
+        qml.vn_entropy(0),
+        qml.vn_entropy(1),
+        qml.mutual_info(0, 1),
     ]
 
     def expected_results(self, phi):
@@ -991,48 +979,48 @@ class TestQInfoMeasurements:
     def test_qinfo_numpy(self):
         """Test quantum info measurements with numpy"""
         phi = -0.623
-        qs = qp.tape.QuantumScript([qp.IsingXX(phi, wires=(0, 1))], self.measurements)
+        qs = qml.tape.QuantumScript([qml.IsingXX(phi, wires=(0, 1))], self.measurements)
 
         results = simulate(qs)
         for val1, val2 in zip(results, self.expected_results(phi)):
-            assert qp.math.allclose(val1, val2)
+            assert qml.math.allclose(val1, val2)
 
     @pytest.mark.autograd
     def test_qinfo_autograd_execute(self):
         """Tests autograd execution with qinfo measurements."""
-        phi = qp.numpy.array(6.920)
+        phi = qml.numpy.array(6.920)
 
         def f(x):
-            qs = qp.tape.QuantumScript([qp.IsingXX(x, wires=(0, 1))], self.measurements)
+            qs = qml.tape.QuantumScript([qml.IsingXX(x, wires=(0, 1))], self.measurements)
             return simulate(qs)
 
         results = f(phi)
         expected = self.expected_results(phi)
         for val1, val2 in zip(results, expected):
-            assert qp.math.allclose(val1, val2)
+            assert qml.math.allclose(val1, val2)
 
     @pytest.mark.autograd
     def test_qinfo_autograd_backprop(self):
         """Tests autograd derivatives with qinfo measurements.
         Only simulates one measurement at a time due to autograd differentiation limitations."""
 
-        phi = qp.numpy.array(0.263)
+        phi = qml.numpy.array(0.263)
 
         def f(x, m_ind, real=True):
-            qs = qp.tape.QuantumScript([qp.IsingXX(x, wires=(0, 1))], [self.measurements[m_ind]])
+            qs = qml.tape.QuantumScript([qml.IsingXX(x, wires=(0, 1))], [self.measurements[m_ind]])
             out = simulate(qs)
-            return qp.math.real(out) if real else qp.math.imag(out)
+            return qml.math.real(out) if real else qml.math.imag(out)
 
         expected_grads = self.expected_grad(phi)
 
         for i in (0, 1, 3, 4, 5):  # skip density matrix on both wires
-            g = qp.jacobian(f)(phi, i, real=True)
-            assert qp.math.allclose(expected_grads[i], g)
+            g = qml.jacobian(f)(phi, i, real=True)
+            assert qml.math.allclose(expected_grads[i], g)
 
         # density matrix on both wires case
-        g_real = qp.jacobian(f)(phi, 2, True)
-        g_imag = qp.jacobian(f)(phi, 2, False)
-        assert qp.math.allclose(g_real + 1j * g_imag, expected_grads[2])
+        g_real = qml.jacobian(f)(phi, 2, True)
+        g_imag = qml.jacobian(f)(phi, 2, False)
+        assert qml.math.allclose(g_real + 1j * g_imag, expected_grads[2])
 
     @pytest.mark.jax
     @pytest.mark.parametrize("use_jit", (True, False))
@@ -1042,7 +1030,7 @@ class TestQInfoMeasurements:
         import jax
 
         def f(x):
-            qs = qp.tape.QuantumScript([qp.IsingXX(x, wires=(0, 1))], self.measurements)
+            qs = qml.tape.QuantumScript([qml.IsingXX(x, wires=(0, 1))], self.measurements)
             return simulate(qs)
 
         if use_jit:
@@ -1052,7 +1040,7 @@ class TestQInfoMeasurements:
 
         results = f(phi)
         for val1, val2 in zip(results, self.expected_results(phi)):
-            assert qp.math.allclose(val1, val2)
+            assert qml.math.allclose(val1, val2)
 
         def real_out(phi):
             return tuple(jax.numpy.real(r) for r in f(phi))
@@ -1068,17 +1056,17 @@ class TestQInfoMeasurements:
 
         # Writing this way makes it easier to figure out which is failing
         # density 0
-        assert qp.math.allclose(grads[0], expected_grads[0])
+        assert qml.math.allclose(grads[0], expected_grads[0])
         # density 1
-        assert qp.math.allclose(grads[1], expected_grads[1])
+        assert qml.math.allclose(grads[1], expected_grads[1])
         # density both
-        assert qp.math.allclose(grads[2], expected_grads[2])
+        assert qml.math.allclose(grads[2], expected_grads[2])
         # entropy 0
-        assert qp.math.allclose(grads[3], expected_grads[3])
+        assert qml.math.allclose(grads[3], expected_grads[3])
         # entropy 1
-        assert qp.math.allclose(grads[4], expected_grads[4])
+        assert qml.math.allclose(grads[4], expected_grads[4])
         # mutual info
-        assert qp.math.allclose(grads[5], expected_grads[5])
+        assert qml.math.allclose(grads[5], expected_grads[5])
 
     @pytest.mark.torch
     def test_qinfo_torch(self):
@@ -1088,12 +1076,12 @@ class TestQInfoMeasurements:
         phi = torch.tensor(1.928, requires_grad=True)
 
         def f(x):
-            qs = qp.tape.QuantumScript([qp.IsingXX(x, wires=(0, 1))], self.measurements)
+            qs = qml.tape.QuantumScript([qml.IsingXX(x, wires=(0, 1))], self.measurements)
             return simulate(qs)
 
         results = f(phi)
         for val1, val2 in zip(results, self.expected_results(phi.detach().numpy())):
-            assert qp.math.allclose(val1, val2)
+            assert qml.math.allclose(val1, val2)
 
         def real_out(phi):
             return tuple(torch.real(r) for r in f(torch.real(phi)))
@@ -1110,468 +1098,55 @@ class TestQInfoMeasurements:
 
         # Writing this way makes it easier to figure out which is failing
         # density 0
-        assert qp.math.allclose(grads[0], expected_grads[0])
+        assert qml.math.allclose(grads[0], expected_grads[0])
         # density 1
-        assert qp.math.allclose(grads[1], expected_grads[1])
+        assert qml.math.allclose(grads[1], expected_grads[1])
         # density both
-        assert qp.math.allclose(grads[2], expected_grads[2])
+        assert qml.math.allclose(grads[2], expected_grads[2])
         # entropy 0
-        assert qp.math.allclose(grads[3], expected_grads[3])
+        assert qml.math.allclose(grads[3], expected_grads[3])
         # entropy 1
-        assert qp.math.allclose(grads[4], expected_grads[4])
+        assert qml.math.allclose(grads[4], expected_grads[4])
         # mutual info
-        assert qp.math.allclose(grads[5], expected_grads[5])
+        assert qml.math.allclose(grads[5], expected_grads[5])
 
+    @pytest.mark.tf
+    def test_qinfo_tf(self):
+        """Test qinfo measurements with tensorflow."""
+        import tensorflow as tf
 
-@pytest.mark.unit
-class TestTreeTraversalStack:
-    """Unit tests for TreeTraversalStack"""
+        phi = tf.Variable(0.9276)
 
-    @pytest.mark.parametrize(
-        "max_depth",
-        [0, 1, 10, 100],
-    )
-    def test_init_with_depth(self, max_depth):
-        """Test that TreeTraversalStack is initialized correctly with given ``max_depth``"""
-        tree_stack = TreeTraversalStack(max_depth)
+        with tf.GradientTape(persistent=True) as grad_tape:
+            qs = qml.tape.QuantumScript([qml.IsingXX(phi, wires=(0, 1))], self.measurements)
+            results = simulate(qs)
 
-        assert tree_stack.counts.count(None) == max_depth
-        assert tree_stack.probs.count(None) == max_depth
-        assert tree_stack.results_0.count(None) == max_depth
-        assert tree_stack.results_1.count(None) == max_depth
-        assert tree_stack.states.count(None) == max_depth
+            result2_real = tf.math.real(results[2])
+            result2_imag = tf.math.imag(results[2])
 
-    def test_full_prune_empty_methods(self):
-        """Test that TreeTraversalStack object's class methods work correctly."""
+        expected = self.expected_results(phi)
+        for val1, val2 in zip(results, expected):
+            assert qml.math.allclose(val1, val2)
 
-        max_depth = 10
-        tree_stack = TreeTraversalStack(max_depth)
+        expected_grads = self.expected_grad(phi)
 
-        np.random.shuffle(r_depths := list(range(max_depth)))
-        for depth in r_depths:
-            counts_0 = np.random.randint(1, 9)
-            counts_1 = 10 - counts_0
-            tree_stack.counts[depth] = [counts_0, counts_1]
-            tree_stack.probs[depth] = [counts_0 / 10, counts_1 / 10]
-            tree_stack.results_0[depth] = [0] * counts_0
-            tree_stack.results_1[depth] = [1] * counts_1
-            tree_stack.states[depth] = [np.sqrt(counts_0), np.sqrt(counts_1)]
-            assert tree_stack.is_full(depth)
+        grad0 = grad_tape.jacobian(results[0], phi)
+        assert qml.math.allclose(grad0, expected_grads[0])
 
-            assert tree_stack.counts[depth] == list(
-                samples_to_counts(
-                    np.array(tree_stack.results_0[depth] + tree_stack.results_1[depth])
-                ).values()
-            )
-            assert tree_stack.probs[depth] == list(
-                counts_to_probs(dict(zip([0, 1], tree_stack.counts[depth]))).values()
-            )
+        grad1 = grad_tape.jacobian(results[1], phi)
+        assert qml.math.allclose(grad1, expected_grads[1])
 
-            state_vec = np.array(tree_stack.states[depth]).T
-            state_vec /= np.linalg.norm(tree_stack.states[depth])
-            meas, meas_r = qp.measure(0), qp.measure(0, reset=True)
-            assert np.allclose(branch_state(state_vec, 0, meas.measurements[0]), [1.0, 0.0])
-            assert np.allclose(branch_state(state_vec, 1, meas_r.measurements[0]), [1.0, 0.0])
-
-            tree_stack.prune(depth)
-            assert tree_stack.any_is_empty(depth)
-
-
-@pytest.mark.unit
-class TestMidMeasurements:
-    """Tests for simulating scripts with mid-circuit measurements using the ``simulate_tree_mcm``."""
-
-    @pytest.mark.parametrize(
-        "shots, postselect_mode, error",
-        [
-            (10, "fill-shots", True),
-            (None, "fill-shots", False),
-            (10, "hw-like", False),
-            (None, "hw-like", False),
-        ],
-    )
-    def test_defer_measurements_fill_shots_zero_prob_postselection_error(
-        self, shots, postselect_mode, error
-    ):
-        """Test that an error is raised if `postselect_mode="fill-shots"` with finite shots
-        and the postselection probability is zero when using defer_measurements."""
-
-        # State is |0>, so postselection probability is zero
-        qs = qp.tape.QuantumScript(
-            [qp.ops.MidMeasure(0, postselect=1)], [qp.expval(qp.Z(0))], shots=shots
-        )
-        [deferred_qs], _ = qp.defer_measurements(qs)
-
-        if error:
-            with pytest.raises(RuntimeError, match="The probability of the postselected"):
-                simulate(deferred_qs, mcm_method="deferred", postselect_mode=postselect_mode)
-
-        else:
-            # No error should be raised
-            simulate(deferred_qs, mcm_method="deferred", postselect_mode=postselect_mode)
-
-    @pytest.mark.parametrize("val", [0, 1])
-    def test_basic_mid_meas_circuit(self, val):
-        """Test execution with a basic circuit with mid-circuit measurements."""
-        qs = qp.tape.QuantumScript(
-            [qp.Hadamard(0), qp.CNOT([0, 1]), qp.ops.MidMeasure(0, postselect=val)],
-            [qp.expval(qp.X(0)), qp.expval(qp.Z(0))],
-        )
-        result = simulate_tree_mcm(qs)
-        assert result == (0, (-1.0) ** val)
-
-    def test_basic_mid_meas_circuit_with_reset(self):
-        """Test execution with a basic circuit with mid-circuit measurements."""
-        qs = qp.tape.QuantumScript(
-            [
-                qp.Hadamard(0),
-                qp.Hadamard(1),
-                qp.CNOT([0, 1]),
-                (m0 := qp.measure(0, reset=True)).measurements[0],
-                qp.Hadamard(0),
-                qp.CNOT([1, 0]),
-            ],  # equivalent to a circuit that gives equiprobable basis states
-            [qp.probs(op=m0), qp.probs(op=qp.Z(0)), qp.probs(op=qp.Z(1))],
-        )
-        result = simulate_tree_mcm(qs)
-        assert qp.math.allclose(result, qp.math.array([0.5, 0.5]))
-
-    # pylint: disable=too-many-arguments
-    @pytest.mark.parametrize("shots", [None, 5500])
-    @pytest.mark.parametrize("postselect", [None, 0])
-    @pytest.mark.parametrize("reset", [False, True])
-    @pytest.mark.parametrize("measure_f", [qp.counts, qp.expval, qp.probs, qp.sample, qp.var])
-    @pytest.mark.parametrize("meas_obj", [qp.Y(0), [1], [1, 0], "mcm", "composite_mcm", "mcm_list"])
-    def test_simple_dynamic_circuit(self, *, shots, measure_f, postselect, reset, meas_obj, seed):
-        """Tests that `simulate` can handles a simple dynamic circuit with the following measurements:
-
-            * qp.counts with obs (comp basis or not), single wire, multiple wires (ordered/unordered), MCM, f(MCM), MCM list
-            * qp.expval with obs (comp basis or not), MCM, f(MCM), MCM list
-            * qp.probs with obs (comp basis or not), single wire, multiple wires (ordered/unordered), MCM, f(MCM), MCM list
-            * qp.sample with obs (comp basis or not), single wire, multiple wires (ordered/unordered), MCM, f(MCM), MCM list
-            * qp.var with obs (comp basis or not), MCM, f(MCM), MCM list
-
-        The above combinations should work for finite shots, shot vectors and post-selecting of either the 0 or 1 branch.
-        """
-
-        if measure_f in (qp.expval, qp.var) and (
-            isinstance(meas_obj, list) or meas_obj == "mcm_list"
-        ):
-            pytest.skip("Can't use wires/mcm lists with var or expval")
-
-        if measure_f in (qp.counts, qp.sample) and shots is None:
-            pytest.skip("Can't measure counts/sample in analytic mode (`shots=None`)")
-
-        if measure_f in (qp.probs,) and meas_obj in ["composite_mcm"]:
-            pytest.skip(
-                "Cannot use qp.probs() when measuring multiple mid-circuit measurements collected using arithmetic operators."
-            )
-
-        qscript = qp.tape.QuantumScript(
-            [
-                qp.RX(np.pi / 2.5, 0),
-                qp.RZ(np.pi / 4, 0),
-                (m0 := qp.measure(0, reset=reset)).measurements[0],
-                qp.ops.op_math.Conditional(m0 == 0, qp.RX(np.pi / 4, 0)),
-                qp.ops.op_math.Conditional(m0 == 1, qp.RX(-np.pi / 4, 0)),
-                qp.RX(np.pi / 3, 1),
-                qp.RZ(np.pi / 4, 1),
-                (m1 := qp.measure(1, postselect=postselect)).measurements[0],
-                qp.ops.op_math.Conditional(m1 == 0, qp.RY(np.pi / 4, 1)),
-                qp.ops.op_math.Conditional(m1 == 1, qp.RY(-np.pi / 4, 1)),
-            ],
-            [
-                measure_f(
-                    **{
-                        "wires" if isinstance(meas_obj, list) else "op": (
-                            (
-                                m0
-                                if meas_obj == "mcm"
-                                else (0.5 * m0 + m1 if meas_obj == "composite_mcm" else [m0, m1])
-                            )
-                            if isinstance(meas_obj, str)
-                            else meas_obj
-                        )
-                    }
-                )
-            ],
-            shots=shots,
+        grad2_real = grad_tape.jacobian(result2_real, phi)
+        grad2_imag = grad_tape.jacobian(result2_imag, phi)
+        assert qml.math.allclose(
+            np.array(grad2_real) + 1j * np.array(grad2_imag), expected_grads[2]
         )
 
-        rng = np.random.default_rng(seed)
-        results0 = simulate(qscript, mcm_method="tree-traversal", rng=rng)
+        grad3 = grad_tape.jacobian(results[3], phi)
+        assert qml.math.allclose(grad3, expected_grads[3])
 
-        deferred_tapes, deferred_func = qp.defer_measurements(qscript)
-        results1 = deferred_func(
-            [simulate(tape, mcm_method="deferred", rng=rng) for tape in deferred_tapes]
-        )
-        mcm_utils.validate_measurements(measure_f, shots, results1, results0)
+        grad4 = grad_tape.jacobian(results[4], phi)
+        assert qml.math.allclose(grad4, expected_grads[4])
 
-        if shots is not None:
-            one_shot_tapes, one_shot_func = qp.dynamic_one_shot(qscript)
-            results2 = one_shot_func(
-                [simulate(tape, mcm_method="one-shot", rng=rng) for tape in one_shot_tapes]
-            )
-            mcm_utils.validate_measurements(measure_f, shots, results2, results0)
-
-    @pytest.mark.parametrize("shots", [None, 5500, [5500, 5500]])
-    @pytest.mark.parametrize("angles", [(0.123, 0.015), (0.543, 0.057)])
-    @pytest.mark.parametrize("measure_f", [qp.probs, qp.sample])
-    def test_approx_dynamic_mid_meas_circuit(self, shots, angles, measure_f, seed):
-        """Test execution of a dynamic circuit with an equivalent static one."""
-
-        if measure_f in (qp.sample,) and shots is None:
-            pytest.skip("Can't measure samples in analytic mode (`shots=None`)")
-
-        qs_with_mid_meas = qp.tape.QuantumScript(
-            [
-                qp.Hadamard(0),
-                qp.Hadamard(1),
-                qp.CZ([0, 1]),
-                qp.CNOT([0, 2]),
-                qp.CNOT([2, 3]),
-                qp.CZ([1, 3]),
-                qp.Toffoli([3, 2, 0]),
-                (m0 := qp.measure(0)).measurements[0],
-                qp.ops.op_math.Conditional(m0, qp.RZ(angles[0], 1)),
-                qp.Hadamard(1),
-                qp.Z(1),
-                (m1 := qp.measure(1)).measurements[0],
-                qp.ops.op_math.Conditional(m1, qp.RX(angles[1], 3)),
-            ],
-            [measure_f(wires=[0, 1, 2, 3])],
-            shots=shots,
-        )
-        qs_without_mid_meas = qp.tape.QuantumScript(
-            [
-                qp.Hadamard(0),
-                qp.Hadamard(1),
-                qp.CZ([0, 1]),
-                qp.CNOT([0, 2]),
-                qp.CNOT([2, 3]),
-                qp.CZ([1, 3]),
-                qp.Toffoli([3, 2, 0]),
-                qp.Hadamard(1),
-                qp.Z(1),
-                qp.RX(angles[1], 3),
-            ],
-            [measure_f(wires=[0, 1, 2, 3])],
-            shots=shots,
-        )  # approximate compiled circuit of the above
-        res1 = simulate_tree_mcm(qs_with_mid_meas, rng=seed)
-        res2 = simulate(qs_without_mid_meas, rng=seed)
-
-        if not isinstance(shots, list):
-            res1, res2 = (res1,), (res2,)
-
-        for rs1, rs2 in zip(res1, res2):
-            prob_dist1, prob_dist2 = rs1, rs2
-            if measure_f in (qp.sample,):
-                n_wires = rs1.shape[1]
-                prob_dist1, prob_dist2 = np.zeros(2**n_wires), np.zeros(2**n_wires)
-                for prob, rs in zip([prob_dist1, prob_dist2], [rs1, rs2]):
-                    index, count = np.unique(
-                        np.packbits(rs, axis=1, bitorder="little").squeeze(), return_counts=True
-                    )
-                    prob[index] = count
-
-            assert qp.math.allclose(
-                sp.stats.entropy(prob_dist1 + 1e-12, prob_dist2 + 1e-12), 0.0, atol=5e-2
-            )
-
-    @pytest.mark.parametrize("ml_framework", ml_frameworks_list)
-    @pytest.mark.parametrize("postselect_mode", [None, "hw-like", "pad-invalid-samples"])
-    def test_tree_traversal_interface_mcm(self, ml_framework, postselect_mode, seed):
-        """Test that tree traversal works numerically with different interfaces"""
-        # pylint:disable = singleton-comparison, import-outside-toplevel
-
-        qscript = qp.tape.QuantumScript(
-            [
-                qp.RX(np.pi / 4, wires=0),
-                (m0 := qp.measure(0, reset=True)).measurements[0],
-                qp.RX(np.pi / 4, wires=0),
-            ],
-            [qp.sample(qp.Z(0)), qp.sample(m0)],
-            shots=5500,
-        )
-
-        rng = np.random.default_rng(seed)
-        res1, res2 = simulate_tree_mcm(qscript, interface=ml_framework, rng=rng)
-
-        p1 = [qp.math.mean(res1 == -1), qp.math.mean(res1 == 1)]
-        p2 = [qp.math.mean(res2 == True), qp.math.mean(res2 == False)]
-        assert qp.math.allclose(qp.math.sum(sp.special.rel_entr(p1, p2)), 0.0, atol=0.05)
-
-        qscript2 = qp.tape.QuantumScript(
-            [
-                qp.RX(np.pi / 4, wires=0),
-                (m0 := qp.measure(0, postselect=0)).measurements[0],
-                qp.RX(np.pi / 4, wires=0),
-            ],
-            [qp.sample(qp.Z(0))],
-            shots=5500,
-        )
-        qscript3 = qp.tape.QuantumScript(
-            [qp.RX(np.pi / 4, wires=0)], [qp.sample(qp.Z(0))], shots=5500
-        )
-
-        res3 = simulate_tree_mcm(qscript2, postselect_mode=postselect_mode, rng=rng)
-        res4 = simulate(qscript3, rng=rng)
-
-        p3 = [qp.math.mean(res3 == -1), qp.math.mean(res3 == 1)]
-        p4 = [qp.math.mean(res4 == -1), qp.math.mean(res4 == 1)]
-        assert qp.math.allclose(qp.math.sum(sp.special.rel_entr(p3, p4)), 0.0, atol=0.05)
-
-    def test_tree_traversal_postselect_mode(self):
-        """Test that invalid shots are discarded if requested"""
-
-        shots = 100
-        qscript = qp.tape.QuantumScript(
-            [
-                qp.RX(np.pi / 2, 0),
-                (m0 := qp.measure(0, postselect=1)).measurements[0],
-                qp.ops.op_math.Conditional(m0, qp.RZ(1.57, 1)),
-            ],
-            [qp.sample(wires=[0, 1])],
-            shots=shots,
-        )
-
-        res = simulate_tree_mcm(qscript, postselect_mode="hw-like")
-
-        assert len(res) < shots
-        assert np.all(res != np.iinfo(np.int32).min)
-
-    def test_tree_traversal_deep_circuit(self):
-        """Test that `simulate_tree_mcm` works with circuits with many mid-circuit measurements"""
-
-        n_circs = 500
-        operations = []
-        for _ in range(n_circs):
-            operations.extend(
-                [
-                    qp.RX(1.234, 0),
-                    (m0 := qp.measure(0, postselect=1)).measurements[0],
-                    qp.CNOT([0, 1]),
-                    qp.ops.op_math.Conditional(m0, qp.RZ(1.786, 1)),
-                ]
-            )
-
-        qscript = qp.tape.QuantumScript(
-            operations,
-            [qp.sample(wires=[0, 1]), qp.counts(wires=[0, 1])],
-            shots=20,
-        )
-
-        mcms = _find_post_processed_mcms(qscript)
-        assert len(mcms) == n_circs
-
-        split_circs = split_circuit_at_mcms(qscript)
-        assert len(split_circs) == n_circs + 1
-        for circ in split_circs:
-            assert not [o for o in circ.operations if isinstance(o, qp.ops.MidMeasure)]
-
-    @pytest.mark.parametrize(
-        "measurements, expected",
-        [
-            [(qp.counts(0), {"a": (1, {0: 42}), "b": (2, {1: 58})}), {0: 42, 1: 58}],
-            [
-                (qp.expval(qp.Z(0)), {"a": (1, (0.42, -1)), "b": (2, (0.58, 1))}),
-                [1.58 / 3, 1 / 3],
-            ],
-            [(qp.probs(wires=0), {"a": (1, (0.42, -1)), "b": (2, (0.58, 1))}), [1.58 / 3, 1 / 3]],
-            [(qp.sample(wires=0), {"a": (1, (0, 1, 0)), "b": (2, (1, 0, 1))}), [0, 1, 0, 1, 0, 1]],
-        ],
-    )
-    def test_tree_traversal_combine_measurements(self, measurements, expected):
-        """Test that the measurement value of a given type can be combined"""
-        combined_measurement = combine_measurements_core(*measurements)
-        if isinstance(combined_measurement, dict):
-            assert combined_measurement == expected
-        else:
-            assert qp.math.allclose(combined_measurement, expected)
-
-    @pytest.mark.parametrize("ml_framework", ml_frameworks_list)
-    @pytest.mark.parametrize("postselect_mode", [None, "hw-like", "pad-invalid-samples"])
-    def test_simulate_one_shot_native_mcm(self, ml_framework, postselect_mode, seed):
-        """Unit tests for simulate_one_shot_native_mcm"""
-
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.RX(np.pi / 4, wires=0)
-            m = qp.measure(wires=0, postselect=0)
-            qp.RX(np.pi / 4, wires=0)
-
-        circuit = qp.tape.QuantumScript(q.queue, [qp.expval(qp.Z(0)), qp.sample(m)], shots=[1])
-
-        rng = np.random.default_rng(seed)
-        n_shots = 1000
-        results = [
-            simulate_one_shot_native_mcm(
-                circuit,
-                n_shots,
-                interface=ml_framework,
-                postselect_mode=postselect_mode,
-                rng=rng,
-            )
-            for _ in range(n_shots)
-        ]
-        terminal_results, mcm_results = zip(*results)
-
-        equivalent_tape = qp.tape.QuantumScript(
-            [qp.RX(np.pi / 4, wires=0)], [qp.sample(wires=0)], shots=n_shots
-        )
-        expected_result = simulate(equivalent_tape, rng=rng)
-        fisher_exact_test(mcm_results, expected_result, threshold=0.01)
-
-        subset = [ts for ms, ts in zip(mcm_results, terminal_results) if ms == 0]
-        equivalent_tape = qp.tape.QuantumScript(
-            [qp.RX(np.pi / 4, wires=0)], [qp.expval(qp.Z(0))], shots=n_shots
-        )
-        expected_sample = simulate(equivalent_tape, rng=rng)
-        fisher_exact_test(subset, expected_sample, outcomes=(-1, 1), threshold=0.01)
-
-        subset = [ts for ms, ts in zip(mcm_results, terminal_results) if ms == 1]
-        equivalent_tape = qp.tape.QuantumScript(
-            [qp.X(0), qp.RX(np.pi / 4, wires=0)], [qp.expval(qp.Z(0))], shots=n_shots
-        )
-        expected_sample = simulate(equivalent_tape, rng=rng)
-        fisher_exact_test(subset, expected_sample, outcomes=(-1, 1), threshold=0.01)
-
-    def test_tree_traversal_non_standard_wire_order(self):
-        """Test that tree-traversal still works with a non-standard wire order."""
-
-        ops = [qp.H(0), qp.CNOT((0, 2)), qp.ops.MidMeasure(wires=0), qp.S(1)]
-
-        tape = qp.tape.QuantumScript(ops, [qp.expval(qp.Z(2))])
-        res = simulate_tree_mcm(tape)
-        assert qp.math.allclose(res, 0)
-
-    def test_tree_traversal_sample_dtype(self):
-        """Test that tree-traversal returns samples of the correct dtype (int)."""
-
-        dev = qp.device("default.qubit")
-
-        @qp.qnode(dev, mcm_method="tree-traversal", shots=10)
-        def circuit(phi):
-            qp.RX(phi, wires=0)
-            m_0 = qp.measure(wires=0)
-            return qp.sample([m_0])
-
-        res = circuit(1.23)
-        assert res.dtype == int
-        assert res.shape == (10, 1)
-
-    def test_measurement_on_non_op_wire(self):
-        """Test that we can measure wires not present in the circuit."""
-
-        ops = [qp.ops.MidMeasure(wires=0)]
-        tape = qp.tape.QuantumScript(ops, [qp.probs(wires=(0, 1, 2))])
-        res = simulate_tree_mcm(tape)
-        assert qp.math.allclose(res, np.array([1, 0, 0, 0, 0, 0, 0, 0]))
-
-    def test_measurement_on_non_op_wire_with_nonstandard_order(self):
-        """Test that we can measure wires not present in the circuit."""
-
-        ops = [qp.ops.MidMeasure(wires=1), qp.X(1)]
-        tape = qp.tape.QuantumScript(ops, [qp.probs(wires=(0, 1, 2))])
-        res = simulate_tree_mcm(tape)
-        assert qp.math.allclose(res, np.array([0, 0, 1, 0, 0, 0, 0, 0]))
+        grad5 = grad_tape.jacobian(results[5], phi)
+        assert qml.math.allclose(grad5, expected_grads[5])

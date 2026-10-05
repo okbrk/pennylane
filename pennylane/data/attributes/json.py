@@ -13,6 +13,7 @@
 # limitations under the License.
 """Contains an DatasetAttribute for JSON-serializable data."""
 
+
 import json
 
 from pennylane.data.base.attribute import DatasetAttribute

@@ -29,7 +29,7 @@ specified, alongside category-specific keyword arguments. For the full list
 of available datasets, please see the `datasets website <https://pennylane.ai/datasets>`_.
 The :func:`~pennylane.data.load` function returns a ``list`` with the desired data.
 
->>> H2datasets = qp.data.load("qchem", molname="H2", basis="STO-3G", bondlength=1.1)
+>>> H2datasets = qml.data.load("qchem", molname="H2", basis="STO-3G", bondlength=1.1)
 >>> print(H2datasets)
 [<Dataset = molname: H2, basis: STO-3G, bondlength: 1.1, attributes: ['basis', 'basis_rot_groupings', ...]>]
 >>> H2data = H2datasets[0]
@@ -37,7 +37,7 @@ The :func:`~pennylane.data.load` function returns a ``list`` with the desired da
 We can load datasets for multiple parameter values by providing a list of values instead of a single value.
 To load all possible values, use the special value :const:`~pennylane.data.FULL` or the string ``"full"``:
 
->>> H2datasets = qp.data.load("qchem", molname="H2", basis="full", bondlength=[0.5, 1.1])
+>>> H2datasets = qml.data.load("qchem", molname="H2", basis="full", bondlength=[0.5, 1.1])
 >>> print(H2datasets)
 [<Dataset = molname: H2, basis: STO-3G, bondlength: 0.5, attributes: ['basis', 'basis_rot_groupings', ...]>,
 <Dataset = molname: H2, basis: STO-3G, bondlength: 1.1, attributes: ['basis', 'basis_rot_groupings', ...]>,
@@ -49,7 +49,7 @@ To load all possible values, use the special value :const:`~pennylane.data.FULL`
 When we only want to download portions of a large dataset, we can specify the desired properties  (referred to as 'attributes').
 For example, we can download or load only the molecule and energy of a dataset as follows:
 
->>> part = qp.data.load("qchem", molname="H2", basis="STO-3G", bondlength=1.1,
+>>> part = qml.data.load("qchem", molname="H2", basis="STO-3G", bondlength=1.1, 
 ...                      attributes=["molecule", "fci_energy"])[0]
 >>> part.molecule
 <Molecule = H2, Charge: 0, Basis: STO-3G, Orbitals: 2, Electrons: 2>
@@ -58,7 +58,7 @@ For example, we can download or load only the molecule and energy of a dataset a
 
 To determine what attributes are available for a type of dataset, we can use the function :func:`~pennylane.data.list_attributes`:
 
->>> qp.data.list_attributes(data_name="qchem")
+>>> qml.data.list_attributes(data_name="qchem")
 ['molname',
  'basis',
  'bondlength',
@@ -87,54 +87,24 @@ Once loaded, one can access properties of the datasets:
 The loaded data items are fully compatible with PennyLane. We can therefore
 use them directly in a PennyLane circuits as follows:
 
->>> dev = qp.device("default.qubit",wires=4)
->>> @qp.qnode(dev)
+>>> dev = qml.device("default.qubit",wires=4)
+>>> @qml.qnode(dev)
 ... def circuit():
-...     qp.BasisState(H2data.hf_state, wires = [0, 1, 2, 3])
+...     qml.BasisState(H2data.hf_state, wires = [0, 1, 2, 3])
 ...     for op in H2data.vqe_gates:
-...         qp.apply(op)
-...     return qp.expval(H2data.hamiltonian)
+...         qml.apply(op)
+...     return qml.expval(H2data.hamiltonian)
 >>> print(circuit())
 -1.0791430411076344
 
-Viewing Available Dataset Names
--------------------------------
+Dataset Structure
+-----------------
 
-We can call the 
-:func:`~pennylane.data.list_data_names` function to get a snapshot of the names of the currently available datasets.
-This function returns a list of strings as shown below.
-
->>> qp.data.list_data_names()
-["bars-and-stripes",
- "downscaled-mnist",
- "hamlib-max-3-sat",
- "hamlib-maxcut",
- "hamlib-travelling-salesperson-problem",
- "hidden-manifold",
- "hyperplanes",
- "ketgpt",
- "learning-dynamics-incoherently",
- "linearly-separable",
- "mnisq",
- "mqt-bench",
- "plus-minus",
- "qchem",
- "qspin",
- "rydberggpt",
- "two-curves"]
-
-Note that this example limits the results
-of the function calls for clarity and that as more data becomes available, the results of these
-function calls will change.
-
-Viewing Available Datasets
---------------------------
-
-We can call the 
+You can call the 
 :func:`~pennylane.data.list_datasets` function to get a snapshot of the currently available data.
-This function returns a nested dictionary as shown below. 
+This function returns a nested dictionary as we show below. 
 
->>> available_data = qp.data.list_datasets()
+>>> available_data = qml.data.list_datasets()
 >>> available_data.keys()
 dict_keys(["qspin", "qchem"])
 >>> available_data["qchem"].keys()
@@ -156,14 +126,15 @@ We can use custom datasets to store any data generated in PennyLane and its supp
 To create a dataset, we can do the following:
 
 >>> coeffs = [1, 0.5]
->>> observables = [qp.Z(0), qp.X(1)]
->>> H = qp.Hamiltonian(coeffs, observables)
->>> energies, _ = np.linalg.eigh(qp.matrix(H)) #Calculate the energies
->>> dataset = qp.data.Dataset(data_name = "Example", hamiltonian=H, energies=energies)
+>>> observables = [qml.Z(0), qml.X(1)]
+>>> H = qml.Hamiltonian(coeffs, observables)
+>>> energies, _ = np.linalg.eigh(qml.matrix(H)) #Calculate the energies
+>>> dataset = qml.data.Dataset(data_name = "Example", hamiltonian=H, energies=energies)
 >>> dataset.data_name
 "Example"
 >>> dataset.hamiltonian
-1.0 * Z(0) + 0.5 * X(1)
+(0.5) [X1]
++ (1) [Z0]
 >>> dataset.energies
 array([-1.5, -0.5,  0.5,  1.5])
 
@@ -171,17 +142,17 @@ We can then write this :class:`~pennylane.data.Dataset` to storage and read it a
 
 
 >>> dataset.write("./path/to/dataset.h5")
->>> read_dataset = qp.data.Dataset()
+>>> read_dataset = qml.data.Dataset()
 >>> read_dataset.read("./path/to/dataset.h5")
 >>> read_dataset.data_name
 "Example"
 >>> read_dataset.hamiltonian
-1.0 * Z(0) + 0.5 * X(1)
+(0.5) [X1]
++ (1) [Z0]
 >>> read_dataset.energies
 array([-1.5, -0.5,  0.5,  1.5])
 
-For more details on reading and writing custom datasets, including metadata, please
-see the :mod:`~.data` module documentation.
+:html:`<div class="summary-table">`
 
 Quantum Datasets Functions and Classes
 --------------------------------------
@@ -191,9 +162,8 @@ Quantum Datasets Functions and Classes
 .. autosummary::
     :nosignatures:
 
-    ~pennylane.data.list_attributes
-    ~pennylane.data.list_data_names
     ~pennylane.data.list_datasets
+    ~pennylane.data.list_attributes
     ~pennylane.data.load
     ~pennylane.data.load_interactive
     ~pennylane.data.Dataset

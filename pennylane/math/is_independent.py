@@ -17,16 +17,14 @@ a function is independent of its arguments for the interfaces
 
 * Autograd
 * JAX
+* TensorFlow
 * PyTorch
 """
-
 import warnings
-from functools import partial
 
-import jax
 import numpy as np
-from autograd.core import VJPNode
 from autograd.tracer import isbox, new_box, trace_stack
+from autograd.core import VJPNode
 
 from pennylane import numpy as pnp
 
@@ -76,7 +74,7 @@ def _autograd_is_indep_analytic(func, *args, **kwargs):
     return True
 
 
-# pylint: disable=import-outside-toplevel
+# pylint: disable=import-outside-toplevel,unnecessary-lambda-assignment,unnecessary-lambda
 def _jax_is_indep_analytic(func, *args, **kwargs):
     """Test analytically whether a function is independent of its arguments
     using JAX.
@@ -97,7 +95,7 @@ def _jax_is_indep_analytic(func, *args, **kwargs):
     and inspecting its signature.
     The first argument of the output of ``jax.vjp`` is a ``Partial``.
     If *any* processing happens to any input, the arguments of that
-    ``Partial`` are unequal to ``((),)`` (JAX < 0.7.0) or ``([],)`` (JAX >= 0.7.0).
+    ``Partial`` are unequal to ``((),)`.
     Functions that depend on the input in a trivial manner, i.e., without
     processing it, will go undetected by this. Therefore we also
     test the arguments of the *function* of the above ``Partial``.
@@ -110,18 +108,54 @@ def _jax_is_indep_analytic(func, *args, **kwargs):
         This is an experimental function and unknown edge
         cases may exist to this two-stage test.
     """
+    import jax
 
-    mapped_func = partial(func, **kwargs)
-
+    mapped_func = lambda *_args: func(*_args, **kwargs)
     _vjp = jax.vjp(mapped_func, *args)[1]
-
-    # JAX 0.7.0+ changed the VJP structure: args are now ([],) instead of ((),)
-    if _vjp.args[0].args not in (((),), ([],)):
+    if _vjp.args[0].args != ((),):
         return False
     if _vjp.args[0].func.args[0][0][0] is not None:
         return False
 
     return True
+
+
+def _tf_is_indep_analytic(func, *args, **kwargs):
+    """Test analytically whether a function is independent of its arguments
+    using TensorFlow.
+
+    Args:
+        func (callable): Function to test for independence
+        args (tuple): Arguments for the function with respect to which
+            to test for independence
+        kwargs (dict): Keyword arguments for the function at which
+            (but not with respect to which) to test for independence
+
+    Returns:
+        bool: Whether the function seems to not depend on it ``args``
+        analytically. That is, an output of ``True`` means that the
+        ``args`` do *not* feed into the output.
+
+    In TensorFlow, we test this by computing the Jacobian of the output(s)
+    with respect to the arguments. If the Jacobian is ``None``, the output(s)
+    is/are independent.
+
+    .. note::
+
+        Of all interfaces, this is currently the most robust for the
+        ``is_independent`` functionality.
+    """
+    import tensorflow as tf  # pylint: disable=import-outside-toplevel
+
+    with tf.GradientTape(persistent=True) as tape:
+        out = func(*args, **kwargs)
+
+    if isinstance(out, tuple):
+        jac = [tape.jacobian(_out, args) for _out in out]
+        return all(all(__jac is None for __jac in _jac) for _jac in jac)
+
+    jac = tape.jacobian(out, args)
+    return all(_jac is None for _jac in jac)
 
 
 def _get_random_args(args, interface, num, seed, bounds):
@@ -142,7 +176,19 @@ def _get_random_args(args, interface, num, seed, bounds):
     that have the same shapes as ``args``.
     """
     width = bounds[1] - bounds[0]
-    if interface == "torch":
+    if interface == "tf":
+        import tensorflow as tf  # pylint: disable=import-outside-toplevel
+
+        tf.random.set_seed(seed)
+        rnd_args = []
+        for _ in range(num):
+            _args = (tf.random.uniform(tf.shape(_arg)) * width + bounds[0] for _arg in args)
+            _args = tuple(
+                tf.Variable(_arg) if isinstance(arg, tf.Variable) else _arg
+                for _arg, arg in zip(_args, args)
+            )
+            rnd_args.append(_args)
+    elif interface == "torch":
         import torch  # pylint: disable=import-outside-toplevel
 
         torch.random.manual_seed(seed)
@@ -161,7 +207,6 @@ def _get_random_args(args, interface, num, seed, bounds):
     return rnd_args
 
 
-# pylint:disable=too-many-arguments,too-many-positional-arguments
 def _is_indep_numerical(func, interface, args, kwargs, num_pos, seed, atol, rtol, bounds):
     """Test whether a function returns the same output at random positions.
 
@@ -182,6 +227,8 @@ def _is_indep_numerical(func, interface, args, kwargs, num_pos, seed, atol, rtol
         chosen points.
     """
 
+    # pylint:disable=too-many-arguments
+
     rnd_args = _get_random_args(args, interface, num_pos, seed, bounds)
     original_output = func(*args, **kwargs)
     is_tuple_valued = isinstance(original_output, tuple)
@@ -190,7 +237,7 @@ def _is_indep_numerical(func, interface, args, kwargs, num_pos, seed, atol, rtol
         if is_tuple_valued:
             if not all(
                 np.allclose(new, orig, atol=atol, rtol=rtol)
-                for new, orig in zip(new_output, original_output, strict=True)
+                for new, orig in zip(new_output, original_output)
             ):
                 return False
         else:
@@ -200,7 +247,6 @@ def _is_indep_numerical(func, interface, args, kwargs, num_pos, seed, atol, rtol
     return True
 
 
-# pylint: disable=too-many-positional-arguments
 def is_independent(
     func,
     interface,
@@ -219,7 +265,7 @@ def is_independent(
         func (callable): Function to be tested
         interface (str): Autodiff framework used by ``func``. Must correspond to one
             of the supported PennyLane interface strings, such as ``"autograd"``,
-            ``"torch"``, ``"jax"``.
+            ``"tf"``, ``"torch"``, ``"jax"``.
         args (tuple): Positional arguments with respect to which to test
         kwargs (dict): Keyword arguments for ``func`` at which to test;
             the keyword arguments are kept fixed in this test.
@@ -288,7 +334,7 @@ def is_independent(
 
         >>> x = np.array([0.2, 9.1, -3.2], requires_grad=True)
         >>> weights = np.array([1.1, -0.7, 1.8], requires_grad=True)
-        >>> qp.math.is_independent(lin, "autograd", (x,), {"weights": weights})
+        >>> qml.math.is_independent(lin, "autograd", (x,), {"weights": weights})
         False
 
     However, the Jacobian will not depend on ``x`` because ``lin`` is a
@@ -296,8 +342,8 @@ def is_independent(
 
     .. code-block:: pycon
 
-        >>> jac = qp.jacobian(lin)
-        >>> qp.math.is_independent(jac, "autograd", (x,), {"weights": weights})
+        >>> jac = qml.jacobian(lin)
+        >>> qml.math.is_independent(jac, "autograd", (x,), {"weights": weights})
         True
 
     Note that a function ``f = lambda x: 0.0 * x`` will be counted as *dependent* on ``x``
@@ -308,7 +354,7 @@ def is_independent(
 
     # pylint:disable=too-many-arguments
 
-    if interface not in {"autograd", "jax", "torch"}:
+    if not interface in {"autograd", "jax", "tf", "torch", "tensorflow"}:
         raise ValueError(f"Unknown interface: {interface}")
 
     kwargs = kwargs or {}
@@ -319,6 +365,10 @@ def is_independent(
 
     if interface == "jax":
         if not _jax_is_indep_analytic(func, *args, **kwargs):
+            return False
+
+    if interface in ("tf", "tensorflow"):
+        if not _tf_is_indep_analytic(func, *args, **kwargs):
             return False
 
     if interface == "torch":

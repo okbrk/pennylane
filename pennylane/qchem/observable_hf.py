@@ -14,12 +14,12 @@
 """
 This module contains the functions needed for creating fermionic and qubit observables.
 """
-
+# pylint: disable= too-many-branches, too-many-return-statements
 import numpy as np
-
-import pennylane as qp
+import pennylane as qml
 from pennylane.fermi import FermiSentence, FermiWord
-from pennylane.pauli import PauliSentence
+from pennylane.operation import active_new_opmath
+from pennylane.pauli.utils import simplify
 
 
 def fermionic_observable(constant, one=None, two=None, cutoff=1.0e-12):
@@ -32,7 +32,7 @@ def fermionic_observable(constant, one=None, two=None, cutoff=1.0e-12):
         cutoff (float): cutoff value for discarding the negligible integrals
 
     Returns:
-        ~.FermiSentence: fermionic observable
+        FermiSentence: fermionic observable
 
     **Example**
 
@@ -49,25 +49,25 @@ def fermionic_observable(constant, one=None, two=None, cutoff=1.0e-12):
     + -0.8270995 * a⁺(3) a(1)
     + 0.5 * a⁺(3) a(3)
     """
-    coeffs = qp.math.array([])
+    coeffs = qml.math.array([])
 
-    if not qp.math.allclose(constant, 0.0):
-        coeffs = qp.math.concatenate((coeffs, constant))
+    if not qml.math.allclose(constant, 0.0):
+        coeffs = qml.math.concatenate((coeffs, constant))
         operators = [[]]
     else:
         operators = []
 
     if one is not None:
-        indices_one = qp.math.argwhere(abs(one) >= cutoff)
+        indices_one = qml.math.argwhere(abs(one) >= cutoff)
         # up-up + down-down terms
         operators_one = (indices_one * 2).tolist() + (indices_one * 2 + 1).tolist()
-        coeffs_one = qp.math.tile(one[abs(one) >= cutoff], 2)
-        coeffs = qp.math.convert_like(coeffs, one)
-        coeffs = qp.math.concatenate((coeffs, coeffs_one))
+        coeffs_one = qml.math.tile(one[abs(one) >= cutoff], 2)
+        coeffs = qml.math.convert_like(coeffs, one)
+        coeffs = qml.math.concatenate((coeffs, coeffs_one))
         operators = operators + operators_one
 
     if two is not None:
-        indices_two = np.array(qp.math.argwhere(abs(two) >= cutoff))
+        indices_two = np.array(qml.math.argwhere(abs(two) >= cutoff))
         n = len(indices_two)
         operators_two = (
             [(indices_two[i] * 2).tolist() for i in range(n)]  # up-up-up-up
@@ -75,66 +75,78 @@ def fermionic_observable(constant, one=None, two=None, cutoff=1.0e-12):
             + [(indices_two[i] * 2 + [1, 0, 0, 1]).tolist() for i in range(n)]  # down-up-up-down
             + [(indices_two[i] * 2 + 1).tolist() for i in range(n)]  # down-down-down-down
         )
-        coeffs_two = qp.math.tile(two[abs(two) >= cutoff], 4) / 2
+        coeffs_two = qml.math.tile(two[abs(two) >= cutoff], 4) / 2
 
-        coeffs = qp.math.concatenate((coeffs, coeffs_two))
+        coeffs = qml.math.concatenate((coeffs, coeffs_two))
         operators = operators + operators_two
 
-    sentence = FermiSentence({FermiWord({}): constant[0]})
-    for c, o in sorted(zip(coeffs, operators, strict=True), key=lambda item: item[1]):
+    indices_sort = [operators.index(i) for i in sorted(operators)]
+    if indices_sort:
+        indices_sort = qml.math.array(indices_sort)
 
+    sentence = FermiSentence({FermiWord({}): constant[0]})
+    for c, o in zip(coeffs[indices_sort], sorted(operators)):
         if len(o) == 2:
             sentence.update({FermiWord({(0, o[0]): "+", (1, o[1]): "-"}): c})
         if len(o) == 4:
             sentence.update(
                 {FermiWord({(0, o[0]): "+", (1, o[1]): "+", (2, o[2]): "-", (3, o[3]): "-"}): c}
             )
-    sentence.prune()
+    sentence.simplify()
 
     return sentence
 
 
-def qubit_observable(o_ferm, cutoff=1.0e-12, mapping="jordan_wigner"):
+def qubit_observable(o_ferm, cutoff=1.0e-12):
     r"""Convert a fermionic observable to a PennyLane qubit observable.
 
     Args:
-        o_ferm (Union[~.FermiWord, ~.FermiSentence]): fermionic operator
+        o_ferm (Union[FermiWord, FermiSentence]): fermionic operator
         cutoff (float): cutoff value for discarding the negligible terms
-        mapping (str): Specifies the fermion-to-qubit mapping. Input values can
-            be ``'jordan_wigner'``, ``'parity'`` or ``'bravyi_kitaev'``.
+
     Returns:
         Operator: Simplified PennyLane Hamiltonian
 
     **Example**
 
-    >>> w1 = qp.FermiWord({(0, 0) : '+', (1, 1) : '-'})
-    >>> w2 = qp.FermiWord({(0, 0) : '+', (1, 1) : '-'})
-    >>> s = qp.FermiSentence({w1 : 1.2, w2: 3.1})
+    >>> w1 = qml.fermi.FermiWord({(0, 0) : '+', (1, 1) : '-'})
+    >>> w2 = qml.fermi.FermiWord({(0, 1) : '+', (1, 2) : '-'})
+    >>> s = qml.fermi.FermiSentence({w1 : 1.2, w2: 3.1})
+    >>> print(qubit_observable(s))
+      (-0.3j) [Y0 X1]
+    + (0.3j) [X0 Y1]
+    + (-0.775j) [Y1 X2]
+    + (0.775j) [X1 Y2]
+    + ((0.3+0j)) [Y0 Y1]
+    + ((0.3+0j)) [X0 X1]
+    + ((0.775+0j)) [Y1 Y2]
+    + ((0.775+0j)) [X1 X2]
+
+    If the new op-math is active, an arithmetic operator is returned.
+
+    >>> qml.operation.enable_new_opmath()
+    >>> w1 = qml.fermi.FermiWord({(0, 0) : '+', (1, 1) : '-'})
+    >>> w2 = qml.fermi.FermiWord({(0, 0) : '+', (1, 1) : '-'})
+    >>> s = qml.fermi.FermiSentence({w1 : 1.2, w2: 3.1})
     >>> print(qubit_observable(s))
     -0.775j * (Y(0) @ X(1)) + 0.775 * (Y(0) @ Y(1)) + 0.775 * (X(0) @ X(1)) + 0.775j * (X(0) @ Y(1))
     """
-    mapping = mapping.strip().lower()
-    if mapping == "jordan_wigner":
-        h = qp.jordan_wigner(o_ferm, ps=True, tol=cutoff)
-    elif mapping == "parity":
-        qubits = len(o_ferm.wires)
-        h = qp.parity_transform(o_ferm, qubits, ps=True, tol=cutoff)
-    elif mapping == "bravyi_kitaev":
-        qubits = len(o_ferm.wires)
-        h = qp.bravyi_kitaev(o_ferm, qubits, ps=True, tol=cutoff)
-    else:
-        raise ValueError(
-            f"The '{mapping}' transformation is not available."
-            f"Please set mapping to 'jordan_wigner', 'parity', or 'bravyi_kitaev'"
-        )
+    h = qml.jordan_wigner(o_ferm, ps=True, tol=cutoff)
+    h.simplify(tol=cutoff)
 
-    if list(h.wires) != sorted(list(h.wires)):
-        h = PauliSentence(
-            sorted(h.items(), key=lambda item: max(item[0].wires.tolist(), default=0))
-        )
-
-    h.prune(tol=cutoff)
+    if active_new_opmath():
+        if not h.wires:
+            return h.operation(wire_order=[0])
+        return h.operation()
 
     if not h.wires:
-        return h.operation(wire_order=[0])
-    return h.operation()
+        h = h.hamiltonian(wire_order=[0])
+        return qml.Hamiltonian(
+            h.coeffs, [qml.Identity(0) if o.name == "Identity" else o for o in h.ops]
+        )
+
+    h = h.hamiltonian()
+
+    return simplify(
+        qml.Hamiltonian(h.coeffs, [qml.Identity(0) if o.name == "Identity" else o for o in h.ops])
+    )

@@ -11,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Unit tests for differentiable trace distance."""
+"""Unit tests for differentiable trace distance.
+"""
 
 import numpy as onp
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
 
 pytestmark = pytest.mark.all_interfaces
 
+tf = pytest.importorskip("tensorflow", minversion="2.1")
 torch = pytest.importorskip("torch")
 jax = pytest.importorskip("jax")
 jnp = pytest.importorskip("jax.numpy")
@@ -33,7 +35,7 @@ class TestTraceDistanceMath:
         (
             (
                 [[1, 0], [0, 0]],
-                qp.math.reduce_statevector([x, np.sqrt(1 - x**2)], indices=[0]),
+                qml.math.reduce_statevector([x, np.sqrt(1 - x**2)], indices=[0]),
             ),
             np.sqrt(1 - x**2),
         )
@@ -43,7 +45,7 @@ class TestTraceDistanceMath:
         (
             (
                 [[0.5, 0.5], [0.5, 0.5]],
-                qp.math.reduce_statevector([x, np.sqrt(1 - x**2) * 1j], indices=[0]),
+                qml.math.reduce_statevector([x, np.sqrt(1 - x**2) * 1j], indices=[0]),
             ),
             np.sqrt(2) / 2,
         )
@@ -70,6 +72,8 @@ class TestTraceDistanceMath:
         np.array,
         jnp.array,
         torch.tensor,
+        tf.Variable,
+        tf.constant,
     ]
 
     check_state = [True, False]
@@ -83,8 +87,8 @@ class TestTraceDistanceMath:
         state0 = func(state0)
         state1 = func(state1)
 
-        assert qp.math.allclose(td, qp.math.trace_distance(state0, state1, check_state))
-        assert qp.math.allclose(td, qp.math.trace_distance(state1, state0, check_state))
+        assert qml.math.allclose(td, qml.math.trace_distance(state0, state1, check_state))
+        assert qml.math.allclose(td, qml.math.trace_distance(state1, state0, check_state))
 
     state0_state1_td_batched = [
         # Batch-Mat-TD
@@ -170,8 +174,8 @@ class TestTraceDistanceMath:
         state0 = func(state0)
         state1 = func(state1)
 
-        assert qp.math.allclose(td, qp.math.trace_distance(state0, state1, check_state))
-        assert qp.math.allclose(td, qp.math.trace_distance(state1, state0, check_state))
+        assert qml.math.allclose(td, qml.math.trace_distance(state0, state1, check_state))
+        assert qml.math.allclose(td, qml.math.trace_distance(state1, state0, check_state))
 
     d_mat_wrong_shape = [
         # Shape that is not a power of 2
@@ -189,10 +193,10 @@ class TestTraceDistanceMath:
         state0, state1 = states
 
         with pytest.raises(ValueError, match="Density matrix must be of shape"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+            qml.math.trace_distance(state0, state1, check_state=True)
 
         with pytest.raises(ValueError, match="Density matrix must be of shape"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+            qml.math.trace_distance(state1, state0, check_state=True)
 
     d_mat_wrong_trace = [
         (([[1, 0], [0, -1]], [[1, 0], [0, 0]])),
@@ -205,10 +209,10 @@ class TestTraceDistanceMath:
         state0, state1 = states
 
         with pytest.raises(ValueError, match="The trace of the density matrix should be one"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+            qml.math.trace_distance(state0, state1, check_state=True)
 
         with pytest.raises(ValueError, match="The trace of the density matrix should be one"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+            qml.math.trace_distance(state1, state0, check_state=True)
 
     d_mat_not_hermitian = [
         (([[1, 1], [0, 0]], [[1, 0], [0, 0]])),
@@ -223,10 +227,10 @@ class TestTraceDistanceMath:
         state0, state1 = states
 
         with pytest.raises(ValueError, match="The matrix is not Hermitian"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+            qml.math.trace_distance(state0, state1, check_state=True)
 
         with pytest.raises(ValueError, match="The matrix is not Hermitian"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+            qml.math.trace_distance(state1, state0, check_state=True)
 
     d_mat_not_positive = [
         (([[2, 0], [0, -1]], [[1, 0], [0, 0]])),
@@ -241,10 +245,10 @@ class TestTraceDistanceMath:
         state0, state1 = states
 
         with pytest.raises(ValueError, match="The matrix is not positive semi"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+            qml.math.trace_distance(state0, state1, check_state=True)
 
         with pytest.raises(ValueError, match="The matrix is not positive semi"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+            qml.math.trace_distance(state1, state0, check_state=True)
 
     d_mat_different_wires = [
         (([[1, 0], [0, 0]], [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])),
@@ -258,11 +262,15 @@ class TestTraceDistanceMath:
         """Test that the two states must act on the same number of wires"""
         state0, state1 = states
 
-        with pytest.raises(ValueError, match="The two states must have the same number of wires"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+        with pytest.raises(
+            qml.QuantumFunctionError, match="The two states must have the same number of wires"
+        ):
+            qml.math.trace_distance(state0, state1, check_state=True)
 
-        with pytest.raises(ValueError, match="The two states must have the same number of wires"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+        with pytest.raises(
+            qml.QuantumFunctionError, match="The two states must have the same number of wires"
+        ):
+            qml.math.trace_distance(state1, state0, check_state=True)
 
     d_mat_different_batch_sizes = [
         (
@@ -285,7 +293,7 @@ class TestTraceDistanceMath:
         state0, state1 = states
 
         with pytest.raises(ValueError, match="The two states must be batches of the same size"):
-            qp.math.trace_distance(state0, state1, check_state=True)
+            qml.math.trace_distance(state0, state1, check_state=True)
 
         with pytest.raises(ValueError, match="The two states must be batches of the same size"):
-            qp.math.trace_distance(state1, state0, check_state=True)
+            qml.math.trace_distance(state1, state0, check_state=True)

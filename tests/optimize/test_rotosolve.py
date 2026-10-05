@@ -14,17 +14,16 @@
 """
 Unit tests for the ``RotosolveOptimizer``.
 """
-
 # pylint: disable=too-many-arguments,too-few-public-methods
 import functools
-
 import pytest
 from scipy.optimize import shgo
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
+from pennylane.utils import _flatten, unflatten
+
 from pennylane.optimize import RotosolveOptimizer
-from pennylane.optimize.qng import _flatten_np, _unflatten_np
 
 
 def expand_num_freq(num_freq, param):
@@ -48,11 +47,11 @@ def expand_num_freq(num_freq, param):
 def successive_params(par1, par2):
     """Return a list of parameter configurations, successively walking from
     par1 to par2 coordinate-wise."""
-    par1_flat = np.fromiter(_flatten_np(par1), dtype=float)
-    par2_flat = np.fromiter(_flatten_np(par2), dtype=float)
+    par1_flat = np.fromiter(_flatten(par1), dtype=float)
+    par2_flat = np.fromiter(_flatten(par2), dtype=float)
     walking_param = []
     for i in range(len(par1_flat) + 1):
-        walking_param.append(_unflatten_np(np.append(par2_flat[:i], par1_flat[i:]), par1))
+        walking_param.append(unflatten(np.append(par2_flat[:i], par1_flat[i:]), par1))
     return walking_param
 
 
@@ -87,7 +86,7 @@ def test_error_missing_frequency_info_single_par():
     opt = RotosolveOptimizer()
 
     def sum_named_arg(x):
-        return qp.math.sum(x)
+        return qml.math.sum(x)
 
     x = np.arange(4, requires_grad=True)
     nums_frequency = {"x": {(0,): 1, (1,): 1}}
@@ -103,14 +102,10 @@ def test_error_no_trainable_args():
 
     opt = RotosolveOptimizer()
     fun = lambda x, y, z: 1.0
-
-    x = np.array(1.0, requires_grad=False)
-    y = np.array(2.0, requires_grad=False)
-    z = np.array(3.0, requires_grad=False)
-    args = (x, y, z)
+    x = np.arange(4, requires_grad=False)
 
     with pytest.raises(ValueError, match="Found no parameters to optimize."):
-        opt.step(fun, *args, nums_frequency=None, spectra=None)
+        opt.step(fun, x, nums_frequency=None, spectra=None)
 
 
 classical_functions = [
@@ -258,8 +253,8 @@ class TestWithClassicalFunction:
 
         assert len(x_min) == len(new_param_step)
         assert np.allclose(
-            np.fromiter(_flatten_np(x_min), dtype=float),
-            np.fromiter(_flatten_np(new_param_step), dtype=float),
+            np.fromiter(_flatten(x_min), dtype=float),
+            np.fromiter(_flatten(new_param_step), dtype=float),
             atol=1e-5,
         )
 
@@ -276,8 +271,8 @@ class TestWithClassicalFunction:
 
         assert len(x_min) == len(new_param_step_and_cost)
         assert np.allclose(
-            np.fromiter(_flatten_np(new_param_step_and_cost), dtype=float),
-            np.fromiter(_flatten_np(new_param_step), dtype=float),
+            np.fromiter(_flatten(new_param_step_and_cost), dtype=float),
+            np.fromiter(_flatten(new_param_step), dtype=float),
             atol=1e-5,
         )
         assert np.isclose(old_cost, fun(*param))
@@ -336,8 +331,8 @@ def test_multiple_steps(fun, x_min, param, num_freq):
 
     assert (np.isscalar(x_min) and np.isscalar(param)) or len(x_min) == len(param)
     assert np.allclose(
-        np.fromiter(_flatten_np(x_min), dtype=float),
-        np.fromiter(_flatten_np(param), dtype=float),
+        np.fromiter(_flatten(x_min), dtype=float),
+        np.fromiter(_flatten(param), dtype=float),
         atol=1e-5,
     )
 
@@ -395,8 +390,8 @@ class TestDeactivatedTrainingWithClassicalFunctions:
 
         assert len(x_min) == len(new_param_step)
         assert np.allclose(
-            np.fromiter(_flatten_np(x_min), dtype=float),
-            np.fromiter(_flatten_np(new_param_step), dtype=float),
+            np.fromiter(_flatten(x_min), dtype=float),
+            np.fromiter(_flatten(new_param_step), dtype=float),
             atol=1e-5,
         )
 
@@ -412,48 +407,48 @@ class TestDeactivatedTrainingWithClassicalFunctions:
 
         assert len(x_min) == len(new_param_step_and_cost)
         assert np.allclose(
-            np.fromiter(_flatten_np(new_param_step_and_cost), dtype=float),
-            np.fromiter(_flatten_np(new_param_step), dtype=float),
+            np.fromiter(_flatten(new_param_step_and_cost), dtype=float),
+            np.fromiter(_flatten(new_param_step), dtype=float),
             atol=1e-5,
         )
         assert np.isclose(old_cost, fun(*param))
 
 
 num_wires = 3
-dev = qp.device("default.qubit", wires=num_wires)
+dev = qml.device("default.qubit", wires=num_wires)
 
 
-@qp.qnode(dev)
+@qml.qnode(dev)
 def scalar_qnode(x):
     for w in dev.wires:
-        qp.RX(x, wires=w)
-    return qp.expval(qp.PauliZ(0) @ qp.PauliZ(1) @ qp.PauliZ(2))
+        qml.RX(x, wires=w)
+    return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1) @ qml.PauliZ(2))
 
 
-@qp.qnode(dev)
+@qml.qnode(dev)
 def array_qnode(x, y, z):
     for _x, w in zip(x, dev.wires):
-        qp.RX(_x, wires=w)
+        qml.RX(_x, wires=w)
 
     for i in range(num_wires):
-        qp.CRY(y, wires=[i, (i + 1) % num_wires])
+        qml.CRY(y, wires=[i, (i + 1) % num_wires])
 
-    qp.RZ(z[0], wires=0)
-    qp.RZ(z[1], wires=1)
-    qp.RZ(z[1], wires=2)  # z[1] is used twice on purpose
+    qml.RZ(z[0], wires=0)
+    qml.RZ(z[1], wires=1)
+    qml.RZ(z[1], wires=2)  # z[1] is used twice on purpose
 
-    return qp.expval(qp.PauliZ(0) @ qp.PauliZ(1) @ qp.PauliZ(2))
+    return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1) @ qml.PauliZ(2))
 
 
-@qp.qnode(dev)
+@qml.qnode(dev)
 def _postprocessing_qnode(x, y, z):
     for w in dev.wires:
-        qp.RX(x, wires=w)
+        qml.RX(x, wires=w)
     for w in dev.wires:
-        qp.RY(y, wires=w)
+        qml.RY(y, wires=w)
     for w in dev.wires:
-        qp.RZ(z, wires=w)
-    return [qp.expval(qp.PauliZ(w)) for w in dev.wires]
+        qml.RZ(z, wires=w)
+    return [qml.expval(qml.PauliZ(w)) for w in dev.wires]
 
 
 def postprocessing_qnode(x, y, z):
@@ -522,8 +517,8 @@ class TestWithQNodes:
             new_param_step_and_cost = (new_param_step_and_cost,)
 
         assert np.allclose(
-            np.fromiter(_flatten_np(new_param_step_and_cost), dtype=float),
-            np.fromiter(_flatten_np(new_param_step), dtype=float),
+            np.fromiter(_flatten(new_param_step_and_cost), dtype=float),
+            np.fromiter(_flatten(new_param_step), dtype=float),
         )
         assert np.isclose(qnode(*param), old_cost)
 

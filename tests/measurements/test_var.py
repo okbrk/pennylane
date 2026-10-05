@@ -13,11 +13,12 @@
 # limitations under the License.
 """Unit tests for the var module"""
 
+from flaky import flaky
 import numpy as np
 import pytest
 
-import pennylane as qp
-from pennylane.measurements import VarianceMP
+import pennylane as qml
+from pennylane.measurements import Variance, Shots
 
 
 class TestVar:
@@ -27,13 +28,12 @@ class TestVar:
     def test_value(self, tol, shots):
         """Test that the var function works"""
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2, shots=shots)
 
-        @qp.set_shots(shots)
-        @qp.qnode(dev, diff_method="parameter-shift")
+        @qml.qnode(dev, diff_method="parameter-shift")
         def circuit(x):
-            qp.RX(x, wires=0)
-            return qp.var(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            return qml.var(qml.PauliZ(0))
 
         x = 0.54
         res = circuit(x)
@@ -49,6 +49,31 @@ class TestVar:
         else:
             assert res.dtype == r_dtype
 
+    def test_not_an_observable(self):
+        """Test that a UserWarning is raised if the provided
+        argument might not be hermitian."""
+        dev = qml.device("default.qubit", wires=2)
+
+        @qml.qnode(dev)
+        def circuit():
+            qml.RX(0.52, wires=0)
+            return qml.var(qml.prod(qml.PauliX(0), qml.PauliZ(0)))
+
+        with pytest.warns(UserWarning, match="Prod might not be hermitian."):
+            _ = circuit()
+
+    def test_observable_return_type_is_variance(self):
+        """Test that the return type of the observable is :attr:`ObservableReturnTypes.Variance`"""
+        dev = qml.device("default.qubit", wires=2)
+
+        @qml.qnode(dev)
+        def circuit():
+            res = qml.var(qml.PauliZ(0))
+            assert res.return_type is Variance
+            return res
+
+        circuit()
+
     @pytest.mark.parametrize("shots", [None, 1111, [1111, 1111]])
     @pytest.mark.parametrize("phi", np.arange(0, 2 * np.pi, np.pi / 3))
     def test_observable_is_measurement_value(
@@ -56,47 +81,46 @@ class TestVar:
     ):  # pylint: disable=too-many-arguments
         """Test that variances for mid-circuit measurement values
         are correct for a single measurement value."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2, shots=shots)
 
-        @qp.set_shots(shots)
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(phi):
-            qp.RX(phi, 0)
-            m0 = qp.measure(0)
-            return qp.var(m0)
+            qml.RX(phi, 0)
+            m0 = qml.measure(0)
+            return qml.var(m0)
 
         atol = tol if shots is None else tol_stochastic
         expected = np.sin(phi / 2) ** 2 - np.sin(phi / 2) ** 4
-        for func in [circuit, qp.defer_measurements(circuit)]:
+        for func in [circuit, qml.defer_measurements(circuit)]:
             res = func(phi)
             assert np.allclose(np.array(res), expected, atol=atol, rtol=0)
 
+    @flaky(max_runs=5)
     @pytest.mark.parametrize("shots", [None, 5555, [5555, 5555]])
     @pytest.mark.parametrize("phi", np.arange(0, 2 * np.pi, np.pi / 3))
     def test_observable_is_composite_measurement_value(
-        self, shots, phi, tol, tol_stochastic, seed
+        self, shots, phi, tol, tol_stochastic
     ):  # pylint: disable=too-many-arguments
         """Test that expectation values for mid-circuit measurement values
         are correct for a composite measurement value."""
-        dev = qp.device("default.qubit", seed=seed)
+        dev = qml.device("default.qubit")
 
-        @qp.set_shots(shots=shots)
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(phi):
-            qp.RX(phi, 0)
-            m0 = qp.measure(0)
-            qp.RX(0.5 * phi, 1)
-            m1 = qp.measure(1)
-            qp.RX(2 * phi, 2)
-            m2 = qp.measure(2)
-            return qp.var(m0 - 2 * m1 + m2)
+            qml.RX(phi, 0)
+            m0 = qml.measure(0)
+            qml.RX(0.5 * phi, 1)
+            m1 = qml.measure(1)
+            qml.RX(2 * phi, 2)
+            m2 = qml.measure(2)
+            return qml.var(m0 - 2 * m1 + m2)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def expected_circuit(phi):
-            qp.RX(phi, 0)
-            qp.RX(0.5 * phi, 1)
-            qp.RX(2 * phi, 2)
-            return qp.probs()
+            qml.RX(phi, 0)
+            qml.RX(0.5 * phi, 1)
+            qml.RX(2 * phi, 2)
+            return qml.probs()
 
         probs = expected_circuit(phi)
         # List of possible outcomes by applying the formula to the binary repr of the indices
@@ -107,60 +131,62 @@ class TestVar:
         )
 
         atol = tol if shots is None else tol_stochastic
-        for func in [circuit, qp.defer_measurements(circuit)]:
-            res = func(phi)
+        for func in [circuit, qml.defer_measurements(circuit)]:
+            res = func(phi, shots=shots)
             assert np.allclose(np.array(res), expected, atol=atol, rtol=0)
-
-    def test_eigvals_instead_of_observable(self, seed):
-        """Tests process samples with eigvals instead of observables"""
-
-        shots = 100
-        rng = np.random.default_rng(seed)
-        samples = rng.choice([0, 1], size=(shots, 2)).astype(np.int64)
-        expected = qp.var(qp.PauliZ(0)).process_samples(samples, [0, 1])
-        assert VarianceMP(eigvals=[1, -1], wires=[0]).process_samples(samples, [0, 1]) == expected
 
     def test_measurement_value_list_not_allowed(self):
         """Test that measuring a list of measurement values raises an error."""
-        m0 = qp.measure(0)
-        m1 = qp.measure(1)
+        m0 = qml.measure(0)
+        m1 = qml.measure(1)
 
         with pytest.raises(
-            ValueError, match="qp.var does not support measuring sequences of measurements"
+            ValueError, match="qml.var does not support measuring sequences of measurements"
         ):
-            _ = qp.var([m0, m1])
+            _ = qml.var([m0, m1])
 
     @pytest.mark.parametrize(
         "obs",
-        [qp.PauliZ(0), qp.Hermitian(np.diag([1, 2]), 0), qp.Hermitian(np.diag([1.0, 2.0]), 0)],
+        [qml.PauliZ(0), qml.Hermitian(np.diag([1, 2]), 0), qml.Hermitian(np.diag([1.0, 2.0]), 0)],
     )
     def test_numeric_type(self, obs):
         """Test that the numeric type is correct."""
-        res = qp.var(obs)
+        res = qml.var(obs)
         assert res.numeric_type is float
 
     @pytest.mark.parametrize(
         "obs",
-        [qp.PauliZ(0), qp.Hermitian(np.diag([1, 2]), 0), qp.Hermitian(np.diag([1.0, 2.0]), 0)],
+        [qml.PauliZ(0), qml.Hermitian(np.diag([1, 2]), 0), qml.Hermitian(np.diag([1.0, 2.0]), 0)],
     )
     def test_shape(self, obs):
         """Test that the shape is correct."""
-        res = qp.var(obs)
+        dev = qml.device("default.qubit", wires=1)
+        res = qml.var(obs)
         # pylint: disable=use-implicit-booleaness-not-comparison
-        assert res.shape(None, 1) == ()
-        assert res.shape(100, 1) == ()
+        assert res.shape(dev, Shots(None)) == ()
+        assert res.shape(dev, Shots(100)) == ()
+
+    @pytest.mark.parametrize(
+        "obs",
+        [qml.PauliZ(0), qml.Hermitian(np.diag([1, 2]), 0), qml.Hermitian(np.diag([1.0, 2.0]), 0)],
+    )
+    def test_shape_shot_vector(self, obs):
+        """Test that the shape is correct with the shot vector too."""
+        res = qml.var(obs)
+        shot_vector = (1, 2, 3)
+        dev = qml.device("default.qubit", wires=3, shots=shot_vector)
+        assert res.shape(dev, Shots(shot_vector)) == ((), (), ())
 
     @pytest.mark.parametrize("state", [np.array([0, 0, 0]), np.array([1, 0, 0, 0, 0, 0, 0, 0])])
     @pytest.mark.parametrize("shots", [None, 1000, [1000, 1111]])
     def test_projector_var(self, state, shots):
         """Tests that the variance of a ``Projector`` object is computed correctly."""
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3, shots=shots)
 
-        @qp.set_shots(shots)
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
-            qp.Hadamard(0)
-            return qp.var(qp.Projector(state, wires=range(3)))
+            qml.Hadamard(0)
+            return qml.var(qml.Projector(state, wires=range(3)))
 
         res = circuit()
         expected = [0.25, 0.25] if isinstance(shots, list) else 0.25
@@ -169,22 +195,24 @@ class TestVar:
 
     def test_permuted_wires(self):
         """Test that the variance of an operator with permuted wires is the same."""
-        obs = qp.prod(qp.PauliZ(8), qp.s_prod(2, qp.PauliZ(10)), qp.s_prod(3, qp.PauliZ("h")))
-        obs_2 = qp.prod(qp.s_prod(3, qp.PauliZ("h")), qp.PauliZ(8), qp.s_prod(2, qp.PauliZ(10)))
+        obs = qml.prod(qml.PauliZ(8), qml.s_prod(2, qml.PauliZ(10)), qml.s_prod(3, qml.PauliZ("h")))
+        obs_2 = qml.prod(
+            qml.s_prod(3, qml.PauliZ("h")), qml.PauliZ(8), qml.s_prod(2, qml.PauliZ(10))
+        )
 
-        dev = qp.device("default.qubit", wires=["h", 8, 10])
+        dev = qml.device("default.qubit", wires=["h", 8, 10])
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
-            qp.RX(1.23, wires=["h"])
-            qp.RY(2.34, wires=[8])
-            return qp.var(obs)
+            qml.RX(1.23, wires=["h"])
+            qml.RY(2.34, wires=[8])
+            return qml.var(obs)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit2():
-            qp.RX(1.23, wires=["h"])
-            qp.RY(2.34, wires=[8])
-            return qp.var(obs_2)
+            qml.RX(1.23, wires=["h"])
+            qml.RY(2.34, wires=[8])
+            return qml.var(obs_2)
 
         assert circuit() == circuit2()
 
@@ -199,58 +227,8 @@ class TestVar:
         """Test that the variance of an observable is estimated correctly using counts."""
         counts = {"000": 100, "100": 100}
 
-        wire_order = qp.wires.Wires((0, 1, 2))
+        wire_order = qml.wires.Wires((0, 1, 2))
 
-        res = qp.var(qp.Z(wire)).process_counts(counts=counts, wire_order=wire_order)
+        res = qml.var(qml.Z(wire)).process_counts(counts=counts, wire_order=wire_order)
 
         assert np.allclose(res, expected)
-
-    @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["numpy", "jax", "torch", "autograd"])
-    def test_process_density_matrix_basic(self, interface):
-        """Test that process_density_matrix returns correct probabilities from a maximum mixed density matrix."""
-        dm = qp.math.array([[0.5, 0], [0, 0.5]], like=interface)
-        dm = qp.math.cast(dm, "float64")  # Ensure dm is float64s
-        wires = qp.wires.Wires(range(1))
-        expected = qp.math.array([0.0], like=interface)
-        expected = qp.math.cast(expected, "float64")
-        var = qp.var(qp.I(0)).process_density_matrix(dm, wires)
-        var = qp.math.cast(var, "float64")
-        atol = 1.0e-7 if interface == "torch" else 1.0e-8
-        assert qp.math.allclose(var, expected, atol=atol), f"Expected {expected}, got {var}"
-
-    @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["numpy", "jax", "torch", "autograd"])
-    @pytest.mark.parametrize(
-        "subset_wires, expected_var",
-        [
-            ([0], 1.0),  # Variance of Z on first qubit
-            ([1], 0.75),  # Variance of Z on second qubit
-            ([0, 1], 0.99),  # Variance of ZZ (should be zero for this state)
-        ],
-    )
-    def test_process_density_matrix_var_subsets(self, interface, subset_wires, expected_var):
-        """Test variance calculation of density matrix with subsets of wires."""
-        # Define a non-trivial two-qubit density matrix
-        dm = qp.math.array(
-            [[0.15, 0, 0.1, 0], [0, 0.35, 0, 0.4], [0.1, 0, 0.1, 0], [0, 0.4, 0, 0.4]],
-            like=interface,
-        )
-        dm = qp.math.cast(dm, "float64")  # Ensure dm is float64s
-        expected = qp.math.array(expected_var, like=interface)
-        expected = qp.math.cast(expected, "float64")
-        wires = qp.wires.Wires(range(2))
-
-        # Calculate variance for the subset of wires
-        if len(subset_wires) == 1:
-            var = qp.var(qp.PauliZ(subset_wires[0])).process_density_matrix(dm, wires)
-        else:
-            var = qp.var(
-                qp.PauliZ(subset_wires[0]) @ qp.PauliZ(subset_wires[1])
-            ).process_density_matrix(dm, wires)
-        var = qp.math.cast(var, "float64")
-
-        # Set tolerance based on interface
-        atol = 1.0e-7 if interface == "torch" else 1.0e-8
-
-        assert qp.math.allclose(var, expected, atol=atol), f"Expected {expected}, got {var}"

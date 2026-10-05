@@ -23,12 +23,23 @@ Execution functions and utilities
     :toctree: api
 
     ~execute
-    ~workflow.construct_tape
-    ~workflow.construct_batch
-    ~workflow.construct_execution_config
-    ~workflow.get_compile_pipeline
-    ~workflow.get_best_diff_method
+    ~workflow.cache_execute
     ~workflow.set_shots
+    ~workflow.construct_batch
+    ~workflow.get_transform_program
+
+Supported interfaces
+~~~~~~~~~~~~~~~~~~~~
+
+.. autosummary::
+    :toctree: api
+
+    ~workflow.interfaces.autograd
+    ~workflow.interfaces.jax
+    ~workflow.interfaces.jax_jit
+    ~workflow.interfaces.tensorflow
+    ~workflow.interfaces.tensorflow_autograph
+    ~workflow.interfaces.torch
 
 Jacobian Product Calculation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -40,26 +51,10 @@ Jacobian Product Calculation
     ~workflow.jacobian_products.TransformJacobianProducts
     ~workflow.jacobian_products.DeviceDerivatives
     ~workflow.jacobian_products.DeviceJacobianProducts
-
-.. include:: ../../pennylane/workflow/return_types_spec.rst
+    ~workflow.jacobian_products.LightningVJPs
 
 """
-
-from ._cache_transform import _cache_transform
-from ._setup_transform_program import _setup_transform_program
-from .construct_batch import construct_batch
-from .construct_execution_config import construct_execution_config
-from .construct_tape import construct_tape
-from .execution import execute
-from .get_best_diff_method import get_best_diff_method
-from .get_compile_pipeline import get_compile_pipeline
-from .marker import marker
-from .qnode import QNode, qnode
-from .resolution import (
-    _resolve_diff_method,
-    _resolve_execution_config,
-    _resolve_interface,
-    _resolve_mcm_config,
-)
-from .run import run
 from .set_shots import set_shots
+from .execution import execute, cache_execute, SUPPORTED_INTERFACES, INTERFACE_MAP
+from .qnode import QNode, qnode
+from .construct_batch import construct_batch, get_transform_program

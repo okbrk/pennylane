@@ -12,23 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """The Pauli arithmetic abstract reduced representation classes"""
-
 # pylint:disable=protected-access
-
-import warnings
 from copy import copy
-from functools import lru_cache, reduce
+from functools import reduce, lru_cache
+from typing import Iterable
 
 import numpy as np
 from scipy import sparse
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import math
-from pennylane.core.queuing import QueuingManager
-from pennylane.exceptions import PennyLaneDeprecationWarning
-from pennylane.ops import Identity, PauliX, PauliY, PauliZ, Prod2, SProd, Sum
 from pennylane.typing import TensorLike
-from pennylane.wires import Wires, WiresLike
+from pennylane.wires import Wires
+from pennylane.operation import Tensor
+from pennylane.ops import Hamiltonian, Identity, PauliX, PauliY, PauliZ, Prod, SProd, Sum
+
 
 I = "I"
 X = "X"
@@ -86,7 +84,7 @@ def _cached_sparse_data(op):
     elif op == "Y":
         data = np.array([-1.0j, 1.0j], dtype=np.complex128)
         indices = np.array([1, 0], dtype=np.int64)
-    else:  # op == "Z"
+    elif op == "Z":
         data = np.array([1.0, -1.0], dtype=np.complex128)
         indices = np.array([0, 1], dtype=np.int64)
     return data, indices
@@ -166,7 +164,7 @@ class PauliWord(dict):
     >>> w1 = PauliWord({0:"X", 1:"Y"})
     >>> w2 = PauliWord({1:"X", 2:"Z"})
     >>> w1 @ w2
-    -1j * X(0) @ Z(1) @ Z(2)
+    -1j * Z(1) @ Z(2) @ X(0)
 
     We can multiply scalars to Pauli words or add/subtract them, resulting in a :class:`~PauliSentence` instance.
 
@@ -177,8 +175,6 @@ class PauliWord(dict):
 
     """
 
-    __slots__ = ("_hashval",)
-
     # this allows scalar multiplication from left with numpy arrays np.array(0.5) * pw1
     # taken from [stackexchange](https://stackoverflow.com/questions/40694380/forcing-multiplication-to-use-rmul-instead-of-numpy-array-mul-or-byp/44634634#44634634)
     __array_priority__ = 1000
@@ -188,13 +184,12 @@ class PauliWord(dict):
         then no operator acts on it, so return the Identity."""
         return I
 
-    def __init__(self, mapping, _skip_filter=False):
+    def __init__(self, mapping):
         """Strip identities from PauliWord on init!"""
-        if _skip_filter:
-            super().__init__(mapping)
-        else:
-            super().__init__(filter(lambda item: item[1] != I, mapping.items()))
-        self._hashval = None
+        for wire, op in mapping.copy().items():
+            if op == I:
+                del mapping[wire]
+        super().__init__(mapping)
 
     @property
     def pauli_rep(self):
@@ -210,9 +205,7 @@ class PauliWord(dict):
 
     def __copy__(self):
         """Copy the PauliWord instance."""
-        res = PauliWord(self, _skip_filter=True)
-        res._hashval = self._hashval
-        return res
+        return PauliWord(dict(self.items()))
 
     def __deepcopy__(self, memo):
         res = self.__copy__()
@@ -228,18 +221,14 @@ class PauliWord(dict):
         raise TypeError("PauliWord object does not support assignment")
 
     def __hash__(self):
-        # NOTE: `lru_cache` and related methods can't be used here since they rely on a hash value existing
-        if self._hashval is None:
-            self._hashval = hash(frozenset(self.items()))
-
-        return self._hashval
+        return hash(frozenset(self.items()))
 
     def _matmul(self, other):
         """Private matrix multiplication that returns (pauli_word, coeff) tuple for more lightweight processing"""
         base, iterator, swapped = (
-            (self, other, False) if len(self) >= len(other) else (other, self, True)
+            (self, other, False) if len(self) > len(other) else (other, self, True)
         )
-        result = dict(base)
+        result = copy(dict(base))
         coeff = 1
 
         for wire, term in iterator.items():
@@ -284,9 +273,9 @@ class PauliWord(dict):
         """
 
         if isinstance(other, TensorLike):
-            if not qp.math.ndim(other) == 0:
+            if not qml.math.ndim(other) == 0:
                 raise ValueError(
-                    f"Attempting to multiply a PauliWord with an array of dimension {qp.math.ndim(other)}"
+                    f"Attempting to multiply a PauliWord with an array of dimension {qml.math.ndim(other)}"
                 )
 
             return PauliSentence({self: other})
@@ -380,7 +369,7 @@ class PauliWord(dict):
 
         You can also compute the commutator with other operator types if they have a Pauli representation.
 
-        >>> pw.commutator(qp.Y(0))
+        >>> pw.commutator(qml.Y(0))
         2j * Z(0)
         """
         if isinstance(other, PauliWord):
@@ -389,7 +378,7 @@ class PauliWord(dict):
                 return PauliSentence({})
             return PauliSentence({new_word: coeff})
 
-        if isinstance(other, qp.operation.Operator):
+        if isinstance(other, qml.operation.Operator):
             op_self = PauliSentence({self: 1.0})
             return op_self.commutator(other)
 
@@ -466,8 +455,6 @@ class PauliWord(dict):
         full_word = [self[wire] for wire in wire_order]
 
         matrix_size = 2 ** len(wire_order)
-        if len(self) == 0:
-            return np.full(matrix_size, coeff, dtype=np.complex128)
         data = np.empty(matrix_size, dtype=np.complex128)  # Non-zero values
         current_size = 2
         data[:current_size], _ = _cached_sparse_data(full_word[-1])
@@ -499,8 +486,6 @@ class PauliWord(dict):
         """Computes the sparse matrix indices of the Pauli word times a coefficient, given a wire order."""
         full_word = [self[wire] for wire in wire_order]
         matrix_size = 2 ** len(wire_order)
-        if len(self) == 0:
-            return _cached_arange(matrix_size)
         indices = np.empty(matrix_size, dtype=np.int64)  # Column index of non-zero values
         current_size = 2
         _, indices[:current_size] = _cached_sparse_data(full_word[-1])
@@ -518,27 +503,31 @@ class PauliWord(dict):
             current_size *= 2
         return indices
 
-    @QueuingManager.stop_recording()
-    def operation(self, wire_order: WiresLike = ()):
+    def operation(self, wire_order=None, get_as_tensor=False):
         """Returns a native PennyLane :class:`~pennylane.operation.Operation` representing the PauliWord."""
         if len(self) == 0:
             return Identity(wires=wire_order)
 
-        if qp.capture.enabled():
-            # cant use lru_cache with program capture
-            factors = [op_map[op](wire) for wire, op in self.items()]
-        else:
-            factors = [_make_operation(op, wire) for wire, op in self.items()]
+        factors = [_make_operation(op, wire) for wire, op in self.items()]
 
+        if get_as_tensor:
+            return factors[0] if len(factors) == 1 else Tensor(*factors)
         pauli_rep = PauliSentence({self: 1})
-        return factors[0] if len(factors) == 1 else Prod2(factors, _init_pauli_rep=pauli_rep)
+        return factors[0] if len(factors) == 1 else Prod(*factors, _pauli_rep=pauli_rep)
+
+    def hamiltonian(self, wire_order=None):
+        """Return :class:`~pennylane.Hamiltonian` representing the PauliWord."""
+        if len(self) == 0:
+            if wire_order in (None, [], Wires([])):
+                raise ValueError("Can't get the Hamiltonian for an empty PauliWord.")
+            return Hamiltonian([1], [Identity(wires=wire_order)])
+
+        obs = [_make_operation(op, wire) for wire, op in self.items()]
+        return Hamiltonian([1], [obs[0] if len(obs) == 1 else Tensor(*obs)])
 
     def map_wires(self, wire_map: dict) -> "PauliWord":
         """Return a new PauliWord with the wires mapped."""
         return self.__class__({wire_map.get(w, w): op for w, op in self.items()})
-
-
-pw_id = PauliWord({})  # empty pauli word to be re-used
 
 
 class PauliSentence(dict):
@@ -555,9 +544,9 @@ class PauliSentence(dict):
     **Examples**
 
     >>> ps = PauliSentence({
-    ...     PauliWord({0:'X', 1:'Y'}): 1.23,
-    ...     PauliWord({2:'Z', 0:'Y'}): -0.45j
-    ... })
+            PauliWord({0:'X', 1:'Y'}): 1.23,
+            PauliWord({2:'Z', 0:'Y'}): -0.45j
+        })
     >>> ps
     1.23 * X(0) @ Y(1)
     + (-0-0.45j) * Z(2) @ Y(0)
@@ -588,9 +577,7 @@ class PauliSentence(dict):
 
     Or, alternatively, use :func:`~commutator`.
 
-    >>> qp.commutator(op1, op2, pauli=True)
-    2j * Z(0) @ X(1)
-    + 2j * X(0) @ Z(1)
+    >>> qml.commutator(op1, op2, pauli=True)
 
     Note that we need to specify ``pauli=True`` as :func:`~.commutator` returns PennyLane operators by default.
 
@@ -609,21 +596,6 @@ class PauliSentence(dict):
         """If the PauliWord is not in the sentence then the coefficient
         associated with it should be 0."""
         return 0.0
-
-    def trace(self):
-        r"""Return the normalized trace of the ``PauliSentence`` instance
-
-        .. math:: \frac{1}{2^n} \text{tr}\left( P \right).
-
-        The normalized trace does not scale with the number of qubits :math:`n`.
-
-        >>> PauliSentence({PauliWord({0:"I", 1:"I"}): 0.5}).trace()
-        0.5
-        >>> PauliSentence({PauliWord({}): 0.5}).trace()
-        0.5
-
-        """
-        return self.get(pw_id, 0.0)
 
     def __add__(self, other):
         """Add a PauliWord, scalar or other PauliSentence to a PauliSentence.
@@ -738,9 +710,9 @@ class PauliSentence(dict):
         """
 
         if isinstance(other, TensorLike):
-            if not qp.math.ndim(other) == 0:
+            if not qml.math.ndim(other) == 0:
                 raise ValueError(
-                    f"Attempting to multiply a PauliSentence with an array of dimension {qp.math.ndim(other)}"
+                    f"Attempting to multiply a PauliSentence with an array of dimension {qml.math.ndim(other)}"
                 )
 
             return PauliSentence({key: other * value for key, value in self.items()})
@@ -788,7 +760,7 @@ class PauliSentence(dict):
 
         You can also compute the commutator with other operator types if they have a Pauli representation.
 
-        >>> ps1.commutator(qp.Y(0))
+        >>> ps1.commutator(qml.Y(0))
         2j * Z(0)"""
         final_ps = PauliSentence()
 
@@ -804,9 +776,9 @@ class PauliSentence(dict):
             if other.pauli_rep is None:
                 raise NotImplementedError(
                     f"Cannot compute a native commutator of a Pauli word or sentence with the operator {other} of type {type(other)}."
-                    f"You can try to use qp.commutator(op1, op2, pauli=False) instead."
+                    f"You can try to use qml.commutator(op1, op2, pauli=False) instead."
                 )
-            other = qp.pauli.pauli_sentence(other)
+            other = qml.pauli.pauli_sentence(other)
 
         for pw1 in self:
             for pw2 in other:
@@ -829,7 +801,7 @@ class PauliSentence(dict):
     @property
     def wires(self):
         """Track wires of the PauliSentence."""
-        return Wires.all_wires(pw.wires for pw in self.keys())
+        return Wires.all_wires((pw.wires for pw in self.keys()))
 
     def to_mat(self, wire_order=None, format="dense", buffer_size=None):
         """Returns the matrix representation.
@@ -848,15 +820,51 @@ class PauliSentence(dict):
             ValueError: Can't get the matrix of an empty PauliSentence.
         """
         wire_order = self.wires if wire_order is None else Wires(wire_order)
+        if not wire_order.contains_wires(self.wires):
+            raise ValueError(
+                "Can't get the matrix for the specified wire order because it "
+                f"does not contain all the Pauli sentence's wires {self.wires}"
+            )
+
+        def _pw_wires(w: Iterable) -> Wires:
+            """Return the native Wires instance for a list of wire labels.
+            w represents the wires of the PauliWord being processed. In case
+            the PauliWord is empty ({}), choose any arbitrary wire from the
+            PauliSentence it is composed in.
+            """
+            if w:
+                # PauliWord is not empty, so we can use its wires
+                return Wires(w)
+
+            if wire_order:
+                # PauliWord is empty, treat it as Identity operator on any wire
+                # Pick any arbitrary wire from wire_order
+                return Wires(wire_order[0])
+
+            return wire_order
+
         if len(self) == 0:
             n = len(wire_order) if wire_order is not None else 0
             if format == "dense":
                 return np.zeros((2**n, 2**n))
-            return sparse.csr_matrix((2**n, 2**n), dtype="complex128").asformat(format)
+            return sparse.csr_matrix((2**n, 2**n), dtype="complex128")
 
-        if format == "dense":
-            return self._to_dense_mat(wire_order)
-        return self._to_sparse_mat(wire_order, buffer_size=buffer_size).asformat(format)
+        if format != "dense":
+            return self._to_sparse_mat(wire_order, buffer_size=buffer_size)
+
+        mats_and_wires_gen = (
+            (
+                coeff * pw.to_mat(wire_order=_pw_wires(pw.wires), format=format),
+                _pw_wires(pw.wires),
+            )
+            for pw, coeff in self.items()
+        )
+
+        reduced_mat, result_wire_order = math.reduce_matrices(
+            mats_and_wires_gen=mats_and_wires_gen, reduce_func=math.add
+        )
+
+        return math.expand_matrix(reduced_mat, result_wire_order, wire_order=wire_order)
 
     def _to_sparse_mat(self, wire_order, buffer_size=None):
         """Compute the sparse matrix of the Pauli sentence by efficiently adding the Pauli words
@@ -896,31 +904,6 @@ class PauliSentence(dict):
         matrix.eliminate_zeros()
         return matrix
 
-    def _to_dense_mat(self, wire_order):
-        """Compute the dense matrix of the Pauli sentence by efficiently adding the Pauli words
-        that it is composed of. See pauli_sparse_matrices.md for the technical details."""
-        pauli_words = list(self)  # Ensure consistent ordering
-
-        try:
-            op_sparse_idx = _ps_to_sparse_index(pauli_words, wire_order)
-        except qp.wires.WireError as e:
-            raise ValueError(
-                "Can't get the matrix for the specified wire order because it "
-                f"does not contain all the Pauli sentence's wires {self.wires}"
-            ) from e
-        _, unique_sparse_structures, unique_invs = np.unique(
-            op_sparse_idx, axis=0, return_index=True, return_inverse=True
-        )
-        pw_sparse_structures = unique_sparse_structures[unique_invs]
-
-        full_matrix = None
-        for sparse_structure in unique_sparse_structures:
-            indices, *_ = np.nonzero(pw_sparse_structures == sparse_structure)
-            mat = self._sum_same_structure_pws_dense([pauli_words[i] for i in indices], wire_order)
-
-            full_matrix = mat if full_matrix is None else qp.math.add(full_matrix, mat)
-        return full_matrix
-
     def dot(self, vector, wire_order=None):
         """Computes the matrix-vector product of the Pauli sentence with a state vector.
         See pauli_sparse_matrices.md for the technical details."""
@@ -958,45 +941,19 @@ class PauliSentence(dict):
         outer = np.empty((nwords, 2 ** (nwires // 2)), dtype=np.complex128)
         for i, word in enumerate(pauli_words):
             outer[i, :], inner[i, :] = word._get_csr_data_2(
-                wire_order, coeff=qp.math.to_numpy(self[word])
+                wire_order, coeff=qml.math.to_numpy(self[word])
             )
         data = outer.T @ inner
         return indices, data.ravel()
 
-    def _sum_same_structure_pws_dense(self, pauli_words, wire_order):
-        matrix_size = 2 ** (len(wire_order))
-        base_matrix = sparse.csr_matrix((matrix_size, matrix_size), dtype="complex128")
-
-        data0 = pauli_words[0]._get_csr_data(wire_order, 1)
-        base_matrix.data = np.ones_like(data0)
-        base_matrix.indices = pauli_words[0]._get_csr_indices(wire_order)
-        base_matrix.indptr = _cached_arange(
-            matrix_size + 1
-        )  # Non-zero entries by row (starting from 0)
-        base_matrix = base_matrix.toarray()
-        coeff = self[pauli_words[0]]
-        ml_interface = qp.math.get_interface(coeff)
-        if ml_interface == "torch":
-            data0 = qp.math.convert_like(data0, coeff)
-        data = coeff * data0 if qp.math.ndim(coeff) == 0 else qp.math.outer(coeff, data0)
-        for pw in pauli_words[1:]:
-            coeff = self[pw]
-            csr_data = pw._get_csr_data(wire_order, 1)
-            ml_interface = qp.math.get_interface(coeff)
-            if ml_interface == "torch":
-                csr_data = qp.math.convert_like(csr_data, coeff)
-            data += coeff * csr_data if qp.math.ndim(coeff) == 0 else qp.math.outer(coeff, csr_data)
-
-        return qp.math.einsum("ij,...i->...ij", base_matrix, data)
-
     def _sum_same_structure_pws(self, pauli_words, wire_order):
         """Sums Pauli words with the same sparse structure."""
         mat = pauli_words[0].to_mat(
-            wire_order, coeff=qp.math.to_numpy(self[pauli_words[0]]), format="csr"
+            wire_order, coeff=qml.math.to_numpy(self[pauli_words[0]]), format="csr"
         )
         for word in pauli_words[1:]:
             mat.data += word.to_mat(
-                wire_order, coeff=qp.math.to_numpy(self[word]), format="csr"
+                wire_order, coeff=qml.math.to_numpy(self[word]), format="csr"
             ).data
         return mat
 
@@ -1016,64 +973,40 @@ class PauliSentence(dict):
         matrix.eliminate_zeros()
         return matrix
 
-    @QueuingManager.stop_recording()
-    def operation(self, wire_order: WiresLike = ()):
+    def operation(self, wire_order=None):
         """Returns a native PennyLane :class:`~pennylane.operation.Operation` representing the PauliSentence."""
         if len(self) == 0:
-            return qp.s_prod(0, Identity(wires=wire_order))
+            return qml.s_prod(0, Identity(wires=wire_order))
 
         summands = []
         wire_order = wire_order or self.wires
         for pw, coeff in self.items():
             pw_op = pw.operation(wire_order=list(wire_order))
             rep = PauliSentence({pw: coeff})
-            summands.append(
-                pw_op
-                if not math.is_abstract(coeff) and qp.math.all(coeff == 1)
-                else SProd(coeff, pw_op, _pauli_rep=rep)
-            )
+            summands.append(pw_op if coeff == 1 else SProd(coeff, pw_op, _pauli_rep=rep))
         return summands[0] if len(summands) == 1 else Sum(*summands, _pauli_rep=self)
 
-    def prune(self, tol=1e-8):
-        """Remove any ``PauliWord`` with coefficients less than the threshold tolerance.
+    def hamiltonian(self, wire_order=None):
+        """Returns a native PennyLane :class:`~pennylane.Hamiltonian` representing the PauliSentence."""
+        if len(self) == 0:
+            if wire_order in (None, [], Wires([])):
+                raise ValueError("Can't get the Hamiltonian for an empty PauliSentence.")
+            return Hamiltonian([], [])
 
-        **Examples**
+        wire_order = wire_order or self.wires
+        wire_order = list(wire_order)
 
-        >>> ps = PauliSentence({
-        ...     PauliWord({0:'X', 1:'Y'}): 0,
-        ...     PauliWord({2:'Z', 0:'Y'}): -0.45j
-        ... })
-        >>> ps
-        0 * X(0) @ Y(1)
-        + (-0-0.45j) * Z(2) @ Y(0)
-        >>> ps.prune()
-        >>> ps
-        (-0-0.45j) * Z(2) @ Y(0)
+        return Hamiltonian(
+            list(self.values()),
+            [pw.operation(wire_order=wire_order, get_as_tensor=True) for pw in self],
+        )
 
-        """
+    def simplify(self, tol=1e-8):
+        """Remove any PauliWords in the PauliSentence with coefficients less than the threshold tolerance."""
         items = list(self.items())
         for pw, coeff in items:
-            if not math.is_abstract(coeff) and abs(coeff) <= tol:
+            if abs(coeff) <= tol:
                 del self[pw]
-
-    def simplify(self, tol=1e-8) -> None:
-        """Remove any ``PauliWord`` with coefficients less than the threshold tolerance.
-
-        This method mutates the ``PauliSentence`` in place, and does not return anything.
-
-        .. seealso:: :meth:`~.prune`
-
-        .. warning::
-
-            The ``simplify`` method is deprecated and will be removed in v0.47. Please use
-            the :meth:`~.prune` method instead.
-
-        """
-        warnings.warn(
-            "PauliSentence.simplify is deprecated. Please use PauliSentence.prune instead.",
-            PennyLaneDeprecationWarning,
-        )
-        self.prune(tol)
 
     def map_wires(self, wire_map: dict) -> "PauliSentence":
         """Return a new PauliSentence with the wires mapped."""

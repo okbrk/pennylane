@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Rotosolve gradient free optimizer"""
+# pylint: disable=too-many-branches,cell-var-from-loop
 
 from inspect import signature
-
 import numpy as np
-import scipy as sp
+from scipy.optimize import brute, shgo
 
-from pennylane import math
-from pennylane.optimize.reconstruct import reconstruct
-from pennylane.workflow import QNode
+import pennylane as qml
 
 
 def _brute_optimizer(fun, num_steps, bounds=None, **kwargs):
@@ -32,9 +30,7 @@ def _brute_optimizer(fun, num_steps, bounds=None, **kwargs):
     center = (bounds[0][1] + bounds[0][0]) / 2
     for _ in range(num_steps):
         range_ = (center - width / 2, center + width / 2)
-        center, y_min, *_ = sp.optimize.brute(
-            fun, ranges=(range_,), full_output=True, Ns=Ns, **kwargs
-        )
+        center, y_min, *_ = brute(fun, ranges=(range_,), full_output=True, Ns=Ns, **kwargs)
         # We only ever use this function for 1D optimization
         center = center[0]
         width /= Ns
@@ -46,7 +42,7 @@ def _shgo_optimizer(fun, **kwargs):
     r"""Wrapper for ``scipy.optimize.shgo`` (Simplicial Homology global optimizer).
     Signature is as expected by ``RotosolveOptimizer._min_numeric`` below, providing
     a scalar minimal position and the function value at that position."""
-    opt_res = sp.optimize.shgo(fun, **kwargs)
+    opt_res = shgo(fun, **kwargs)
     return opt_res.x[0], opt_res.fun
 
 
@@ -59,13 +55,13 @@ def _validate_inputs(requires_grad, args, nums_frequency, spectra):
             "Found no parameters to optimize. The parameters to optimize "
             "have to be marked as trainable."
         )
-    for arg, (arg_name, _requires_grad) in zip(args, requires_grad.items(), strict=True):
+    for arg, (arg_name, _requires_grad) in zip(args, requires_grad.items()):
         if _requires_grad:
             _nums_frequency = nums_frequency.get(arg_name, {})
             _spectra = spectra.get(arg_name, {})
             all_keys = set(_nums_frequency) | set(_spectra)
 
-            shape = math.shape(arg)
+            shape = qml.math.shape(arg)
             indices = np.ndindex(shape) if len(shape) > 0 else [()]
             for par_idx in indices:
                 if par_idx not in all_keys:
@@ -93,11 +89,11 @@ def _restrict_to_univariate(fn, arg_idx, par_idx, args, kwargs):
         function is added to the marked parameter.
     """
     the_arg = args[arg_idx]
-    if len(math.shape(the_arg)) == 0:
-        shift_vec = math.ones_like(the_arg)
+    if len(qml.math.shape(the_arg)) == 0:
+        shift_vec = qml.math.ones_like(the_arg)
     else:
-        shift_vec = math.zeros_like(the_arg)
-        shift_vec = math.scatter_element_add(shift_vec, par_idx, 1.0)
+        shift_vec = qml.math.zeros_like(the_arg)
+        shift_vec = qml.math.scatter_element_add(shift_vec, par_idx, 1.0)
 
     def _univariate_fn(x):
         return fn(*args[:arg_idx], the_arg + shift_vec * x, *args[arg_idx + 1 :], **kwargs)
@@ -113,6 +109,41 @@ class RotosolveOptimizer:
     updates the parameters :math:`\boldsymbol{\theta} = \theta_1, \dots, \theta_D` by
     separately reconstructing the cost function with respect to each circuit parameter,
     while keeping all other parameters fixed.
+
+    Args:
+        substep_optimizer (str or callable): Optimizer to use for the substeps of Rotosolve
+            that carries out a univariate (i.e., single-parameter) global optimization.
+            *Only used if there are more than one frequency for a given parameter.*
+            It must take as inputs:
+
+            - A function ``fn`` that maps scalars to scalars,
+
+            - the (keyword) argument ``bounds``, and
+
+            - optional keyword arguments.
+
+            It must return two scalars:
+
+            - The input value ``x_min`` for which ``fn`` is minimal, and
+
+            - the minimal value ``y_min=fn(x_min)`` or ``None``.
+
+            Alternatively, the following optimizers are built-in and can be chosen by
+            passing their name:
+
+            - ``"brute"``: An iterative version of
+              `SciPy's brute force optimizer <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.brute.html>`_.
+              It evaluates the function at ``Ns`` equidistant points across the range
+              :math:`[-\pi, \pi]` and iteratively refines the range around the point
+              with the smallest cost value for ``num_steps`` times.
+
+            - ``"shgo"``: `SciPy's SHGO optimizer <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.shgo.html>`_.
+
+        substep_kwargs (dict): Keyword arguments to be passed to the ``substep_optimizer``
+            callable. For ``substep_optimizer="shgo"``, the original keyword arguments of
+            the SciPy implementation are available, for ``substep_optimizer="brute"`` the
+            keyword arguments ``ranges``, ``Ns`` and ``num_steps`` are useful.
+            *Only used if there are more than one frequency for a given parameter.*
 
     For each parameter, a purely classical one-dimensional global optimization over the
     interval :math:`(-\pi,\pi]` is performed, which is replaced automatically by a
@@ -153,42 +184,7 @@ class RotosolveOptimizer:
         ``RotosolveOptimizer`` will only update parameters that are *explicitly*
         marked as trainable. This can be done via ``requires_grad`` if using Autograd
         or PyTorch. ``RotosolveOptimizer`` is not yet implemented to work in a stable
-        manner with JAX.
-
-    Args:
-        substep_optimizer (str or callable): optimizer to use for the substeps of Rotosolve
-            that carries out a univariate (i.e., single-parameter) global optimization.
-            *Only used if there are more than one frequency for a given parameter* (default value: "brute").
-            It must take as inputs:
-
-            - A function ``fn`` that maps scalars to scalars,
-
-            - the (keyword) argument ``bounds``, and
-
-            - optional keyword arguments.
-
-            It must return two scalars:
-
-            - The input value ``x_min`` for which ``fn`` is minimal, and
-
-            - the minimal value ``y_min=fn(x_min)`` or ``None``.
-
-            Alternatively, the following optimizers are built-in and can be chosen by
-            passing their name:
-
-            - ``"brute"``: An iterative version of
-              `SciPy's brute force optimizer <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.brute.html>`_.
-              It evaluates the function at ``Ns`` equidistant points across the range
-              :math:`[-\pi, \pi]` and iteratively refines the range around the point
-              with the smallest cost value for ``num_steps`` times.
-
-            - ``"shgo"``: `SciPy's SHGO optimizer <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.shgo.html>`_.
-
-        substep_kwargs (dict): keyword arguments to be passed to the ``substep_optimizer``
-            callable. For ``substep_optimizer="shgo"``, the original keyword arguments of
-            the SciPy implementation are available, for ``substep_optimizer="brute"`` the
-            keyword arguments ``ranges``, ``Ns`` and ``num_steps`` are useful.
-            *Only used if there are more than one frequency for a given parameter.*
+        manner with TensorFlow or JAX.
 
     **Example:**
 
@@ -202,24 +198,24 @@ class RotosolveOptimizer:
     We will run Rotosolve itself for three iterations.
 
     >>> opt_kwargs = {"num_steps": 4}
-    >>> opt = qp.optimize.RotosolveOptimizer(substep_optimizer="brute", substep_kwargs=opt_kwargs)
+    >>> opt = qml.optimize.RotosolveOptimizer(substep_optimizer="brute", substep_kwargs=opt_kwargs)
     >>> num_steps = 3
 
     Next, we create a QNode we wish to optimize:
 
     .. code-block :: python
 
-        dev = qp.device('default.qubit', wires=3)
+        dev = qml.device('default.qubit', wires=3, shots=None)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def cost_function(rot_param, layer_par, crot_param, rot_weights=None, crot_weights=None):
             for i, par in enumerate(rot_param * rot_weights):
-                qp.RX(par, wires=i)
+                qml.RX(par, wires=i)
             for w in dev.wires:
-                qp.RX(layer_par, wires=w)
+                qml.RX(layer_par, wires=w)
             for i, par in enumerate(crot_param*crot_weights):
-                qp.CRY(par, wires=[i, (i+1)%3])
-            return qp.expval(qp.Z(0) @ qp.Z(1) @ qp.Z(2))
+                qml.CRY(par, wires=[i, (i+1)%3])
+            return qml.expval(qml.Z(0) @ qml.Z(1) @ qml.Z(2))
 
     This QNode is defined simply by measuring the expectation value of the tensor
     product of ``PauliZ`` operators on all qubits.
@@ -238,8 +234,6 @@ class RotosolveOptimizer:
 
     .. code-block :: python
 
-        from pennylane import numpy as np
-
         init_param = (
             np.array([0.3, 0.2, 0.67], requires_grad=True),
             np.array(1.1, requires_grad=True),
@@ -257,6 +251,8 @@ class RotosolveOptimizer:
     The keyword argument ``requires_grad`` can be used to determine whether the respective
     parameter should be optimized or not, following the behaviour of gradient computations and
     gradient-based optimizers when using Autograd or Torch.
+    With TensorFlow, a ``tf.Variable`` inside a ``tf.GradientTape`` may be used to
+    mark variables as trainable.
 
     Now we carry out the optimization.
     The minimized cost of the intermediate univariate reconstructions can
@@ -295,14 +291,12 @@ class RotosolveOptimizer:
 
     >>> rot_weights = np.array([0.4, 0.8, 1.2], requires_grad=False)
     >>> crot_weights = np.array([0.5, 1.0, 1.5], requires_grad=False)
-    >>> spectra = {
-    ...     "rot_param": {(0,): [-0.4, 0.0, 0.4], (1,): [-0.8, 0.0, 0.8], (2,): [-1.2, 0.0, 1.2]},
-    ...     "crot_param": {
-    ...         (0,): [-0.5, -0.25, 0.0, 0.25, 0.5],
-    ...         (1,): [-1.0, -0.5, 0.0, 0.5, 1.0],
-    ...         (2,): [-1.5, -0.75, 0.0, 0.75, 1.5],
-    ...     },
-    ... }
+    >>> spectrum_fn = qml.fourier.qnode_spectrum(cost_function)
+    >>> spectra = spectrum_fn(*param, rot_weights=rot_weights, crot_weights=crot_weights)
+    >>> spectra["rot_param"]
+    {(0,): [-0.4, 0.0, 0.4], (1,): [-0.8, 0.0, 0.8], (2,): [-1.2, 0.0, 1.2]}
+    >>> spectra["crot_param"]
+    {(0,): [-0.5, -0.25, 0.0, 0.25, 0.5], (1,): [-1.0, -0.5, 0.0, 0.5, 1.0], (2,): [-1.5, -0.75, 0.0, 0.75, 1.5]}
 
     We may provide these spectra instead of ``nums_frequency`` to Rotosolve to
     enable the optimization of the QNode at these weights:
@@ -331,6 +325,8 @@ class RotosolveOptimizer:
     dependence on the input arguments and still found the global minimum successfully.
     """
 
+    # pylint: disable=too-few-public-methods
+
     def __init__(self, substep_optimizer="brute", substep_kwargs=None):
         self.substep_kwargs = {} if substep_kwargs is None else substep_kwargs
         if substep_optimizer == "brute":
@@ -342,7 +338,6 @@ class RotosolveOptimizer:
         else:
             self.substep_optimizer = substep_optimizer
 
-    # pylint: disable=too-many-arguments
     def step_and_cost(
         self,
         objective_fn,
@@ -404,7 +399,7 @@ class RotosolveOptimizer:
         only contains one positive frequency, for a parameter, an analytic formula is
         used to return the minimum of the univariate restriction.
 
-        For multiple frequencies, :func:`~.pennylane.optimize.reconstruct.reconstruct` is used to reconstruct
+        For multiple frequencies, :func:`.fourier.reconstruct` is used to reconstruct
         the univariate restriction and a numeric minimization is performed instead.
         The latter minimization is performed using the ``substep_optimizer`` passed to
         ``RotosolveOptimizer`` at initialization.
@@ -418,10 +413,10 @@ class RotosolveOptimizer:
 
         """
         # todo: does this signature call cover all cases?
-        sign_fn = objective_fn.func if isinstance(objective_fn, QNode) else objective_fn
+        sign_fn = objective_fn.func if isinstance(objective_fn, qml.QNode) else objective_fn
         arg_names = list(signature(sign_fn).parameters.keys())
         requires_grad = {
-            arg_name: math.requires_grad(arg) for arg_name, arg in zip(arg_names, args, strict=True)
+            arg_name: qml.math.requires_grad(arg) for arg_name, arg in zip(arg_names, args)
         }
         nums_frequency = nums_frequency or {}
         spectra = spectra or {}
@@ -439,13 +434,13 @@ class RotosolveOptimizer:
         fun_at_zero = objective_fn(*args, **kwargs)
         first_substep_in_step = True
 
-        for arg_idx, (arg, arg_name) in enumerate(zip(args, arg_names, strict=True)):
+        for arg_idx, (arg, arg_name) in enumerate(zip(args, arg_names)):
             del after_args[0]
 
             if not requires_grad[arg_name]:
                 before_args.append(arg)
                 continue
-            shape = math.shape(arg)
+            shape = qml.math.shape(arg)
             indices = np.ndindex(shape) if len(shape) > 0 else [()]
             for par_idx in indices:
                 _fun_at_zero = fun_at_zero if first_substep_in_step else None
@@ -462,7 +457,7 @@ class RotosolveOptimizer:
                     )
                     freq = 1.0 if num_freq is not None else spectrum[spectrum > 0][0]
                     x_min, y_min = self.min_analytic(univariate, freq, _fun_at_zero)
-                    arg = math.scatter_element_add(arg, par_idx, x_min)
+                    arg = qml.math.scatter_element_add(arg, par_idx, x_min)
 
                 else:
                     ids = {arg_name: (par_idx,)}
@@ -472,7 +467,9 @@ class RotosolveOptimizer:
                     _spectra = {arg_name: {par_idx: spectrum}} if spectrum is not None else None
 
                     # Set up the reconstruction function
-                    recon_fn = reconstruct(objective_fn, ids, _nums_frequency, _spectra, shifts)
+                    recon_fn = qml.fourier.reconstruct(
+                        objective_fn, ids, _nums_frequency, _spectra, shifts
+                    )
                     # Perform the reconstruction
                     recon = recon_fn(*before_args, arg, *after_args, f0=_fun_at_zero, **kwargs)[
                         arg_name
@@ -482,7 +479,7 @@ class RotosolveOptimizer:
                     x_min, y_min = self._min_numeric(recon, spectrum)
 
                     # Update the currently treated argument
-                    arg = math.scatter_element_add(arg, par_idx, x_min - arg[par_idx])
+                    arg = qml.math.scatter_element_add(arg, par_idx, x_min - arg[par_idx])
                 first_substep_in_step = False
 
                 if full_output:
@@ -502,7 +499,6 @@ class RotosolveOptimizer:
 
         return args, fun_at_zero
 
-    # pylint: disable=too-many-arguments
     def step(
         self,
         objective_fn,
@@ -562,7 +558,7 @@ class RotosolveOptimizer:
         only contains one positive frequency, for a parameter, an analytic formula is
         used to return the minimum of the univariate restriction.
 
-        For multiple frequencies, :func:`~.pennylane.optimize.reconstruct.reconstruct` is used to reconstruct
+        For multiple frequencies, :func:`.fourier.reconstruct` is used to reconstruct
         the univariate restriction and a numeric minimization is performed instead.
         The latter minimization is performed using the ``substep_optimizer`` passed to
         ``RotosolveOptimizer`` at initialization.
@@ -609,8 +605,8 @@ class RotosolveOptimizer:
         """
         opt_kwargs = self.substep_kwargs.copy()
         if "bounds" not in self.substep_kwargs:
-            spectrum = math.array(spectrum)
-            half_width = np.pi / math.min(spectrum[spectrum > 0])
+            spectrum = qml.math.array(spectrum)
+            half_width = np.pi / qml.math.min(spectrum[spectrum > 0])
             opt_kwargs["bounds"] = ((-half_width, half_width),)
 
         x_min, y_min = self.substep_optimizer(objective_fn, **opt_kwargs)

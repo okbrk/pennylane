@@ -15,21 +15,14 @@
 This submodule contains the operation SpecialUnitary and
 its utility functions.
 """
-
 # pylint: disable=arguments-differ, import-outside-toplevel
 from functools import lru_cache, reduce
 from itertools import product
-from typing import Literal
 
-import jax
 import numpy as np
-
-import pennylane as qp
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
+import pennylane as qml
+from pennylane.operation import AnyWires, Operation
 from pennylane.ops.qubit.parametric_ops_multi_qubit import PauliRot
-from pennylane.typing import FlatPytree, Float, TensorLike, Wire
-from pennylane.wires import WiresLike
 
 _pauli_matrices = np.array(
     [[[1, 0], [0, 1]], [[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]]]
@@ -41,7 +34,7 @@ _pauli_letters = "IXYZ"
 
 
 @lru_cache
-def pauli_basis_matrices(num_wires: int) -> np.ndarray:
+def pauli_basis_matrices(num_wires):
     r"""Compute all elements of the Pauli basis of the Lie algebra :math:`\mathfrak{su}(N)`
     as a single, dense tensor.
 
@@ -98,7 +91,7 @@ def pauli_basis_matrices(num_wires: int) -> np.ndarray:
 
 
 @lru_cache
-def pauli_basis_strings(num_wires: int) -> list[str]:
+def pauli_basis_strings(num_wires):
     r"""Compute all :math:`n`-qubit Pauli words except ``"I"*num_wires``,
     corresponding to the Pauli basis of the Lie algebra :math:`\mathfrak{su}(N)`.
 
@@ -132,7 +125,7 @@ def pauli_basis_strings(num_wires: int) -> list[str]:
     return ["".join(letters) for letters in product(_pauli_letters, repeat=num_wires)][1:]
 
 
-def _pauli_decompose(matrix: TensorLike, num_wires: int) -> TensorLike:
+def _pauli_decompose(matrix, num_wires):
     r"""Compute the coefficients of a matrix or a batch of matrices (batch dimension(s) in the
     leading axes) in the Pauli basis.
 
@@ -162,9 +155,9 @@ def _pauli_decompose(matrix: TensorLike, num_wires: int) -> TensorLike:
     # We are interested in the traces of the matrix products, for each Pauli basis. Both
     # contractions (mult and trace) can be executed by providing all axes of size d to
     # ``tensordot``, which gives us a vectorized way to compute the coefficients.
-    coefficients = qp.math.tensordot(basis, matrix, axes=[[1, 2], [-1, -2]])
+    coefficients = qml.math.tensordot(basis, matrix, axes=[[1, 2], [-1, -2]])
     # Finally, cast to the original data type and renormalize
-    return qp.math.cast(coefficients, matrix.dtype) / 2**num_wires
+    return qml.math.cast(coefficients, matrix.dtype) / 2**num_wires
 
 
 class SpecialUnitary(Operation):
@@ -211,6 +204,7 @@ class SpecialUnitary(Operation):
         theta (tensor_like): Pauli coordinates of the exponent :math:`A(\bm{\theta})`.
             See details below for the order of the Pauli words.
         wires (Sequence[int] or int): The wire(s) the operation acts on
+        id (str or None): String representing the operation (optional)
 
     Raises:
         ValueError: If the shape of the input does not match the Lie algebra
@@ -225,19 +219,14 @@ class SpecialUnitary(Operation):
     The parameter ``theta`` refers to all Pauli words (except for the identity) in
     lexicographical order, which looks like the following for one and two qubits:
 
-    >>> qp.ops.qubit.special_unitary.pauli_basis_strings(1) # 4**1-1 = 3 Pauli words
+    >>> qml.ops.qubit.special_unitary.pauli_basis_strings(1) # 4**1-1 = 3 Pauli words
     ['X', 'Y', 'Z']
-    >>> qp.ops.qubit.special_unitary.pauli_basis_strings(2) # 4**2-1 = 15 Pauli words
+    >>> qml.ops.qubit.special_unitary.pauli_basis_strings(2) # 4**2-1 = 15 Pauli words
     ['IX', 'IY', 'IZ', 'XI', 'XX', 'XY', 'XZ', 'YI', 'YX', 'YY', 'YZ', 'ZI', 'ZX', 'ZY', 'ZZ']
-
-    .. seealso::
-
-        For more details on using this operator in applications, see the
-        :doc:`SU(N) gate demo <demo:demos/tutorial_here_comes_the_sun>`.
 
     .. warning::
 
-        This operation only is differentiable when using the JAX or Torch
+        This operation only is differentiable when using the JAX, Torch or TensorFlow
         interfaces, even when using hardware-compatible differentiation techniques like
         the parameter-shift rule.
 
@@ -255,27 +244,27 @@ class SpecialUnitary(Operation):
 
     >>> x = 0.412
     >>> theta = x * np.array([1, 0, 0]) # The first entry belongs to the Pauli word "X"
-    >>> su = qp.SpecialUnitary(theta, wires=0)
-    >>> prot = qp.PauliRot(-2 * x, "X", wires=0) # PauliRot introduces a prefactor -0.5
-    >>> rx = qp.RX(-2 * x, 0) # RX introduces a prefactor -0.5
-    >>> qp.math.allclose(su.matrix(), prot.matrix())
+    >>> su = qml.SpecialUnitary(theta, wires=0)
+    >>> prot = qml.PauliRot(-2 * x, "X", wires=0) # PauliRot introduces a prefactor -0.5
+    >>> rx = qml.RX(-2 * x, 0) # RX introduces a prefactor -0.5
+    >>> qml.math.allclose(su.matrix(), prot.matrix())
     True
-    >>> qp.math.allclose(su.matrix(), rx.matrix())
+    >>> qml.math.allclose(su.matrix(), rx.matrix())
     True
 
     Note that for specific operations like the ``RX`` rotation gate above, it is
-    strongly recommended to use the specialized implementation ``qp.RX`` rather
+    strongly recommended to use the specialized implementation ``qml.RX`` rather
     than ``PauliRot`` or ``SpecialUnitary``.
     However, ``SpecialUnitary`` gates go beyond such rotations: Multiple Pauli words
     can be activated simultaneously, giving access to more complex operations.
     For two qubits, this could look like this:
 
     >>> wires = [0, 1]
-    >>> # Activating the Pauli words ["IY", "IZ", "XX", "XY", "YY", "YZ", "ZY", "ZZ"]
+    # Activating the Pauli words ["IY", "IZ", "XX", "XY", "YY", "YZ", "ZY", "ZZ"]
     >>> theta = 0.3 * np.array([0, 1, 2, 0, -1, 1, 0, 0, 0, 1, 1, 1, 0, 0, -1])
     >>> len(theta) == 4 ** len(wires) - 1 # theta contains one parameter per Pauli word
     True
-    >>> su = qp.SpecialUnitary(theta, wires=wires)
+    >>> su = qml.SpecialUnitary(theta, wires=wires)
     >>> su.matrix()
     array([[ 0.56397118+0.52139241j,  0.30652227+0.02438052j,
              0.13555302+0.22630716j,  0.0689876 -0.49110826j],
@@ -287,7 +276,7 @@ class SpecialUnitary(Operation):
             -0.29040522+0.00830631j,  0.15015337-0.76933485j]])
 
     The ``SpecialUnitary`` operation also can be differentiated with hardware-compatible
-    differentiation techniques if the JAX or Torch interface is used.
+    differentiation techniques if the JAX, Torch or TensorFlow interface is used.
     See the theoretical background section below for details.
 
     .. details::
@@ -402,6 +391,9 @@ class SpecialUnitary(Operation):
 
     """
 
+    num_wires = AnyWires
+    """int: Number of wires that the operator acts on."""
+
     num_params = 1
     """int: Number of trainable parameters that the operator depends on."""
 
@@ -411,10 +403,10 @@ class SpecialUnitary(Operation):
     grad_method = None
     """Gradient computation method."""
 
-    def __init__(self, theta: TensorLike, wires: WiresLike):
+    def __init__(self, theta, wires, id=None):
         num_wires = 1 if isinstance(wires, int) else len(wires)
         self.hyperparameters["num_wires"] = num_wires
-        theta_shape = qp.math.shape(theta)
+        theta_shape = qml.math.shape(theta)
         expected_dim = 4**num_wires - 1
 
         if len(theta_shape) not in {1, 2}:
@@ -429,13 +421,13 @@ class SpecialUnitary(Operation):
                 f"{expected_dim}). The parameters have shape {theta_shape}"
             )
 
-        super().__init__(theta, wires=wires)
+        super().__init__(theta, wires=wires, id=id)
 
-    def _flatten(self) -> FlatPytree:
+    def _flatten(self):
         return self.data, (self.wires, ())
 
     @staticmethod
-    def compute_matrix(theta: TensorLike, num_wires: int) -> TensorLike:
+    def compute_matrix(theta, num_wires):
         r"""Representation of the operator as a canonical matrix in the computational basis
         (static method).
 
@@ -474,37 +466,32 @@ class SpecialUnitary(Operation):
         **Example**
 
         >>> theta = np.array([0.5, 0.1, -0.3])
-        >>> qp.SpecialUnitary.compute_matrix(theta, num_wires=1)
+        >>> qml.SpecialUnitary.compute_matrix(theta, num_wires=1)
         array([[ 0.83004499-0.28280371j,  0.0942679 +0.47133952j],
                [-0.0942679 +0.47133952j,  0.83004499+0.28280371j]])
         """
-        interface = qp.math.get_interface(theta)
-        theta = qp.math.cast_like(theta, 1j)
-
+        interface = qml.math.get_interface(theta)
+        if interface == "tensorflow":
+            theta = qml.math.cast_like(theta, 1j)
         if num_wires > 5:
             matrices = product(_pauli_matrices, repeat=num_wires)
             # Drop the identity from the generator of matrices
             _ = next(matrices)
-            A = sum(
-                t * qp.math.asarray(reduce(qp.math.kron, pauli_ops), like=qp.math.get_interface(t))
-                for t, pauli_ops in zip(theta, matrices, strict=True)
-            )
+            A = sum(t * reduce(np.kron, letters) for t, letters in zip(theta, matrices))
         else:
-            A = qp.math.tensordot(theta, pauli_basis_matrices(num_wires), axes=[[-1], [0]])
-        if interface == "jax" and qp.math.ndim(theta) > 1:
+            A = qml.math.tensordot(theta, pauli_basis_matrices(num_wires), axes=[[-1], [0]])
+        if interface == "jax" and qml.math.ndim(theta) > 1:
             # jax.numpy.expm does not support broadcasting
-            return qp.math.stack([qp.math.expm(1j * _A) for _A in A])
-        return qp.math.expm(1j * A)
+            return qml.math.stack([qml.math.expm(1j * _A) for _A in A])
+        return qml.math.expm(1j * A)
 
-    def get_one_parameter_generators(
-        self, interface: Literal[None, "jax", "torch"] = None
-    ) -> TensorLike:
+    def get_one_parameter_generators(self, interface=None):
         r"""Compute the generators of one-parameter groups that reproduce
         the partial derivatives of a special unitary gate.
 
         Args:
             interface (str): The auto-differentiation framework to be used for the
-                computation. Has to be one of ``["jax", "torch"]``.
+                computation. Has to be one of ``["jax", "tensorflow", "tf", "torch"]``.
 
         Raises:
             NotImplementedError: If the chosen interface is ``"autograd"``. Autograd
@@ -548,11 +535,11 @@ class SpecialUnitary(Operation):
 
             An auto-differentiation framework is required for this function.
             The matrix exponential is not differentiable in Autograd. Therefore this function
-            only supports JAX and Torch.
+            only supports JAX, Torch and TensorFlow.
 
         """
         theta = self.data[0]
-        if len(qp.math.shape(theta)) > 1:
+        if len(qml.math.shape(theta)) > 1:
             raise ValueError("Broadcasting is not supported.")
 
         num_wires = self.hyperparameters["num_wires"]
@@ -560,11 +547,12 @@ class SpecialUnitary(Operation):
         def split_matrix(theta):
             """Compute the real and imaginary parts of the special unitary matrix."""
             mat = self.compute_matrix(theta, num_wires)
-            return qp.math.real(mat), qp.math.imag(mat)
+            return qml.math.real(mat), qml.math.imag(mat)
 
         if interface == "jax":
+            import jax
 
-            theta = qp.math.cast_like(theta, 1j)
+            theta = qml.math.cast_like(theta, 1j)
             # These lines compute the Jacobian of compute_matrix every time -> to be optimized
             jac = jax.jacobian(self.compute_matrix, argnums=0, holomorphic=True)(theta, num_wires)
 
@@ -573,6 +561,15 @@ class SpecialUnitary(Operation):
 
             rjac, ijac = torch.autograd.functional.jacobian(split_matrix, theta)
             jac = rjac + 1j * ijac
+
+        elif interface in ("tensorflow", "tf"):
+            import tensorflow as tf
+
+            with tf.GradientTape(persistent=True) as tape:
+                mats = qml.math.stack(split_matrix(theta))
+
+            rjac, ijac = tape.jacobian(mats, theta)
+            jac = qml.math.cast_like(rjac, 1j) + 1j * qml.math.cast_like(ijac, 1j)
 
         elif interface == "autograd":
             # TODO check whether we can add support for Autograd using eigenvalue decomposition
@@ -584,11 +581,11 @@ class SpecialUnitary(Operation):
             raise ValueError(f"The interface {interface} is not supported.")
 
         # Compute the Omegas from the Jacobian. The adjoint of U(theta) is realized via -theta
-        U_dagger = self.compute_matrix(-qp.math.detach(theta), num_wires)
+        U_dagger = self.compute_matrix(-qml.math.detach(theta), num_wires)
         # After contracting, move the parameter derivative axis to the first position
-        return qp.math.transpose(qp.math.tensordot(U_dagger, jac, axes=[[1], [0]]), [2, 0, 1])
+        return qml.math.transpose(qml.math.tensordot(U_dagger, jac, axes=[[1], [0]]), [2, 0, 1])
 
-    def get_one_parameter_coeffs(self, interface: Literal["jax", "torch"]):
+    def get_one_parameter_coeffs(self, interface):
         r"""Compute the Pauli basis coefficients of the generators of one-parameter groups
         that reproduce the partial derivatives of a special unitary gate.
 
@@ -628,7 +625,7 @@ class SpecialUnitary(Operation):
 
             An auto-differentiation framework is required by this function.
             The matrix exponential is not differentiable in Autograd. Therefore this function
-            only supports JAX and Torch.
+            only supports JAX, Torch and Tensorflow.
 
         .. seealso:: :meth:`~.SpecialUnitary.get_one_parameter_generators`
 
@@ -637,7 +634,7 @@ class SpecialUnitary(Operation):
         generators = self.get_one_parameter_generators(interface)
         return _pauli_decompose(generators, num_wires)
 
-    def decomposition(self) -> list["qp.operation.Operator"]:
+    def decomposition(self):
         r"""Representation of the operator as a product of other operators.
 
         .. math:: O = O_1 O_2 \dots O_n
@@ -650,36 +647,36 @@ class SpecialUnitary(Operation):
         **Example:**
 
         >>> theta = np.array([0.5, 0.1, -0.3])
-        >>> qp.SpecialUnitary(theta, wires=[0]).decomposition()
-        [QubitUnitary(U=[[ 0.83004499-0.28280371j  0.0942679 +0.47133952j]
-         [-0.0942679 +0.47133952j  0.83004499+0.28280371j]], wires=[0])]
+        >>> qml.SpecialUnitary(theta, wires=[0]).decomposition()
+        [QubitUnitary(array([[ 0.83004499-0.28280371j,  0.0942679 +0.47133952j],
+            [-0.0942679 +0.47133952j,  0.83004499+0.28280371j]]), wires=[0])]
         """
         theta = self.data[0]
-        if qp.math.requires_grad(theta):
-            interface = qp.math.get_interface(theta)
+        if qml.math.requires_grad(theta):
+            interface = qml.math.get_interface(theta)
             # Get all Pauli words for the basis of the Lie algebra for this gate
             words = pauli_basis_strings(self.hyperparameters["num_wires"])
 
             # Compute the linear map that transforms between the Pauli basis and effective generators
             # Consider the mathematical derivation for the prefactor 2j
-            omega = qp.math.real(2j * self.get_one_parameter_coeffs(interface))
+            omega = qml.math.real(2j * self.get_one_parameter_coeffs(interface))
 
             # Create zero parameters for each Pauli rotation gate that take over the trace of theta
-            detached_theta = qp.math.detach(theta)
+            detached_theta = qml.math.detach(theta)
             zeros = theta - detached_theta
             # Apply the linear map omega to the zeros to create the correct preprocessing Jacobian
-            zeros = qp.math.tensordot(omega, zeros, axes=[[1], [0]])
+            zeros = qml.math.tensordot(omega, zeros, axes=[[1], [0]])
 
             # Apply Pauli rotations that yield the Pauli basis derivatives
             paulirots = [
-                TmpPauliRot(zero, word, wires=self.wires)
-                for zero, word in zip(zeros, words, strict=True)
+                TmpPauliRot(zero, word, wires=self.wires, id="SU(N) byproduct")
+                for zero, word in zip(zeros, words)
             ]
             return paulirots + [SpecialUnitary(detached_theta, wires=self.wires)]
 
-        return [qp.QubitUnitary(self.matrix(), wires=self.wires)]
+        return [qml.QubitUnitary(self.matrix(), wires=self.wires)]
 
-    def adjoint(self) -> "SpecialUnitary":
+    def adjoint(self):
         return SpecialUnitary(-self.data[0], wires=self.wires)
 
 
@@ -698,15 +695,11 @@ class TmpPauliRot(PauliRot):
         Wrong results and/or severe performance degradations may result.
     """
 
-    # Deactivate the matrix property of qp.PauliRot in order to force decomposition
+    # Deactivate the matrix property of qml.PauliRot in order to force decomposition
     has_matrix = False
 
     @staticmethod
-    def compute_decomposition(
-        theta: TensorLike,
-        wires: WiresLike,
-        pauli_word: str,
-    ):
+    def compute_decomposition(theta, wires, pauli_word):
         r"""Representation of the operator as a product of other operators (static method). :
 
         .. math:: O = O_1 O_2 \dots O_n.
@@ -729,19 +722,9 @@ class TmpPauliRot(PauliRot):
             This operation is used in a differentiation pipeline of :class:`~.SpecialUnitary`
             and most likely should not be created manually by users.
         """
-        if qp.math.isclose(theta, theta * 0) and not qp.math.requires_grad(theta):
+        if qml.math.isclose(theta, theta * 0) and not qml.math.requires_grad(theta):
             return []
         return [PauliRot(theta, pauli_word, wires)]
 
-
-# pylint: disable-next=unused-argument
-def _tmp_paulirot_decomp_resources(theta, wires, pauli_word: str):
-    return {qp.PauliRot(Float, pauli_word=pauli_word, wires=Wire[len(pauli_word)]): 1}
-
-
-@register_resources(_tmp_paulirot_decomp_resources)
-def _tmp_paulirot_decomp(theta: TensorLike, wires: WiresLike, pauli_word: str):
-    PauliRot(theta, pauli_word=pauli_word, wires=wires)
-
-
-add_decomps(TmpPauliRot, _tmp_paulirot_decomp)
+    def __repr__(self):
+        return f"TmpPauliRot({self.data[0]}, {self.hyperparameters['pauli_word']}, wires={self.wires.tolist()})"

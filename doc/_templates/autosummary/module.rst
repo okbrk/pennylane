@@ -1,4 +1,4 @@
-{{ fullname | replace("pennylane", "qp") | escape | underline}}
+{{ fullname | replace("pennylane", "qml") | escape | underline}}
 
 .. automodule:: {{ fullname }}
 

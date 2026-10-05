@@ -14,33 +14,33 @@
 """Classical shadow transforms"""
 
 import warnings
-from functools import partial
+from functools import reduce, partial
 from itertools import product
-
+from typing import Sequence, Callable
 import numpy as np
 
-import pennylane.ops as qops
-from pennylane import math
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.core.queuing import AnnotatedQueue, apply
-from pennylane.measurements import shadow_expval
-from pennylane.transforms.core import transform
-from pennylane.typing import PostprocessingFn
-
-from .classical_shadow import ClassicalShadow
+import pennylane as qml
+from pennylane.measurements import ClassicalShadowMP
+from pennylane.tape import QuantumScript, QuantumTape
+from pennylane import transform
 
 
 @transform
-def _replace_obs(
-    tape: QuantumScript, obs, *args, **kwargs
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def _replace_obs(tape: QuantumTape, obs, *args, **kwargs) -> (Sequence[QuantumTape], Callable):
     """
     Tape transform to replace the measurement processes with the given one
     """
-    with AnnotatedQueue() as q:
+    # check if the measurement process of the tape is qml.classical_shadow
+    for m in tape.measurements:
+        if not isinstance(m, ClassicalShadowMP):
+            raise ValueError(
+                f"Tape measurement must be ClassicalShadowMP, got {m.__class__.__name__!r}"
+            )
+
+    with qml.queuing.AnnotatedQueue() as q:
         # queue everything from the old tape except the measurement processes
         for op in tape.operations:
-            apply(op)
+            qml.apply(op)
 
         # queue the new observable
         obs(*args, **kwargs)
@@ -50,6 +50,55 @@ def _replace_obs(
         return res[0]
 
     return [qscript], processing_fn
+
+
+@partial(transform, final_transform=True)
+def shadow_expval(tape: QuantumTape, H, k=1) -> (Sequence[QuantumTape], Callable):
+    """Transform a circuit returning a classical shadow into one that returns
+    the approximate expectation values in a differentiable manner.
+
+    See :func:`~.pennylane.shadow_expval` for more usage details.
+
+    Args:
+        tape (QNode or QuantumTape or Callable): A quantum circuit.
+        H (:class:`~.pennylane.Observable` or list[:class:`~.pennylane.Observable`]): Observables
+            for which to compute the expectation values
+        k (int): k (int): Number of equal parts to split the shadow's measurements to compute
+            the median of means. ``k=1`` corresponds to simply taking the mean over all measurements.
+
+    Returns:
+        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]:
+
+        The transformed circuit as described in :func:`qml.transform <pennylane.transform>`. Executing this circuit
+        will provide the expectation value estimates for each observable in the form of a tensor.
+
+    **Example**
+
+    .. code-block:: python3
+
+        H = qml.Z(0) @ qml.Z(1)
+        dev = qml.device("default.qubit", wires=2, shots=10000)
+
+        @partial(qml.shadows.shadow_expval, H, k=1)
+        @qml.qnode(dev)
+        def circuit(x):
+            qml.Hadamard(wires=0)
+            qml.CNOT(wires=[0, 1])
+            qml.RX(x, wires=0)
+            return qml.classical_shadow(wires=[0, 1])
+
+    >>> x = np.array(1.2)
+    >>> circuit(x)
+    [array(0.3528)]
+    >>> qml.grad(circuit)(x)
+    -0.9323999999999998
+    """
+    tapes, _ = _replace_obs(tape, qml.shadow_expval, H, k=k)
+
+    def post_processing_fn(res):
+        return res
+
+    return tapes, post_processing_fn
 
 
 def _shadow_state_diffable(tape, wires):
@@ -67,18 +116,18 @@ def _shadow_state_diffable(tape, wires):
     for w in wires_list:
         observables = []
         # Create all combinations of possible Pauli products P_i P_j P_k.... for w wires
-        for obs in product([qops.Identity, qops.X, qops.Y, qops.Z], repeat=len(w)):
+        for obs in product(*[[qml.Identity, qml.X, qml.Y, qml.Z] for _ in range(len(w))]):
             # Perform tensor product (((P_i @ P_j) @ P_k ) @ ....)
-            observables.append(qops.prod(*(ob(wire) for ob, wire in zip(obs, w, strict=True))))
+            observables.append(reduce(lambda a, b: a @ b, [ob(wire) for ob, wire in zip(obs, w)]))
         all_observables.extend(observables)
 
-    tapes, _ = _replace_obs(tape, shadow_expval, all_observables)
+    tapes, _ = _replace_obs(tape, qml.shadow_expval, all_observables)
 
     def post_processing_fn(results):
         """Post process the classical shadows."""
         results = results[0]
         # cast to complex
-        results = math.cast(results, np.complex64)
+        results = qml.math.cast(results, np.complex64)
 
         states = []
         start = 0
@@ -86,14 +135,14 @@ def _shadow_state_diffable(tape, wires):
             # reconstruct the state given the observables and the expectations of
             # those observables
 
-            obs_matrices = math.stack(
+            obs_matrices = qml.math.stack(
                 [
-                    math.cast_like(math.convert_like(qops.functions.matrix(obs), results), results)
+                    qml.math.cast_like(qml.math.convert_like(qml.matrix(obs), results), results)
                     for obs in all_observables[start : start + 4 ** len(w)]
                 ]
             )
 
-            s = math.einsum(
+            s = qml.math.einsum(
                 "a,abc->bc", results[start : start + 4 ** len(w)], obs_matrices
             ) / 2 ** len(w)
             states.append(s)
@@ -111,18 +160,16 @@ def _shadow_state_undiffable(tape, wires):
 
     def post_processing(results):
         bits, recipes = results[0]
-        shadow = ClassicalShadow(bits, recipes)
+        shadow = qml.shadows.ClassicalShadow(bits, recipes)
 
-        states = [math.mean(shadow.global_snapshots(wires=w), 0) for w in wires_list]
+        states = [qml.math.mean(shadow.global_snapshots(wires=w), 0) for w in wires_list]
         return states if isinstance(wires[0], list) else states[0]
 
     return [tape], post_processing
 
 
 @partial(transform, final_transform=True)
-def shadow_state(
-    tape: QuantumScript, wires, diffable=False
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def shadow_state(tape: QuantumTape, wires, diffable=False) -> (Sequence[QuantumTape], Callable):
     """Transform a circuit returning a classical shadow into one that returns
     the reconstructed state in a differentiable manner.
 
@@ -140,45 +187,34 @@ def shadow_state(
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]:
 
-        The transformed circuit as described in :func:`qp.transform <pennylane.transform>`. Executing this circuit
+        The transformed circuit as described in :func:`qml.transform <pennylane.transform>`. Executing this circuit
         will provide the reconstructed state in the form of a tensor.
 
     **Example**
 
-    .. code-block:: python
+    .. code-block:: python3
 
-        import numpy as onp
-        from pennylane import numpy as np
+        dev = qml.device("default.qubit", wires=2, shots=10000)
 
-        dev = qp.device("default.qubit", wires=2, seed=42)
-
-        @qp.set_shots(shots=10000)
-        @qp.shadows.shadow_state(wires=[0, 1], diffable=True)
-        @qp.qnode(dev)
+        @partial(qml.shadows.shadow_state, wires=[0, 1], diffable=True)
+        @qml.qnode(dev)
         def circuit(x):
-            qp.Hadamard(wires=0)
-            qp.CNOT(wires=[0, 1])
-            qp.RX(x, wires=0)
-            return qp.classical_shadow(wires=[0, 1], seed=99)
+            qml.Hadamard(wires=0)
+            qml.CNOT(wires=[0, 1])
+            qml.RX(x, wires=0)
+            return qml.classical_shadow(wires=[0, 1])
 
-    >>> x = np.array(1.2, requires_grad=True)
-    >>> onp.random.seed(123)
+    >>> x = np.array(1.2)
     >>> circuit(x)
-    array([[ 3.2582501e-01+0.j      , -8.2500000e-03+0.238425j,
-             2.9999996e-04+0.230925j,  3.3142501e-01+0.009j   ],
-           [-8.2500000e-03-0.238425j,  1.6337499e-01+0.j      ,
-             1.5997499e-01-0.0099j  , -5.5499999e-03-0.251475j],
-           [ 2.9999996e-04-0.230925j,  1.5997499e-01+0.0099j  ,
-             1.5797499e-01+0.j      ,  2.9999996e-04-0.241275j],
-           [ 3.3142501e-01-0.009j   , -5.5499999e-03+0.251475j,
-             2.9999996e-04+0.241275j,  3.5282502e-01+0.j      ]],
-          dtype=complex64)
-    >>> onp.random.seed(123)
-    >>> qp.jacobian(lambda x: np.real(circuit(x)))(x)
-    array([[-2.30550e-01,  5.62500e-03,  2.25000e-04, -2.29725e-01],
-           [ 5.62500e-03,  2.30550e-01,  2.29725e-01, -1.57500e-03],
-           [ 2.25000e-04,  2.29725e-01,  2.37900e-01,  2.47500e-03],
-           [-2.29725e-01, -1.57500e-03,  2.47500e-03, -2.37900e-01]])
+    array([[ 0.33835   +0.j     , -0.01215   +0.2241j , -0.00465   +0.237j  ,  0.35504997-0.01755j],
+       [-0.01215   -0.2241j ,  0.1528    +0.j     ,  0.16919999-0.0036j , -0.00285   -0.22065j],
+       [-0.00465   -0.237j  ,  0.16919999+0.0036j ,  0.17529999+0.j     ,  0.0099    -0.2358j ],
+       [ 0.35504997+0.01755j, -0.00285   +0.22065j,  0.0099    +0.2358j ,  0.33355   +0.j     ]], dtype=complex64)
+    >>> qml.jacobian(lambda x: np.real(circuit(x)))(x)
+    array([[-0.245025, -0.005325,  0.004275, -0.2358  ],
+           [-0.005325,  0.235275,  0.2358  , -0.004275],
+           [ 0.004275,  0.2358  ,  0.244875, -0.002175],
+           [-0.2358  , -0.004275, -0.002175, -0.235125]])
     """
     tapes, fn = (
         _shadow_state_diffable(tape, wires) if diffable else _shadow_state_undiffable(tape, wires)

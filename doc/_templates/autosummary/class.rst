@@ -1,4 +1,4 @@
-{{ fullname | replace("pennylane", "qp") }}
+{{ fullname | replace("pennylane", "qml") }}
 {{ underline }}
 
 .. autoclass:: {{ fullname }}
@@ -33,7 +33,7 @@
    {% endblock %}
 
    {% for item in attributes %}
-   .. autoattribute:: {{ fullname }}.{{ item }}
+   .. autoattribute:: {{ item }}
    {%- endfor %}
 
    .. raw:: html
@@ -67,7 +67,7 @@
    {% endblock %}
 
    {% for item in methods %}
-   .. automethod:: {{ fullname }}.{{ item }}
+   .. automethod:: {{ item }}
    {%- endfor %}
 
    .. raw:: html
@@ -84,6 +84,3 @@
              $(this).children('h2').eq(0).children('i').eq(0).toggleClass("up");
          })
       </script>
-
-   ..
-

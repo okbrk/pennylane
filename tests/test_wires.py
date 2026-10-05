@@ -14,41 +14,15 @@
 """
 Unit tests for :mod:`pennylane.wires`.
 """
-
-import re
-from importlib import import_module, util
-
-import numpy as np
 import pytest
-
-import pennylane as qp
-from pennylane.allocation import DynamicRegister
-from pennylane.exceptions import WireError
-from pennylane.typing import Wire
-from pennylane.wires import Wires
-
-if util.find_spec("jax") is not None:
-    jax = import_module("jax")
-    jax_available = True
-else:
-    jax_available = False
-    jax = None
+import numpy as np
+import pennylane as qml
+from pennylane.wires import Wires, WireError
 
 
-# pylint: disable=too-many-public-methods, too-many-positional-arguments
+# pylint: disable=too-many-public-methods
 class TestWires:
     """Tests for the ``Wires`` class."""
-
-    def test_AbstractWires_handled(self):
-        """Test that AbstractWires are left untouched."""
-
-        aw = qp.typing.AbstractWires(3)
-        assert Wires(aw) == aw
-
-    def test_error_if_wires_none(self):
-        """Tests that a TypeError is raised if None is given as wires."""
-        with pytest.raises(TypeError, match="Must specify a set of wires."):
-            Wires(None)
 
     @pytest.mark.parametrize("iterable", [np.array([0, 1, 2]), [0, 1, 2], (0, 1, 2), range(3)])
     def test_creation_from_common_iterables(self, iterable):
@@ -60,10 +34,13 @@ class TestWires:
     @pytest.mark.parametrize(
         "iterable",
         [
-            [qp.RX, qp.RY],
-            [qp.PauliX],
-            (None, qp.expval),
-            (qp.device("default.qubit", wires=range(3)),),
+            [qml.RX, qml.RY],
+            [qml.PauliX],
+            (None, qml.expval),
+            (
+                qml.device("default.qubit", wires=range(3)),
+                qml.device("default.gaussian", wires=[qml.RX, 3]),
+            ),
         ],
     )
     def test_creation_from_iterables_of_exotic_elements(self, iterable):
@@ -75,20 +52,8 @@ class TestWires:
     def test_creation_from_wires_object(self):
         """Tests that a Wires object can be created from another Wires object."""
 
-        original = Wires([0, 1, 2])
-        wires = Wires(original)
-        assert wires is original
+        wires = Wires(Wires([0, 1, 2]))
         assert wires.labels == (0, 1, 2)
-
-    def test_creation_from_dynamic_register(self):
-        """Tests that a DynamicRegister is copied into a hashable Wires."""
-
-        reg = DynamicRegister([qp.wires.DynamicWire(), qp.wires.DynamicWire()])
-        wires = Wires(reg)
-        assert isinstance(wires, Wires)
-        assert not isinstance(wires, DynamicRegister)
-        assert wires.labels == reg.labels
-        _ = hash(wires)
 
     def test_creation_from_wires_lists(self):
         """Tests that a Wires object can be created from a list of Wires."""
@@ -97,7 +62,7 @@ class TestWires:
         assert wires.labels == (Wires([0]), Wires([1]), Wires([2]))
 
     @pytest.mark.parametrize(
-        "iterable", [[1, 0, 4], ["a", "b", "c"], [0, 1, None], ["a", 1, "auxiliary"]]
+        "iterable", [[1, 0, 4], ["a", "b", "c"], [0, 1, None], ["a", 1, "ancilla"]]
     )
     def test_creation_from_different_wire_types(self, iterable):
         """Tests that a Wires object can be created from iterables of different
@@ -115,7 +80,7 @@ class TestWires:
         assert wires.labels == (wire,)
 
     @pytest.mark.parametrize(
-        "input", [[np.array([0, 1, 2]), np.array([3, 4])], [[0, 1, 2], [3, 4]]]
+        "input", [[np.array([0, 1, 2]), np.array([3, 4])], [[0, 1, 2], [3, 4]], np.array(0.0)]
     )
     def test_error_for_incorrect_wire_types(self, input):
         """Tests that a Wires object cannot be created from unhashable objects such as np arrays or lists."""
@@ -218,8 +183,8 @@ class TestWires:
 
         wires_str = str(Wires([1, 2, 3]))
         wires_repr = repr(Wires([1, 2, 3]))
-        assert wires_str == "[1, 2, 3]"
-        assert wires_repr == "Wires([1, 2, 3])"
+        assert wires_str == "<Wires = [1, 2, 3]>"
+        assert wires_repr == "<Wires = [1, 2, 3]>"
 
     def test_array_representation(self):
         """Tests that Wires object has an array representation."""
@@ -229,16 +194,6 @@ class TestWires:
         assert isinstance(array, np.ndarray)
         assert array.shape == (3,)
         for w1, w2 in zip(array, np.array([4, 0, 1])):
-            assert w1 == w2
-
-    @pytest.mark.jax
-    def test_jax_array_representation(self):
-        """Tests that Wires object has a JAX array representation."""
-
-        wires = Wires([4, 0, 1])
-        array = jax.numpy.asarray(wires)
-        assert isinstance(array, jax.numpy.ndarray)
-        for w1, w2 in zip(array, [4, 0, 1]):
             assert w1 == w2
 
     def test_set_of_wires(self):
@@ -364,16 +319,6 @@ class TestWires:
         new_wires = Wires.all_wires([wires1, wires2, wires3], sort=True)
         assert new_wires.labels == (1, 2, 3, 4, 5, 6)
         assert Wires.all_wires([[3, 4], [8, 5]]).labels == (3, 4, 8, 5)
-        assert Wires.all_wires(w for w in ([3, 4], [8, 5])).labels == (3, 4, 8, 5)
-
-    def test_all_wires_with_abstract(self):
-        """Tests that ``all_wires`` unions concrete and abstract wires."""
-        assert Wires.all_wires([Wires([0, 1]), Wire[3]]) == Wire[5]
-        assert Wires.all_wires([Wire[2], Wire[4]]) == Wire[6]
-        assert Wires.all_wires([Wires([0, 1]), Wires([1, 2]), Wire[3]]) == Wire[6]
-        assert Wires.all_wires([Wire[2], Wires([0, 2, 6]), Wire[3]]) == Wire[8]
-        assert Wires.all_wires([Wires([0]), Wire[-1]]) == Wire[-1]
-        assert Wires.all_wires([Wire[6], Wire[-1]]) == Wire[-1]
 
     def test_shared_wires_method(self):
         """Tests the ``shared_wires()`` method."""
@@ -431,245 +376,3 @@ class TestWires:
         wires2 = tree_unflatten(tree, wires_flat)
         assert isinstance(wires2, Wires), f"{wires2} is not Wires"
         assert wires == wires2, f"{wires} != {wires2}"
-
-    @pytest.mark.jax
-    def test_wires_pytree_with_array_leaves(self):
-        """Test that unflattening wire pytrees with leaves containing scalar arrays
-        is possible and correct."""
-        import jax.numpy as jnp
-        from jax.tree import flatten, unflatten
-
-        wires = Wires([0, 1, 2, 3])
-        leaves, tree = flatten(wires)
-        inner_arr_leaves = [jnp.array(l, dtype=int) for l in leaves]
-        unflattened_wires = unflatten(tree, inner_arr_leaves)
-
-        assert wires == unflattened_wires
-
-    def test_class_index(self):
-        """Test that indexing the class raises."""
-        with pytest.raises(
-            TypeError,
-            match=re.escape("Wires[3]' is not supported syntax. Did you mean"),
-        ):
-            _ = Wires[3]
-
-        with pytest.raises(
-            TypeError,
-            match=re.escape("Wires[Ellipsis]' is not supported syntax. Did you mean"),
-        ):
-            _ = Wires[...]
-
-    @pytest.mark.parametrize(
-        "wire_a, wire_b, expected",
-        [
-            (Wires([0, 1]), Wires([2, 3]), Wires([0, 1, 2, 3])),
-            (Wires([0, 1]), [2, 3], Wires([0, 1, 2, 3])),
-            ([], Wires([1, 2, 3]), Wires([1, 2, 3])),
-            ({4, 5}, Wires([1, 2, 3]), Wires([1, 2, 3, 4, 5])),
-            (Wires([1, 2]), Wires([1, 2, 3]), Wires([1, 2, 3])),
-        ],
-    )
-    def test_union(self, wire_a, wire_b, expected):
-        """
-        Test the union operation (|) between two Wires objects.
-        """
-        assert wire_a | wire_b == expected
-        assert wire_b | wire_a == expected
-
-    @pytest.mark.parametrize(
-        "wire_a, wire_b, expected",
-        [
-            (Wires([0, 1, 2]), Wires([2, 3, 4]), Wires([2])),
-            (Wires([1, 2, 3]), Wires([]), Wires([])),
-            (Wires([1, 2, 3]), [], Wires([])),
-            (Wires([1, 2, 3]), "2", Wires([])),
-            (Wires([1, 2, 3]), {3}, Wires([3])),
-            (Wires([1, 2, 3]), Wires([1, 2, 3, 4]), Wires([1, 2, 3])),
-        ],
-    )
-    def test_intersection(self, wire_a, wire_b, expected):
-        """
-        Test the intersection operation (&) between two Wires objects.
-        """
-        assert wire_a & wire_b == expected
-        assert wire_b & wire_a == expected
-
-    @pytest.mark.parametrize(
-        "wire_a, wire_b, expected",
-        [
-            (Wires([0, 1, 2, 3]), Wires([2, 3, 4]), Wires([0, 1])),
-            (Wires([1, 2, 3]), Wires([]), Wires([1, 2, 3])),
-            (Wires([1, 2, 3]), Wires([1, 2, 3, 4]), Wires([])),
-            (Wires([1, 2, 3]), [], Wires([1, 2, 3])),
-            ([1, 2, 3], Wires([]), Wires([1, 2, 3])),
-            ([], Wires([]), Wires([])),
-            (Wires([]), [], Wires([])),
-        ],
-    )
-    def test_difference(self, wire_a, wire_b, expected):
-        """
-        Test the difference operation (-) between two Wires objects.
-        """
-        assert wire_a - wire_b == expected
-
-    @pytest.mark.parametrize(
-        "wire_a, wire_b, expected",
-        [
-            (Wires([0, 1, 2]), Wires([2, 3, 4]), Wires([0, 1, 3, 4])),
-            ([0, 1, 2], Wires([2, 3, 4]), Wires([0, 1, 3, 4])),
-            (Wires([0, 1, 2]), [2, 3, 4], Wires([0, 1, 3, 4])),
-            (Wires([]), Wires([1, 2, 3]), Wires([1, 2, 3])),
-            (Wires([1, 2, 3]), Wires([1, 2, 3]), Wires([])),
-        ],
-    )
-    def test_symmetric_difference(self, wire_a, wire_b, expected):
-        """
-        Test the symmetric difference operation (^) between two Wires objects.
-        """
-        assert wire_a ^ wire_b == expected
-
-    @pytest.mark.parametrize(
-        "wire_a, wire_b, wire_c, wire_d, expected",
-        [
-            (
-                Wires([0, 1]),
-                Wires([2, 3]),
-                Wires([4, 5]),
-                Wires([6, 7]),
-                Wires([0, 1, 2, 3, 4, 5, 6, 7]),
-            ),
-            (Wires([0, 1]), Wires([1, 2]), Wires([2, 3]), Wires([3, 4]), Wires([0, 1, 2, 3, 4])),
-            (Wires([]), Wires([1, 2]), Wires([2, 3]), Wires([3, 4, 5]), Wires([1, 2, 3, 4, 5])),
-        ],
-    )
-    # pylint: disable=too-many-arguments
-    def test_multiple_union(self, wire_a, wire_b, wire_c, wire_d, expected):
-        """
-        Test the union operation (|) with multiple Wires objects.
-        """
-        result = wire_a | wire_b | wire_c | wire_d
-        assert result == expected
-        assert wire_a.union(wire_b.union(wire_c.union(wire_d))) == expected
-
-    def test_complex_operation(self):
-        """
-        Test a complex operation involving multiple set operations.
-        This test combines union, intersection, difference, and symmetric difference operations.
-        """
-        wire_a = Wires([0, 1, 2, 3])
-        wire_b = Wires([2, 3, 4, 5])
-        wire_c = Wires([4, 5, 6, 7])
-        wire_d = Wires([6, 7, 8, 9])
-
-        # ((A ∪ B) ∩ (C ∪ D)) ^ ((A - D) ∪ (C - B))
-        result = ((wire_a | wire_b) & (wire_c | wire_d)) ^ ((wire_a - wire_d) | (wire_c - wire_b))
-        assert (wire_a | wire_b) & (wire_c | wire_d) == Wires([4, 5])
-        assert (wire_a - wire_d) | (wire_c - wire_b) == Wires([0, 1, 2, 3, 6, 7])
-
-        expected = Wires([0, 1, 2, 3, 4, 5, 6, 7])
-        assert result == expected
-
-
-@pytest.mark.jax
-class TestWiresJax:
-    """Tests the support for JAX arrays in the ``Wires`` class."""
-
-    @pytest.mark.parametrize(
-        "iterable, expected",
-        (
-            [
-                (jax.numpy.array([0, 1, 2]), (0, 1, 2)),
-                (jax.numpy.array([0]), (0,)),
-                (jax.numpy.array(0), (0,)),
-                (jax.numpy.array([]), ()),
-            ]
-            if jax_available
-            else []
-        ),
-    )
-    def test_creation_from_jax_array(self, iterable, expected):
-        """Tests that a Wires object can be created from a JAX array."""
-        wires = Wires(iterable)
-        assert wires.labels == expected
-
-    @pytest.mark.parametrize(
-        "input",
-        (
-            [
-                [jax.numpy.array([0, 1, 2]), jax.numpy.array([3, 4])],
-                [jax.numpy.array([0, 1, 2]), 3],
-                jax.numpy.array([[0, 1, 2]]),
-                jax.numpy.array([[[0, 1], [2, 3]]]),
-                jax.numpy.array([[[[0]]]]),
-            ]
-            if jax_available
-            else []
-        ),
-    )
-    def test_error_for_incorrect_jax_arrays(self, input):
-        """Tests that a Wires object cannot be created from incorrect JAX arrays."""
-        with pytest.raises(WireError, match="Wires must be hashable"):
-            Wires(input)
-
-    @pytest.mark.parametrize(
-        "iterable",
-        [jax.numpy.array([4, 1, 1, 3]), jax.numpy.array([0, 0])] if jax_available else [],
-    )
-    def test_error_for_repeated_wires_jax(self, iterable):
-        """Tests that a Wires object cannot be created from a JAX array with repeated indices."""
-        with pytest.raises(WireError, match="Wires must be unique"):
-            Wires(iterable)
-
-    def test_array_representation_jax(self):
-        """Tests that Wires object has an array representation with JAX."""
-
-        wires = Wires([4, 0, 1])
-        array = jax.numpy.array(wires.labels)
-        assert isinstance(array, jax.numpy.ndarray)
-        assert array.shape == (3,)
-        for w1, w2 in zip(array, jax.numpy.array([4, 0, 1])):
-            assert w1 == w2
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            [jax.numpy.array([0, 1, 2]), jax.numpy.array([0]), jax.numpy.array(0)]
-            if jax_available
-            else []
-        ),
-    )
-    def test_jax_wires_pytree(self, source):
-        """Test that Wires class supports the PyTree flattening interface with JAX arrays."""
-
-        wires = Wires(source)
-        wires_flat, tree = jax.tree_util.tree_flatten(wires)
-        wires2 = jax.tree_util.tree_unflatten(tree, wires_flat)
-        assert isinstance(wires2, Wires), f"{wires2} is not Wires"
-        assert wires == wires2, f"{wires} != {wires2}"
-
-
-class TestAbstractWiresIntegration:
-    """test for integrating wires and AbstractWires."""
-
-    def test_pass_in_abstract_wires(self):
-        """Test that if AbstractWires is passed to Wires, it is returned unchanged."""
-
-        assert Wires(qp.typing.Wire[4]) == qp.typing.Wire[4]
-
-    def test_unsubscripted_wire_raises(self):
-        """Test that unsubscripted ``Wire`` cannot be used as a wire argument."""
-
-        with pytest.raises(TypeError, match="'Wire' cannot be used on its own"):
-            _ = Wires(Wire)
-
-    def test_addition(self):
-        """Test for addition with AbstractWires."""
-
-        assert Wires([0]) + Wire[-1] == Wire[-1]
-        assert Wire[-1] + Wires([0]) == Wire[-1]
-
-        assert Wires([0]) + Wire[4] == Wire[5]
-        assert Wire[10] + Wires([0, 1]) == Wire[12]
-
-        assert Wire[-1] + Wire[2] == Wire[-1]

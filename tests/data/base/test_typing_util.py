@@ -15,12 +15,17 @@
 Tests for the :mod:`pennylane.data.base.typing_util` functions.
 """
 
-from typing import Optional, Union
+import typing
 
 import pytest
 
-import pennylane as qp
-from pennylane.data.base.typing_util import UNSET, get_type, get_type_str, resolve_special_type
+import pennylane as qml
+from pennylane.data.base.typing_util import (
+    UNSET,
+    get_type,
+    get_type_str,
+    resolve_special_type,
+)
 from pennylane.qchem import Molecule
 
 pytestmark = pytest.mark.data
@@ -30,16 +35,16 @@ pytestmark = pytest.mark.data
     "type_, expect",
     [
         (list, "list"),
-        (list, "list"),
+        (typing.List, "list"),
         (Molecule, "pennylane.qchem.molecule.Molecule"),
         ("nonsense", "nonsense"),
-        (list[int], "list[int]"),
-        (list[tuple[int, "str"]], "list[tuple[int, str]]"),
-        (Optional[int], "Union[int, None]"),
-        (Union[int, "str", Molecule], "Union[int, str, pennylane.qchem.molecule.Molecule]"),
+        (typing.List[int], "list[int]"),
+        (typing.List[typing.Tuple[int, "str"]], "list[tuple[int, str]]"),
+        (typing.Optional[int], "Union[int, None]"),
+        (typing.Union[int, "str", Molecule], "Union[int, str, pennylane.qchem.molecule.Molecule]"),
         (str, "str"),
-        (type[str], "type[str]"),
-        (Union[list[list[int]], str], "Union[list[list[int]], str]"),
+        (typing.Type[str], "type[str]"),
+        (typing.Union[typing.List[typing.List[int]], str], "Union[list[list[int]], str]"),
     ],
 )
 def test_get_type_str(type_, expect):
@@ -53,10 +58,10 @@ def test_get_type_str(type_, expect):
     [
         (list, list),
         ([1, 2], list),
-        (list, list),
-        (list[int], list),
-        (qp.RX, qp.RX),
-        (qp.RX(1, [1]), qp.RX),
+        (typing.List, list),
+        (typing.List[int], list),
+        (qml.RX, qml.RX),
+        (qml.RX(1, [1]), qml.RX),
     ],
 )
 def test_get_type(obj, expect):
@@ -70,7 +75,7 @@ def test_unset_bool():
     assert not UNSET
 
 
-@pytest.mark.parametrize("type_, expect", [(list[list[int]], (list, [list]))])
+@pytest.mark.parametrize("type_, expect", [(typing.List[typing.List[int]], (list, [list]))])
 def test_resolve_special_type(type_, expect):
     """Test resolve_special_type()."""
     assert resolve_special_type(type_) == expect

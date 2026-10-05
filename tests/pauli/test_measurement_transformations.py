@@ -15,16 +15,14 @@
 Unit tests for the circuit implementations required in measurement optimization found in
 `grouping/transformations.py`.
 """
-
-import numpy as np
 import pytest
-
-from pennylane import RX, RY, U3, Hadamard, Hermitian, Identity, PauliX, PauliY, PauliZ
+import numpy as np
+from pennylane import PauliX, PauliY, PauliZ, Identity, Hadamard, Hermitian, RX, RY, U3
 from pennylane.pauli import (
     are_identical_pauli_words,
+    qwc_rotation,
     diagonalize_pauli_word,
     diagonalize_qwc_pauli_words,
-    qwc_rotation,
 )
 
 
@@ -122,7 +120,7 @@ class TestMeasurementTransformations:
         (
             [PauliX(0) @ PauliY(1), PauliX(0) @ PauliZ(2)],
             (
-                [RY(-np.pi / 2, wires=[0]), RX(np.pi / 2, wires=[1])],
+                [RX(np.pi / 2, wires=[1]), RY(-np.pi / 2, wires=[0])],
                 [PauliZ(wires=[0]) @ PauliZ(wires=[1]), PauliZ(wires=[0]) @ PauliZ(wires=[2])],
             ),
         ),

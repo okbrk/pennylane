@@ -13,17 +13,15 @@
 # limitations under the License.
 """Functions to prepare a state."""
 
-from collections.abc import Iterable
+from typing import Iterable, Union
 
 import numpy as np
-import scipy as sp
-
-import pennylane as qp
+import pennylane as qml
 
 
 def create_initial_state(
-    wires: qp.wires.Wires | Iterable,
-    prep_operation: qp.operation.StatePrepBase = None,
+    wires: Union[qml.wires.Wires, Iterable],
+    prep_operation: qml.operation.StatePrepBase = None,
     like: str = None,
 ):
     r"""
@@ -40,19 +38,8 @@ def create_initial_state(
     """
     if not prep_operation:
         num_wires = len(wires)
-        state = np.zeros((2,) * num_wires, dtype=complex)
+        state = np.zeros((2,) * num_wires)
         state[(0,) * num_wires] = 1
-        return qp.math.asarray(state, like=like)
+        return qml.math.asarray(state, like=like)
 
-    state_vector = prep_operation.state_vector(wire_order=list(wires))
-    dtype = str(state_vector.dtype)
-    floating_single = "float32" in dtype or "complex64" in dtype
-    dtype = "complex64" if floating_single else "complex128"
-    # sparse matrix VIP tunnel
-    if sp.sparse.issparse(state_vector):
-        # currently, state_vector returns a flattened target shape.
-        target_shape = [prep_operation.batch_size] if prep_operation.batch_size else []
-        target_shape += [2] * len(wires)
-        state_vector = state_vector.toarray()
-        state_vector = qp.math.reshape(state_vector, target_shape)
-    return qp.math.cast(qp.math.asarray(state_vector, like=like), dtype)
+    return qml.math.asarray(prep_operation.state_vector(wire_order=list(wires)), like=like)

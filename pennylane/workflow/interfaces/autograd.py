@@ -41,7 +41,7 @@ I need to:
 
 >>> autograd.grad(f)(autograd.numpy.array(2.0))
 Calculating the gradient with 2.0, 1.0
-np.float64(4.0)
+4.0
 
 The above code told autograd how to differentiate the first argument of ``f``.
 
@@ -67,32 +67,31 @@ Here, the ``grad_fn`` was called once for each output quantity. Each time ``grad
 is called, we are forced to reproduce the calculation for ``exponent * x ** (exponent-1)``,
 only to multiply it by a different vector. When executing quantum circuits, that quantity
 can potentially be quite expensive. Autograd would naively
-request independent vjps for each entry in the output, even though the internal circuits will be
+request indepedent vjps for each entry in the output, even though the internal circuits will be
 exactly the same.
 
-When caching is enabled, the expensive part (re-executing identical circuits) is
-avoided, but when normal caching is turned off, the above can lead to an explosion
+When normal caching provided by :func:`~.cache_execute` is present, the expensive part (re-executing
+identical circuits) is avoided, but when normal caching is turned off, the above can lead to an explosion
 in the number of required circuit executions.
 
 To avoid this explosion in the number of executed circuits when caching is turned off, we will instead internally
-cache the full jacobian so that is is reused between different calls to the same ``grad_fn``. This behaviour is toggled
+cache the full jacobian so that is is reused between different calls to the same ``grad_fn``. This behavior is toggled
 by the ``cache_full_jacobian`` keyword argument to :class:`~.TransformJacobianProducts`.
 
 Other interfaces are capable of calculating the full jacobian in one call, so this patch is only present for autograd.
 
 """
-
+# pylint: disable=too-many-arguments, unused-argument
 import logging
-from collections.abc import Callable
+from typing import Tuple, Callable
 
 import autograd
 from autograd.numpy.numpy_boxes import ArrayBox
 
-import pennylane as qp
-from pennylane.core.qscript import QuantumScriptBatch
-from pennylane.typing import ResultBatch
+import pennylane as qml
 
-ExecuteFn = Callable[[QuantumScriptBatch], ResultBatch]
+Batch = Tuple[qml.tape.QuantumTape]
+ExecuteFn = Callable[[Batch], qml.typing.ResultBatch]
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -100,9 +99,9 @@ logger.addHandler(logging.NullHandler())
 
 # pylint: disable=unused-argument
 def autograd_execute(
-    tapes: QuantumScriptBatch,
+    tapes: Batch,
     execute_fn: ExecuteFn,
-    jpc: qp.workflow.jacobian_products.JacobianProductCalculator,
+    jpc: qml.workflow.jacobian_products.JacobianProductCalculator,
     device=None,
 ):
     """Execute a batch of tapes with Autograd parameters on a device.
@@ -120,15 +119,16 @@ def autograd_execute(
     **Example:**
 
     >>> from pennylane.workflow.jacobian_products import DeviceDerivatives
-    >>> execute_fn = qp.device('default.qubit').execute
-    >>> config = qp.devices.ExecutionConfig(gradient_method="adjoint", use_device_gradient=True)
-    >>> jpc = DeviceDerivatives(qp.device('default.qubit'), config)
+    >>> from pennylane.workflow.autograd import autograd_execute
+    >>> execute_fn = qml.device('default.qubit').execute
+    >>> config = qml.devices.ExecutionConfig(gradient_method="adjoint", use_device_gradient=True)
+    >>> jpc = DeviceDerivatives(qml.device('default.qubit'), config)
     >>> def f(x):
-    ...     tape = qp.tape.QuantumScript([qp.RX(x, 0)], [qp.expval(qp.Z(0))])
+    ...     tape = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.Z(0))])
     ...     batch = (tape, )
     ...     return autograd_execute(batch, execute_fn, jpc)
-    >>> print(qp.grad(f)(qp.numpy.array(0.1)))
-    -0.0998...
+    >>> qml.grad(f)(qml.numpy.array(0.1))
+    -0.09983341664682815
 
     """
     tapes = tuple(tapes)
@@ -137,26 +137,14 @@ def autograd_execute(
     for tape in tapes:
         # set the trainable parameters
         params = tape.get_parameters(trainable_only=False)
-        tape.trainable_params = qp.math.get_trainable_indices(params)
+        tape.trainable_params = qml.math.get_trainable_indices(params)
 
+    # pylint misidentifies autograd.builtins as a dict
+    # pylint: disable=no-member
     parameters = autograd.builtins.tuple(
         [autograd.builtins.list(t.get_parameters()) for t in tapes]
     )
     return _execute(parameters, tuple(tapes), execute_fn, jpc)
-
-
-def _to_autograd(result: ResultBatch) -> ResultBatch:
-    """Converts an arbitrary result batch to one with autograd arrays.
-    Args:
-        result (ResultBatch): a nested structure of lists, tuples, dicts, and numpy arrays
-    Returns:
-        ResultBatch: a nested structure of tuples, dicts, and jax arrays
-    """
-    if isinstance(result, dict):
-        return result
-    if isinstance(result, (list, tuple, autograd.builtins.tuple, autograd.builtins.list)):
-        return tuple(_to_autograd(r) for r in result)
-    return autograd.numpy.array(result)
 
 
 @autograd.extend.primitive
@@ -165,7 +153,7 @@ def _execute(
     tapes,
     execute_fn,
     jpc,
-):
+):  # pylint: disable=unused-argument
     """Autodifferentiable wrapper around a way of executing tapes.
 
     Args:
@@ -177,7 +165,7 @@ def _execute(
             for the input tapes.
 
     """
-    return _to_autograd(execute_fn(tapes))
+    return execute_fn(tapes)
 
 
 # pylint: disable=unused-argument
@@ -210,7 +198,7 @@ def vjp(
         parameter values and output gradient dy"""
         vjps = jpc.compute_vjp(tapes, dy)
         return tuple(
-            qp.math.to_numpy(v, max_depth=1) if isinstance(v, ArrayBox) else v for v in vjps
+            qml.math.to_numpy(v, max_depth=1) if isinstance(v, ArrayBox) else v for v in vjps
         )
 
     return grad_fn

@@ -14,17 +14,18 @@
 """
 Code relevant for performing measurements on a state.
 """
-
-from collections.abc import Callable
+from typing import Callable
 
 from scipy.sparse import csr_matrix
 
 from pennylane import math
-from pennylane.core.measurements import MeasurementProcess, StateMeasurement
+from pennylane.ops import Sum, Hamiltonian
 from pennylane.measurements import (
+    StateMeasurement,
+    MeasurementProcess,
+    MeasurementValue,
     ExpectationMP,
 )
-from pennylane.ops import LinearCombination, MeasurementValue, Sum
 from pennylane.pauli.conversion import is_pauli_sentence, pauli_sentence
 from pennylane.typing import TensorLike
 from pennylane.wires import Wires
@@ -142,7 +143,7 @@ def full_dot_products(
 def sum_of_terms_method(
     measurementprocess: ExpectationMP, state: TensorLike, is_state_batched: bool = False
 ) -> TensorLike:
-    """Measure the expectation value of the state when the measured observable is a ``Hamiltonian`` or ``Sum``
+    """Measure the expecation value of the state when the measured observable is a ``Hamiltonian`` or ``Sum``
     and it must be backpropagation compatible.
 
     Args:
@@ -153,15 +154,21 @@ def sum_of_terms_method(
     Returns:
         TensorLike: the result of the measurement
     """
-    # Recursively call measure on each term, so that the best measurement method can
-    # be used for each term
+    if isinstance(measurementprocess.obs, Sum):
+        # Recursively call measure on each term, so that the best measurement method can
+        # be used for each term
+        return sum(
+            measure(ExpectationMP(term), state, is_state_batched=is_state_batched)
+            for term in measurementprocess.obs
+        )
+    # else hamiltonian
     return sum(
-        measure(ExpectationMP(term), state, is_state_batched=is_state_batched)
-        for term in measurementprocess.obs
+        c * measure(ExpectationMP(t), state, is_state_batched=is_state_batched)
+        for c, t in zip(*measurementprocess.obs.terms())
     )
 
 
-# pylint: disable=too-many-return-statements,too-many-branches
+# pylint: disable=too-many-return-statements
 def get_measurement_function(
     measurementprocess: MeasurementProcess, state: TensorLike
 ) -> Callable[[MeasurementProcess, TensorLike], TensorLike]:
@@ -179,7 +186,7 @@ def get_measurement_function(
         if isinstance(measurementprocess.mv, MeasurementValue):
             return state_diagonalizing_gates
 
-        if isinstance(measurementprocess, ExpectationMP) and measurementprocess.obs is not None:
+        if isinstance(measurementprocess, ExpectationMP):
             if measurementprocess.obs.name == "SparseHamiltonian":
                 return csr_dot_products
 
@@ -187,25 +194,14 @@ def get_measurement_function(
                 return full_dot_products
 
             backprop_mode = math.get_interface(state, *measurementprocess.obs.data) != "numpy"
-            if isinstance(measurementprocess.obs, LinearCombination):
-
-                # need to work out thresholds for when it's faster to use "backprop mode"
-                if backprop_mode:
-                    return sum_of_terms_method
-
-                if not all(obs.has_sparse_matrix for obs in measurementprocess.obs.terms()[1]):
-                    return sum_of_terms_method
-
-                return csr_dot_products
+            if isinstance(measurementprocess.obs, Hamiltonian):
+                # need to work out thresholds for when its faster to use "backprop mode" measurements
+                return sum_of_terms_method if backprop_mode else csr_dot_products
 
             if isinstance(measurementprocess.obs, Sum):
                 if backprop_mode:
                     # always use sum_of_terms_method for Sum observables in backprop mode
                     return sum_of_terms_method
-
-                if not all(obs.has_sparse_matrix for obs in measurementprocess.obs):
-                    return sum_of_terms_method
-
                 if (
                     measurementprocess.obs.has_overlapping_wires
                     and len(measurementprocess.obs.wires) > 7

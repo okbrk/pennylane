@@ -15,12 +15,18 @@ r"""
 This subpackage defines functions that relate to quantum kernel methods.
 """
 
-from .cost_functions import polarity, target_alignment
+from .cost_functions import (
+    polarity,
+    target_alignment,
+)
 from .postprocessing import (
-    closest_psd_matrix,
+    threshold_matrix,
     displace_matrix,
     flip_matrix,
+    closest_psd_matrix,
     mitigate_depolarizing_noise,
-    threshold_matrix,
 )
-from .utils import kernel_matrix, square_kernel_matrix
+from .utils import (
+    kernel_matrix,
+    square_kernel_matrix,
+)

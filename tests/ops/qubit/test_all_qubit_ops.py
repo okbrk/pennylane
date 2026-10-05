@@ -16,37 +16,40 @@ Unit tests for the available built-in discrete-variable quantum operations. Only
 multiple types of operations should exist in this file. Type-specific tests should go in
 the more specific file.
 """
-
-import pytest
-
-import pennylane as qp
-
 # pylint: disable=too-few-public-methods
+import pytest
+from gate_data import I
+import pennylane as qml
 
 
-@pytest.mark.parametrize(
-    "op, basis",
-    [
-        (qp.X(0), "X"),
-        (qp.Y(0), "Y"),
-        (qp.Z(0), "Z"),
-        (qp.S(0), "Z"),
-        (qp.T(0), "Z"),
-        (qp.SX(0), "X"),
-        (qp.RX(0.5, 0), "X"),
-        (qp.RY(0.5, 0), "Y"),
-        (qp.RZ(0.5, 0), "Z"),
-        (qp.PhaseShift(0.5, 0), "Z"),
-        (qp.PCPhase(1.23, 7, (1, 2, 3)), "Z"),
-        (qp.X(0) + qp.Y(0), None),
-        # NOTE: @ dispatches to Prod2 now and doesn't have basis method, keep Prod for legacy testing
-        (qp.ops.Prod(qp.X(0), qp.Y(1)), None),
-    ],
-)
-def test_basis_deprecation(op, basis):
-    """Test Operation.basis raises a deprecation warning."""
-    with pytest.warns(
-        qp.exceptions.PennyLaneDeprecationWarning,
-        match="Operation.basis is deprecated in v0.46 and will be removed in v0.47.",
-    ):
-        assert op.basis == basis
+class TestOperations:
+    """Tests for the operations"""
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            (qml.Hadamard(wires=0)),
+            (qml.PauliX(wires=0)),
+            (qml.PauliY(wires=0)),
+            (qml.PauliZ(wires=0)),
+            (qml.S(wires=0)),
+            (qml.T(wires=0)),
+            (qml.SX(wires=0)),
+            (qml.RX(0.3, wires=0)),
+            (qml.RY(0.3, wires=0)),
+            (qml.RZ(0.3, wires=0)),
+            (qml.PhaseShift(0.3, wires=0)),
+            (qml.Rot(0.3, 0.4, 0.5, wires=0)),
+        ],
+    )
+    def test_single_qubit_rot_angles(self, op):
+        """Tests that the Rot gates yielded by single_qubit_rot_angles
+        are equivalent to the true operations up to a global phase."""
+        angles = op.single_qubit_rot_angles()
+        obtained_mat = qml.Rot(*angles, wires=0).matrix()
+
+        # Check whether the two matrices are each others conjugate transposes
+        mat_product = qml.math.dot(op.matrix(), qml.math.conj(obtained_mat.T))
+        mat_product /= mat_product[0, 0]
+
+        assert qml.math.allclose(mat_product, I)

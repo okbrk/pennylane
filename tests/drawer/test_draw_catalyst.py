@@ -12,18 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Test the pennylane drawer with Catalyst."""
-
 # pylint: disable=import-outside-toplevel,protected-access
-from functools import partial
-
 import pytest
-
-import pennylane as qp
+import pennylane as qml
 
 catalyst = pytest.importorskip("catalyst")
 mpl = pytest.importorskip("matplotlib")
 
-pytestmark = pytest.mark.catalyst
+pytestmark = pytest.mark.external
 
 
 class TestCatalystDraw:
@@ -32,38 +28,17 @@ class TestCatalystDraw:
     def test_simple_circuit(self):
         """Test a simple circuit that does not use Catalyst features."""
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=(0, "a", 1.234)))
         def circuit(x, y, z):
             """A quantum circuit on three wires."""
-            qp.RX(x, wires=0)
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            qml.RY(y, wires="a")
+            qml.RZ(z, wires=1.234)
+            return qml.expval(qml.PauliZ(0))
 
-        expected = "    0: ──RX─┤  <Z>\n    a: ──RY─┤\n1.234: ──RZ─┤"
-        assert qp.draw(circuit, decimals=None)(1.234, 2.345, 3.456) == expected
-
-    def test_partial_circuit(self):
-        """Test a partial-wrapped Catalyst jitted QNode."""
-
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
-        def circuit(x, y, z):
-            """A quantum circuit on three wires."""
-            qp.RX(x, wires=0)
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
-
-        expected = "\n".join(
-            (
-                "    0: ──RX(1.23)─┤  <Z>",
-                "    a: ──RY(2.35)─┤",
-                "1.234: ──RZ(3.46)─┤",
-            )
-        )
-        assert qp.draw(partial(circuit, 1.234, z=3.456))(2.345) == expected
+        expected = "    0: ──RX─┤  <Z>\n    a: ──RY─┤     \n1.234: ──RZ─┤     "
+        assert qml.draw(circuit, decimals=None)(1.234, 2.345, 3.456) == expected
 
     @pytest.mark.parametrize("c", [0, 1])
     def test_cond_circuit(self, c):
@@ -71,26 +46,26 @@ class TestCatalystDraw:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=(0, "a", 1.234)))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.cond(c)
             def conditional_flip():
-                qp.PauliX(wires=0)
+                qml.PauliX(wires=0)
 
-            qp.RX(x, wires=0)
+            qml.RX(x, wires=0)
             conditional_flip()
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
+            qml.RY(y, wires="a")
+            qml.RZ(z, wires=1.234)
+            return qml.expval(qml.PauliZ(0))
 
         expected = [
-            "    0: ──RX─┤  <Z>\n    a: ──RY─┤\n1.234: ──RZ─┤",
-            "    0: ──RX──X─┤  <Z>\n    a: ──RY────┤\n1.234: ──RZ────┤",
+            "    0: ──RX─┤  <Z>\n    a: ──RY─┤     \n1.234: ──RZ─┤     ",
+            "    0: ──RX──X─┤  <Z>\n    a: ──RY────┤     \n1.234: ──RZ────┤     ",
         ]
-        assert qp.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c]
+        assert qml.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c]
 
     @pytest.mark.parametrize("c", [1, 2])
     def test_for_loop_circuit(self, c):
@@ -98,26 +73,26 @@ class TestCatalystDraw:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=3))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=3))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.for_loop(0, c, 1)
             def loop(i):
-                qp.Hadamard(wires=i)
+                qml.Hadamard(wires=i)
 
-            qp.RX(x, wires=0)
+            qml.RX(x, wires=0)
             loop()  # pylint: disable=no-value-for-parameter
-            qp.RY(y, wires=1)
-            qp.RZ(z, wires=2)
-            return qp.expval(qp.PauliZ(0))
+            qml.RY(y, wires=1)
+            qml.RZ(z, wires=2)
+            return qml.expval(qml.PauliZ(0))
 
         expected = [
-            "0: ──RX──H─┤  <Z>\n1: ──RY────┤\n2: ──RZ────┤",
-            "0: ──RX──H──┤  <Z>\n1: ──H───RY─┤\n2: ──RZ─────┤",
+            "0: ──RX──H─┤  <Z>\n1: ──RY────┤     \n2: ──RZ────┤     ",
+            "0: ──RX──H──┤  <Z>\n1: ──H───RY─┤     \n2: ──RZ─────┤     ",
         ]
-        assert qp.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c - 1]
+        assert qml.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c - 1]
 
     @pytest.mark.parametrize("c", [0, 1])
     def test_while_loop_circuit(self, c):
@@ -125,29 +100,29 @@ class TestCatalystDraw:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=3))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=3))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.while_loop(lambda x: x < 2.0)
             def loop_rx(x):
                 # perform some work and update (some of) the arguments
-                qp.RX(x, wires=0)
+                qml.RX(x, wires=0)
                 return x + 1
 
             # apply the while loop
-            qp.RX(x, wires=0)
-            qp.RY(y, wires=1)
+            qml.RX(x, wires=0)
+            qml.RY(y, wires=1)
             loop_rx(c)
-            qp.RZ(z, wires=2)
-            return qp.expval(qp.PauliZ(0))
+            qml.RZ(z, wires=2)
+            return qml.expval(qml.PauliZ(0))
 
         expected = [
-            "0: ──RX──RX──RX─┤  <Z>\n1: ──RY─────────┤\n2: ──RZ─────────┤",
-            "0: ──RX──RX─┤  <Z>\n1: ──RY─────┤\n2: ──RZ─────┤",
+            "0: ──RX──RX──RX─┤  <Z>\n1: ──RY─────────┤     \n2: ──RZ─────────┤     ",
+            "0: ──RX──RX─┤  <Z>\n1: ──RY─────┤     \n2: ──RZ─────┤     ",
         ]
-        assert qp.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c]
+        assert qml.draw(circuit, decimals=None)(1.234, 2.345, 3.456, c) == expected[c]
 
 
 class TestCatalystDrawMpl:
@@ -156,38 +131,18 @@ class TestCatalystDrawMpl:
     def test_simple_circuit(self):
         """Test a simple circuit that does not use Catalyst features."""
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=(0, "a", 1.234)))
         def circuit(x, y, z):
             """A quantum circuit on three wires."""
-            qp.RX(x, wires=0)
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            qml.RY(y, wires="a")
+            qml.RZ(z, wires=1.234)
+            return qml.expval(qml.PauliZ(0))
 
-        fig, ax = qp.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456)
+        fig, ax = qml.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456)
         assert isinstance(fig, mpl.figure.Figure)
         assert isinstance(ax, mpl.axes._axes.Axes)
-
-    def test_partial_circuit_draw_mpl(self):
-        """Test a partial-wrapped Catalyst jitted QNode."""
-
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
-        def circuit(x, y, z):
-            """A quantum circuit on three wires."""
-            qp.RX(x, wires=0)
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
-
-        fig, ax = qp.draw_mpl(partial(circuit, 1.234, z=3.456), decimals=None)(2.345)
-        assert isinstance(fig, mpl.figure.Figure)
-        assert isinstance(ax, mpl.axes._axes.Axes)
-
-        assert len(ax.patches) == 6
-        assert len(ax.lines) == 3
-        assert [text.get_text() for text in ax.texts] == ["0", "a", "1.234", "RX", "RY", "RZ"]
 
     @pytest.mark.parametrize("c", [0, 1])
     def test_cond_circuit(self, c):
@@ -195,22 +150,22 @@ class TestCatalystDrawMpl:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=(0, "a", 1.234)))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=(0, "a", 1.234)))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.cond(c)
             def conditional_flip():
-                qp.PauliX(wires=0)
+                qml.PauliX(wires=0)
 
-            qp.RX(x, wires=0)
+            qml.RX(x, wires=0)
             conditional_flip()
-            qp.RY(y, wires="a")
-            qp.RZ(z, wires=1.234)
-            return qp.expval(qp.PauliZ(0))
+            qml.RY(y, wires="a")
+            qml.RZ(z, wires=1.234)
+            return qml.expval(qml.PauliZ(0))
 
-        fig, ax = qp.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
+        fig, ax = qml.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
         assert isinstance(fig, mpl.figure.Figure)
         assert isinstance(ax, mpl.axes._axes.Axes)
 
@@ -220,22 +175,22 @@ class TestCatalystDrawMpl:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=3))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=3))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.for_loop(0, c, 1)
             def loop(i):
-                qp.Hadamard(wires=i)
+                qml.Hadamard(wires=i)
 
-            qp.RX(x, wires=0)
+            qml.RX(x, wires=0)
             loop()  # pylint: disable=no-value-for-parameter
-            qp.RY(y, wires=1)
-            qp.RZ(z, wires=2)
-            return qp.expval(qp.PauliZ(0))
+            qml.RY(y, wires=1)
+            qml.RZ(z, wires=2)
+            return qml.expval(qml.PauliZ(0))
 
-        fig, ax = qp.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
+        fig, ax = qml.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
         assert isinstance(fig, mpl.figure.Figure)
         assert isinstance(ax, mpl.axes._axes.Axes)
 
@@ -245,24 +200,24 @@ class TestCatalystDrawMpl:
 
         import catalyst  # pylint: disable=redefined-outer-name
 
-        @qp.qjit
-        @qp.qnode(qp.device("lightning.qubit", wires=3))
+        @qml.qjit
+        @qml.qnode(qml.device("lightning.qubit", wires=3))
         def circuit(x, y, z, c):
             """A quantum circuit on three wires."""
 
             @catalyst.while_loop(lambda x: x < 2.0)
             def loop_rx(x):
                 # perform some work and update (some of) the arguments
-                qp.RX(x, wires=0)
+                qml.RX(x, wires=0)
                 return x + 1
 
             # apply the while loop
-            qp.RX(x, wires=0)
-            qp.RY(y, wires=1)
+            qml.RX(x, wires=0)
+            qml.RY(y, wires=1)
             loop_rx(c)
-            qp.RZ(z, wires=2)
-            return qp.expval(qp.PauliZ(0))
+            qml.RZ(z, wires=2)
+            return qml.expval(qml.PauliZ(0))
 
-        fig, ax = qp.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
+        fig, ax = qml.draw_mpl(circuit, decimals=None)(1.234, 2.345, 3.456, c)
         assert isinstance(fig, mpl.figure.Figure)
         assert isinstance(ax, mpl.axes._axes.Axes)

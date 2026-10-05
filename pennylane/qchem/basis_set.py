@@ -15,7 +15,6 @@
 This module contains functions and classes to create a
 :class:`~pennylane.qchem.basis_set.BasisFunction` object from standard basis sets such as STO-3G.
 """
-
 # pylint: disable=too-few-public-methods, too-many-branches
 from .basis_data import basis_sets, load_basisset
 
@@ -101,14 +100,7 @@ def atom_basis_data(name, atom, load_data=False):
     if load_data:
         basis = load_basisset(name, atom)
     else:
-        basis = basis_sets[name].get(atom, None)
-        if basis is None:
-            raise ValueError(
-                f"The requested basis set data is not available for {atom}. "
-                "Please consider using `load_data=True` to download the basis set "
-                "from the external library basis-set-exchange that can be installed with: "
-                "pip install basis-set-exchange."
-            )
+        basis = basis_sets[name][atom]
 
     params = []
     sp_count = 0

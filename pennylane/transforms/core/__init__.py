@@ -1,4 +1,4 @@
-# Copyright 2018-2026 Xanadu Quantum Technologies Inc.
+# Copyright 2023 Xanadu Quantum Technologies Inc.
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,13 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-The former location of pennylane/core/transforms
+r"""This module contains the experimental transforms building blocks (core).
 """
 
-from pennylane.exceptions import TransformError
-from pennylane.core.transforms import *  # tach-ignore
-
-TransformContainer = BoundTransform
-TransformProgram = CompilePipeline
-TransformDispatcher = Transform
+from .transform import transform
+from .transform_dispatcher import TransformDispatcher, TransformContainer, TransformError
+from .transform_program import TransformProgram

@@ -8,7 +8,7 @@ PennyLane's core feature is the ability to compute gradients of variational
 quantum circuits in a way that is compatible with classical techniques such as
 backpropagation. PennyLane thus extends the automatic differentiation
 algorithms common in optimization and machine learning to include quantum and
-`hybrid computations <https://pennylane.ai/qml/glossary/hybrid_computation>`_.
+:doc:`hybrid computations <glossary/hybrid_computation>`.
 A plugin system makes the framework compatible with many quantum
 simulators or hardware devices, remote or local.
 
@@ -62,7 +62,7 @@ trainable parameters can be tensors of any supported autodifferentiation framewo
 These four defining properties are accessible for all :class:`~.Operator` instances:
 
 >>> from jax import numpy as jnp
->>> op = qp.Rot(jnp.array(0.1), jnp.array(0.2), jnp.array(0.3), wires=["a"])
+>>> op = qml.Rot(jnp.array(0.1), jnp.array(0.2), jnp.array(0.3), wires=["a"])
 
 >>> op.name
 Rot
@@ -73,7 +73,7 @@ Rot
 >>> op.hyperparameters
 {}
 >>> op.wires
-Wires(['a'])
+<Wires = ['a']>
 
 Operators can optionally define the transformation they implement via
 symbolic or numerical representations. Here are two examples, and you find more
@@ -81,13 +81,13 @@ details in the documentation on :doc:`adding operations </development/adding_ope
 
 * Representation as a product of operators
 
-  >>> op = qp.Rot(0.1, 0.2, 0.3, wires=["a"])
+  >>> op = qml.Rot(0.1, 0.2, 0.3, wires=["a"])
   >>> op.decomposition()
   [RZ(0.1, wires=['a']), RY(0.2, wires=['a']), RZ(0.3, wires=['a'])]
 
 * Representation as a matrix
 
-  >>> op = qp.PauliRot(0.2, "X", wires=["b"])
+  >>> op = qml.PauliRot(0.2, "X", wires=["b"])
   >>> op.matrix()
   [[9.95004177e-01-2.25761781e-18j 2.72169462e-17-9.98334214e-02j]
    [2.72169462e-17-9.98334214e-02j 9.95004177e-01-2.25761781e-18j]]
@@ -104,7 +104,7 @@ Each measurement in pennylane has a specific class that inherits from :class:`pe
 The measurement functions such as :func:`~pennylane.expval` create an instance of its corresponding
 class (:class:`pennylane.measurements.ExpectationMP`). 
 
->>> m = qp.expval(qp.PauliZ("a"))
+>>> m = qml.expval(qml.PauliZ("a"))
 >>> type(m)
 <class 'pennylane.measurements.expval.ExpectationMP'>
 
@@ -113,6 +113,12 @@ which are themselves operators.
 
 >>> m.obs
 PauliZ(wires=['a'])
+
+Furthermore, it specifies a "return type" which defines the kind of measurement performed,
+such as expectation, variance, probability, state, or sample.
+
+>>> m.return_type
+ObservableReturnTypes.Expectation
 
 For more information, check out the documentation on :doc:`measurements </introduction/measurements>`
 
@@ -125,10 +131,10 @@ The user defines the circuit by constructing a quantum function, such as:
 .. code-block:: python
 
     def qfunc(params):
-        qp.RX(params[0], wires='b')
-        qp.CNOT(wires=['a', 'b'])
-        qp.RY(params[1], wires='a')
-        return qp.expval(qp.PauliZ(wires='b'))
+        qml.RX(params[0], wires='b')
+        qml.CNOT(wires=['a', 'b'])
+        qml.RY(params[1], wires='a')
+        return qml.expval(qml.PauliZ(wires='b'))
 
 Internally, a quantum function is translated to a quantum tape, which is
 the central representation of a quantum circuit. The tape is a context manager that stores lists
@@ -139,8 +145,8 @@ gates are stored in the tape's ``operation`` property, while the
 measurement functions such as :func:`~pennylane.expval` are responsible for adding measurement processes
 to the tape's ``measurement`` property.
 
->>> with qp.tape.QuantumTape() as tape:
-...     qfunc(params)
+>>> with qml.tape.QuantumTape() as tape:
+...	    qfunc(params)
 
 >>> tape.operations
 [RX(Array(0.5, dtype=float32), wires=['b']),
@@ -162,11 +168,11 @@ Devices
 *******
 
 In PennyLane, the abstraction of a quantum computation device is encompassed
-within the :class:`pennylane.devices.Device` class. The main job of devices is to
+within the :class:`pennylane.Device` class. The main job of devices is to
 interpret and execute tapes. The most important method is ``batch_execute``,
 which executes a list of tapes, such as a list of the single tape created above:
 
->>> device = qp.device("default.qubit", wires=['a', 'b'], shots=None)
+>>> device = qml.device("default.qubit", wires=['a', 'b'], shots=None)
 >>> device.batch_execute([tape])
 [array([0.87758256])]
 
@@ -193,11 +199,11 @@ information processing on a quantum device. It is created by a quantum function 
 >>> from jax import numpy as jnp
 >>> params = jnp.array([0.5, 0.2])
 
->>> qnode = qp.QNode(qfunc, device, interface='jax')
+>>> qnode = qml.QNode(qfunc, device, interface='jax')
 >>> qnode(params)
 0.8776
 
->>> qnode_drawer = qp.draw(qnode)
+>>> qnode_drawer = qml.draw(qnode)
 >>> print(qnode_drawer(params))
 a: ───────────╭●──RY(0.20)─┤     
 b: ──RX(0.50)─╰X───────────┤  <Z>
@@ -212,7 +218,7 @@ Internally, the QNode translates the quantum function into one or more quantum t
 and classical processing routines that, taken together, execute the quantum computation.
 
 The crucial property of a QNode is that it is differentiable by classical autodifferentiation
-frameworks such as autograd, JAX, and PyTorch.
+frameworks such as autograd, jax, TensorFlow and PyTorch.
 
 >>> jax.grad(qnode)
 [-0.4794  0.]
@@ -260,7 +266,7 @@ In other words, these steps can invoke differentiable classical computations, su
 
 There are some devices where the execution of the quantum circuit is also tracked by the
 autodifferentiation framework. This is possible if the device is a simulator that is
-coded entirely in the framework's language (such as a PyTorch quantum simulator).
+coded entirely in the framework's language (such as a TensorFlow quantum simulator).
 
 |
 
@@ -271,7 +277,7 @@ coded entirely in the framework's language (such as a PyTorch quantum simulator)
 |
 
 Most devices, however, are blackboxes with regards to the autodifferentiation framework.
-This means that when the execution on the device begins, autograd, JAX, and PyTorch
+This means that when the execution on the device begins, autograd, jax, PyTorch and TensorFlow
 tensors need to be converted to formats that the device understands - which is in most cases
 a representation as NumPy arrays. Likewise, the results of the execution have to be translated
 back to differentiable tensors. These two conversions happen at what PennyLane calls the

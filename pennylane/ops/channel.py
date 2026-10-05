@@ -16,17 +16,10 @@
 This module contains the available built-in noisy
 quantum channels supported by PennyLane, as well as their conventions.
 """
-
 import warnings
-from collections.abc import Hashable, Iterable
-from typing import Any
 
 from pennylane import math as np
-from pennylane.core.operator import Channel
-from pennylane.wires import Wires, WiresLike
-
-#: Small epsilon added to sqrt to prevent floating-point errors during qubit channel normalization.
-_SQRT_STABILITY_EPS = 1e-14
+from pennylane.operation import AnyWires, Channel
 
 
 class AmplitudeDamping(Channel):
@@ -65,9 +58,8 @@ class AmplitudeDamping(Channel):
     num_wires = 1
     grad_method = "F"
 
-    def __init__(self, gamma, wires: WiresLike):
-        wires = Wires(wires)
-        super().__init__(gamma, wires=wires)
+    def __init__(self, gamma, wires, id=None):
+        super().__init__(gamma, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(gamma):  # pylint:disable=arguments-differ
@@ -81,17 +73,15 @@ class AmplitudeDamping(Channel):
 
         **Example**
 
-        >>> qp.AmplitudeDamping.compute_kraus_matrices(0.5)
-        [array([[1.        , 0.        ],
-                [0.        , 0.70710678]]),
-         array([[0.        , 0.70710678],
-                [0.        , 0.        ]])]
+        >>> qml.AmplitudeDamping.compute_kraus_matrices(0.5)
+        [array([[1., 0.], [0., 0.70710678]]),
+         array([[0., 0.70710678], [0., 0.]])]
         """
         if not np.is_abstract(gamma) and not 0.0 <= gamma <= 1.0:
             raise ValueError("gamma must be in the interval [0,1].")
 
-        K0 = np.diag([1, np.sqrt(1 - gamma + _SQRT_STABILITY_EPS)])
-        K1 = np.sqrt(gamma + _SQRT_STABILITY_EPS) * np.convert_like(
+        K0 = np.diag([1, np.sqrt(1 - gamma + np.eps)])
+        K1 = np.sqrt(gamma + np.eps) * np.convert_like(
             np.cast_like(np.array([[0, 1], [0, 0]]), gamma), gamma
         )
         return [K0, K1]
@@ -105,32 +95,31 @@ class GeneralizedAmplitudeDamping(Channel):
     at finite temperatures, with the following Kraus matrices:
 
     .. math::
-        K_0 = \sqrt{1-p} \begin{bmatrix}
+        K_0 = \sqrt{p} \begin{bmatrix}
                 1 & 0 \\
                 0 & \sqrt{1-\gamma}
                 \end{bmatrix}
 
     .. math::
-        K_1 = \sqrt{1-p}\begin{bmatrix}
+        K_1 = \sqrt{p}\begin{bmatrix}
                 0 & \sqrt{\gamma}  \\
                 0 & 0
                 \end{bmatrix}
 
     .. math::
-        K_2 = \sqrt{p}\begin{bmatrix}
+        K_2 = \sqrt{1-p}\begin{bmatrix}
                 \sqrt{1-\gamma} & 0 \\
                 0 & 1
                 \end{bmatrix}
 
     .. math::
-        K_3 = \sqrt{p}\begin{bmatrix}
+        K_3 = \sqrt{1-p}\begin{bmatrix}
                 0 & 0 \\
                 \sqrt{\gamma} & 0
                 \end{bmatrix}
 
     where :math:`\gamma \in [0, 1]` is the probability of damping and :math:`p \in [0, 1]`
-    is the probability of the system being excited by the environment (for more details see
-    `arXiv:1903.07747 <https://arxiv.org/abs/1903.07747>`_).
+    is the probability of the system being excited by the environment.
 
     **Details:**
 
@@ -148,8 +137,8 @@ class GeneralizedAmplitudeDamping(Channel):
     num_wires = 1
     grad_method = "F"
 
-    def __init__(self, gamma, p, wires):
-        super().__init__(gamma, p, wires=wires)
+    def __init__(self, gamma, p, wires, id=None):
+        super().__init__(gamma, p, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(gamma, p):  # pylint:disable=arguments-differ
@@ -164,11 +153,11 @@ class GeneralizedAmplitudeDamping(Channel):
 
         **Example**
 
-        >>> qp.GeneralizedAmplitudeDamping.compute_kraus_matrices(0.3, 0.6)
-        [array([[0.63245553, 0.        ], [0.        , 0.52915026]]),
-         array([[0.        , 0.34641016], [0.        , 0.        ]]),
-         array([[0.64807407, 0.        ], [0.        , 0.77459667]]),
-         array([[0.        , 0.        ], [0.42426407, 0.        ]])]
+        >>> qml.GeneralizedAmplitudeDamping.compute_kraus_matrices(0.3, 0.6)
+        [array([[0.77459667, 0.        ], [0.        , 0.64807407]]),
+         array([[0.        , 0.42426407], [0.        , 0.        ]]),
+         array([[0.52915026, 0.        ], [0.        , 0.63245553]]),
+         array([[0.        , 0.        ], [0.34641016, 0.        ]])]
         """
         if not np.is_abstract(gamma) and not 0.0 <= gamma <= 1.0:
             raise ValueError("gamma must be in the interval [0,1].")
@@ -176,19 +165,15 @@ class GeneralizedAmplitudeDamping(Channel):
         if not np.is_abstract(p) and not 0.0 <= p <= 1.0:
             raise ValueError("p must be in the interval [0,1].")
 
-        K0 = np.sqrt(1 - p + _SQRT_STABILITY_EPS) * np.diag(
-            [1, np.sqrt(1 - gamma + _SQRT_STABILITY_EPS)]
-        )
+        K0 = np.sqrt(p + np.eps) * np.diag([1, np.sqrt(1 - gamma + np.eps)])
         K1 = (
-            np.sqrt(1 - p + _SQRT_STABILITY_EPS)
+            np.sqrt(p + np.eps)
             * np.sqrt(gamma)
             * np.convert_like(np.cast_like(np.array([[0, 1], [0, 0]]), gamma), gamma)
         )
-        K2 = np.sqrt(p + _SQRT_STABILITY_EPS) * np.diag(
-            [np.sqrt(1 - gamma + _SQRT_STABILITY_EPS), 1]
-        )
+        K2 = np.sqrt(1 - p + np.eps) * np.diag([np.sqrt(1 - gamma + np.eps), 1])
         K3 = (
-            np.sqrt(p + _SQRT_STABILITY_EPS)
+            np.sqrt(1 - p + np.eps)
             * np.sqrt(gamma)
             * np.convert_like(np.cast_like(np.array([[0, 0], [1, 0]]), gamma), gamma)
         )
@@ -231,8 +216,8 @@ class PhaseDamping(Channel):
     num_wires = 1
     grad_method = "F"
 
-    def __init__(self, gamma, wires):
-        super().__init__(gamma, wires=wires)
+    def __init__(self, gamma, wires, id=None):
+        super().__init__(gamma, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(gamma):  # pylint:disable=arguments-differ
@@ -246,15 +231,15 @@ class PhaseDamping(Channel):
 
         **Example**
 
-        >>> qp.PhaseDamping.compute_kraus_matrices(0.5)
+        >>> qml.PhaseDamping.compute_kraus_matrices(0.5)
         [array([[1.        , 0.        ], [0.        , 0.70710678]]),
          array([[0.        , 0.        ], [0.        , 0.70710678]])]
         """
         if not np.is_abstract(gamma) and not 0.0 <= gamma <= 1.0:
             raise ValueError("gamma must be in the interval [0,1].")
 
-        K0 = np.diag([1, np.sqrt(1 - gamma + _SQRT_STABILITY_EPS)])
-        K1 = np.diag([0, np.sqrt(gamma + _SQRT_STABILITY_EPS)])
+        K0 = np.diag([1, np.sqrt(1 - gamma + np.eps)])
+        K1 = np.diag([0, np.sqrt(gamma + np.eps)])
         return [K0, K1]
 
 
@@ -318,8 +303,8 @@ class DepolarizingChannel(Channel):
     grad_method = "A"
     grad_recipe = ([[1, 0, 1], [-1, 0, 0]],)
 
-    def __init__(self, p, wires):
-        super().__init__(p, wires=wires)
+    def __init__(self, p, wires, id=None):
+        super().__init__(p, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(p):  # pylint:disable=arguments-differ
@@ -333,27 +318,24 @@ class DepolarizingChannel(Channel):
 
         **Example**
 
-        >>> qp.DepolarizingChannel.compute_kraus_matrices(0.5)
-        [array([[0.70710678+0.j, 0.        +0.j],
-                [0.        +0.j, 0.70710678+0.j]]),
-         array([[0.        +0.j, 0.40824829+0.j],
-                [0.40824829+0.j, 0.        +0.j]]),
-         array([[0.+0.j        , 0.-0.40824829j],
-                [0.+0.40824829j, 0.+0.j        ]]),
-         array([[ 0.40824829+0.j,  0.        +0.j],
-                [ 0.        +0.j, -0.40824829+0.j]])]
+        >>> qml.DepolarizingChannel.compute_kraus_matrices(0.5)
+        [array([[0.70710678, 0.        ], [0.        , 0.70710678]]),
+         array([[0.        , 0.40824829], [0.40824829, 0.        ]]),
+         array([[0.+0.j        , 0.-0.40824829j], [0.+0.40824829j, 0.+0.j        ]]),
+         array([[ 0.40824829,  0.        ], [ 0.        , -0.40824829]])]
         """
         if not np.is_abstract(p) and not 0.0 <= p <= 1.0:
             raise ValueError("p must be in the interval [0,1]")
 
-        K0 = np.sqrt(1 - p + _SQRT_STABILITY_EPS) * np.convert_like(np.eye(2, dtype=complex), p)
-        K1 = np.sqrt(p / 3 + _SQRT_STABILITY_EPS) * np.convert_like(
-            np.array([[0, 1], [1, 0]], dtype=complex), p
-        )
-        K2 = np.sqrt(p / 3 + _SQRT_STABILITY_EPS) * np.convert_like(
+        if np.get_interface(p) == "tensorflow":
+            p = np.cast_like(p, 1j)
+
+        K0 = np.sqrt(1 - p + np.eps) * np.convert_like(np.eye(2, dtype=complex), p)
+        K1 = np.sqrt(p / 3 + np.eps) * np.convert_like(np.array([[0, 1], [1, 0]], dtype=complex), p)
+        K2 = np.sqrt(p / 3 + np.eps) * np.convert_like(
             np.array([[0, -1j], [1j, 0]], dtype=complex), p
         )
-        K3 = np.sqrt(p / 3 + _SQRT_STABILITY_EPS) * np.convert_like(
+        K3 = np.sqrt(p / 3 + np.eps) * np.convert_like(
             np.array([[1, 0], [0, -1]], dtype=complex), p
         )
         return [K0, K1, K2, K3]
@@ -395,8 +377,8 @@ class BitFlip(Channel):
     grad_method = "A"
     grad_recipe = ([[1, 0, 1], [-1, 0, 0]],)
 
-    def __init__(self, p, wires):
-        super().__init__(p, wires=wires)
+    def __init__(self, p, wires, id=None):
+        super().__init__(p, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(p):  # pylint:disable=arguments-differ
@@ -410,17 +392,15 @@ class BitFlip(Channel):
 
         **Example**
 
-        >>> qp.BitFlip.compute_kraus_matrices(0.5)
+        >>> qml.BitFlip.compute_kraus_matrices(0.5)
         [array([[0.70710678, 0.        ], [0.        , 0.70710678]]),
          array([[0.        , 0.70710678], [0.70710678, 0.        ]])]
         """
         if not np.is_abstract(p) and not 0.0 <= p <= 1.0:
             raise ValueError("p must be in the interval [0,1]")
 
-        K0 = np.sqrt(1 - p + _SQRT_STABILITY_EPS) * np.convert_like(np.cast_like(np.eye(2), p), p)
-        K1 = np.sqrt(p + _SQRT_STABILITY_EPS) * np.convert_like(
-            np.cast_like(np.array([[0, 1], [1, 0]]), p), p
-        )
+        K0 = np.sqrt(1 - p + np.eps) * np.convert_like(np.cast_like(np.eye(2), p), p)
+        K1 = np.sqrt(p + np.eps) * np.convert_like(np.cast_like(np.array([[0, 1], [1, 0]]), p), p)
         return [K0, K1]
 
 
@@ -479,8 +459,8 @@ class ResetError(Channel):
     num_wires = 1
     grad_method = "F"
 
-    def __init__(self, p0, p1, wires):
-        super().__init__(p0, p1, wires=wires)
+    def __init__(self, p0, p1, wires, id=None):
+        super().__init__(p0, p1, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(p_0, p_1):  # pylint:disable=arguments-differ
@@ -495,7 +475,7 @@ class ResetError(Channel):
 
         **Example**
 
-        >>> qp.ResetError.compute_kraus_matrices(0.2, 0.3)
+        >>> qml.ResetError.compute_kraus_matrices(0.2, 0.3)
         [array([[0.70710678, 0.        ], [0.        , 0.70710678]]),
          array([[0.4472136, 0.       ], [0.       , 0.       ]]),
          array([[0.       , 0.4472136], [0.       , 0.       ]]),
@@ -513,19 +493,17 @@ class ResetError(Channel):
 
         interface = np.get_interface(p_0, p_1)
         p_0, p_1 = np.coerce([p_0, p_1], like=interface)
-        K0 = np.sqrt(1 - p_0 - p_1 + _SQRT_STABILITY_EPS) * np.convert_like(
-            np.cast_like(np.eye(2), p_0), p_0
-        )
-        K1 = np.sqrt(p_0 + _SQRT_STABILITY_EPS) * np.convert_like(
+        K0 = np.sqrt(1 - p_0 - p_1 + np.eps) * np.convert_like(np.cast_like(np.eye(2), p_0), p_0)
+        K1 = np.sqrt(p_0 + np.eps) * np.convert_like(
             np.cast_like(np.array([[1, 0], [0, 0]]), p_0), p_0
         )
-        K2 = np.sqrt(p_0 + _SQRT_STABILITY_EPS) * np.convert_like(
+        K2 = np.sqrt(p_0 + np.eps) * np.convert_like(
             np.cast_like(np.array([[0, 1], [0, 0]]), p_0), p_0
         )
-        K3 = np.sqrt(p_1 + _SQRT_STABILITY_EPS) * np.convert_like(
+        K3 = np.sqrt(p_1 + np.eps) * np.convert_like(
             np.cast_like(np.array([[0, 0], [1, 0]]), p_0), p_0
         )
-        K4 = np.sqrt(p_1 + _SQRT_STABILITY_EPS) * np.convert_like(
+        K4 = np.sqrt(p_1 + np.eps) * np.convert_like(
             np.cast_like(np.array([[0, 0], [0, 1]]), p_0), p_0
         )
 
@@ -562,7 +540,7 @@ class PauliError(Channel):
     * Number of parameters: 3
 
     Args:
-        operators (str): The Pauli operators (``'I'``, ``'X'``, ``'Y'``, or ``'Z'``) acting on the specified (groups of) wires
+        operators (str): The Pauli operators acting on the specified (groups of) wires
         p (float): The probability of the operator being applied
         wires (Sequence[int] or int): The wires the channel acts on
         id (str or None): String representing the operation (optional)
@@ -579,19 +557,18 @@ class PauliError(Channel):
                [0.70710678, 0.        ]])
     """
 
-    num_params = 1
+    num_wires = AnyWires
+    """int: Number of wires that the operator acts on."""
 
-    resource_keys = {"operators"}
-
+    num_params = 2
     """int: Number of trainable parameters that the operator depends on."""
 
-    def __init__(self, operators, p, wires: WiresLike):
-        wires = Wires(wires)
-        super().__init__(p, wires=wires)
+    def __init__(self, operators, p, wires=None, id=None):
+        super().__init__(operators, p, wires=wires, id=id)
 
         # check if the specified operators are legal
-        if not set(operators).issubset({"X", "Y", "Z", "I"}):
-            raise ValueError("The specified operators need to be either of 'I', 'X', 'Y' or 'Z'.")
+        if not set(operators).issubset({"X", "Y", "Z"}):
+            raise ValueError("The specified operators need to be either of 'X', 'Y' or 'Z'")
 
         # check if probabilities are legal
         if not np.is_abstract(p) and not 0.0 <= p <= 1.0:
@@ -601,8 +578,6 @@ class PauliError(Channel):
         if len(self.wires) != len(operators):
             raise ValueError("The number of operators must match the number of wires")
 
-        self.hyperparameters["operators"] = operators
-
         nq = len(self.wires)
 
         if nq > 20:
@@ -610,27 +585,8 @@ class PauliError(Channel):
                 f"The resulting Kronecker matrices will have dimensions {2**(nq)} x {2**(nq)}.\nThis equals {2**nq*2**nq*8/1024**3} GB of physical memory for each matrix."
             )
 
-    @property
-    def resource_params(self) -> dict:
-        return {"operators": self.hyperparameters["operators"]}
-
-    @classmethod
-    def _unflatten(cls, data: Iterable[Any], metadata: Hashable):
-        """
-        Constructs a PauliError from its serialized version.
-
-        Args:
-            data (Iterable[Any]): the data of the PauliError.
-            metadata (Hashable): the hyperparameters of the PauliError.
-
-        Returns:
-            A constructed PauliError.
-        """
-        hyperparameters_dict = dict(metadata[1])
-        return PauliError(hyperparameters_dict["operators"], data[0], wires=metadata[0])
-
     @staticmethod
-    def compute_kraus_matrices(p, operators):  # pylint:disable=arguments-differ
+    def compute_kraus_matrices(operators, p):  # pylint:disable=arguments-differ
         """Kraus matrices representing the PauliError channel.
 
         Args:
@@ -642,33 +598,30 @@ class PauliError(Channel):
 
         **Example**
 
-        >>> qp.PauliError.compute_kraus_matrices(0.5, "X")
+        >>> qml.PauliError.compute_kraus_matrices("X", 0.5)
         [array([[0.70710678, 0.        ], [0.        , 0.70710678]]),
          array([[0.        , 0.70710678], [0.70710678, 0.        ]])]
         """
         nq = len(operators)
 
         # K0 is sqrt(1-p) * Identity
-        K0 = np.sqrt(1 - p + _SQRT_STABILITY_EPS) * np.convert_like(
-            np.cast_like(np.eye(2**nq), p), p
-        )
+        K0 = np.sqrt(1 - p + np.eps) * np.convert_like(np.cast_like(np.eye(2**nq), p), p)
 
         interface = np.get_interface(p)
-        if "Y" in operators:
+        if interface == "tensorflow" or "Y" in operators:
             if interface == "numpy":
                 p = (1 + 0j) * p
             else:
                 p = np.cast_like(p, 1j)
 
         ops = {
-            "I": np.convert_like(np.cast_like(np.eye(2), p), p),
             "X": np.convert_like(np.cast_like(np.array([[0, 1], [1, 0]]), p), p),
             "Y": np.convert_like(np.cast_like(np.array([[0, -1j], [1j, 0]]), p), p),
             "Z": np.convert_like(np.cast_like(np.array([[1, 0], [0, -1]]), p), p),
         }
 
         # K1 is composed by Kraus matrices of operators
-        K1 = np.sqrt(p + _SQRT_STABILITY_EPS) * np.convert_like(np.cast_like(np.eye(1), p), p)
+        K1 = np.sqrt(p + np.eps) * np.convert_like(np.cast_like(np.eye(1), p), p)
         for op in operators[::-1]:
             K1 = np.multi_dispatch()(np.kron)(ops[op], K1)
 
@@ -711,8 +664,8 @@ class PhaseFlip(Channel):
     grad_method = "A"
     grad_recipe = ([[1, 0, 1], [-1, 0, 0]],)
 
-    def __init__(self, p, wires):
-        super().__init__(p, wires=wires)
+    def __init__(self, p, wires, id=None):
+        super().__init__(p, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(p):  # pylint:disable=arguments-differ
@@ -726,17 +679,15 @@ class PhaseFlip(Channel):
 
         **Example**
 
-        >>> qp.PhaseFlip.compute_kraus_matrices(0.5)
+        >>> qml.PhaseFlip.compute_kraus_matrices(0.5)
         [array([[0.70710678, 0.        ], [0.        , 0.70710678]]),
          array([[ 0.70710678,  0.        ], [ 0.        , -0.70710678]])]
         """
         if not np.is_abstract(p) and not 0.0 <= p <= 1.0:
             raise ValueError("p must be in the interval [0,1]")
 
-        K0 = np.sqrt(1 - p + _SQRT_STABILITY_EPS) * np.convert_like(np.cast_like(np.eye(2), p), p)
-        K1 = np.sqrt(p + _SQRT_STABILITY_EPS) * np.convert_like(
-            np.cast_like(np.diag([1, -1]), p), p
-        )
+        K0 = np.sqrt(1 - p + np.eps) * np.convert_like(np.cast_like(np.eye(2), p), p)
+        K1 = np.sqrt(p + np.eps) * np.convert_like(np.cast_like(np.diag([1, -1]), p), p)
         return [K0, K1]
 
 
@@ -759,11 +710,11 @@ class QubitChannel(Channel):
         id (str or None): String representing the operation (optional)
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    def __init__(self, K_list, wires: WiresLike):
-        wires = Wires(wires)
-        super().__init__(*K_list, wires=wires)
+    def __init__(self, K_list, wires=None, id=None):
+        super().__init__(*K_list, wires=wires, id=id)
 
         # check all Kraus matrices are square matrices
         if any(K.shape[0] != K.shape[1] for K in K_list):
@@ -791,12 +742,6 @@ class QubitChannel(Channel):
     def _flatten(self):
         return (self.data,), (self.wires, ())
 
-    # pylint: disable=arguments-differ, unused-argument
-    @classmethod
-    def _primitive_bind_call(cls, K_list, wires: WiresLike):
-        wires = Wires(wires)
-        return super()._primitive_bind_call(*K_list, wires=wires)
-
     @staticmethod
     def compute_kraus_matrices(*kraus_matrices):  # pylint:disable=arguments-differ
         """Kraus matrices representing the QubitChannel channel.
@@ -809,22 +754,12 @@ class QubitChannel(Channel):
 
         **Example**
 
-        >>> K_list = qp.PhaseFlip(0.5, wires=0).kraus_matrices()
-        >>> res = qp.QubitChannel.compute_kraus_matrices(K_list)[0]
+        >>> K_list = qml.PhaseFlip(0.5, wires=0).kraus_matrices()
+        >>> res = qml.QubitChannel.compute_kraus_matrices(K_list)
         >>> all(np.allclose(r, k) for r, k  in zip(res, K_list))
         True
         """
         return list(kraus_matrices)
-
-
-# Update the implementation to repack matrices. See capture module for more information.
-
-
-@QubitChannel._primitive.def_impl  # pylint: disable=protected-access
-def _(*args, n_wires):
-    K_list = args[:-n_wires]
-    wires = args[-n_wires:]
-    return type.__call__(QubitChannel, K_list, wires=wires)
 
 
 class ThermalRelaxationError(Channel):
@@ -910,8 +845,8 @@ class ThermalRelaxationError(Channel):
     num_wires = 1
     grad_method = "F"
 
-    def __init__(self, pe, t1, t2, tg, wires):
-        super().__init__(pe, t1, t2, tg, wires=wires)
+    def __init__(self, pe, t1, t2, tq, wires, id=None):
+        super().__init__(pe, t1, t2, tq, wires=wires, id=id)
 
     @staticmethod
     def compute_kraus_matrices(pe, t1, t2, tg):  # pylint:disable=arguments-differ
@@ -928,19 +863,11 @@ class ThermalRelaxationError(Channel):
 
         **Example**
 
-        >>> qp.ThermalRelaxationError.compute_kraus_matrices(0.1, 1.2, 1.3, 0.1)
-        [array([[0.        , 0.        ],
-                [0.08941789, 0.        ]]),
-         array([[0.        , 0.26825366],
-                [0.        , 0.        ]]),
-         array([[-0.12718544,  0.        ],
-                [ 0.        ,  0.13165421]]),
-         array([[0.98784022, 0.        ],
-                [0.        , 0.95430977]]),
-         array([[0., 0.],
-                [0., 0.]]),
-         array([[0., 0.],
-                [0., 0.]])]
+        >>> qml.ThermalRelaxationError.compute_kraus_matrices(0.1, 1.2, 1.3, 0.1)
+        [array([[0.        , 0.        ], [0.08941789, 0.        ]]),
+         array([[0.        , 0.26825366], [0.        , 0.        ]]),
+         array([[-0.12718544,  0.        ], [ 0.        ,  0.13165421]]),
+         array([[0.98784022, 0.        ], [0.        , 0.95430977]])]
         """
         if not np.is_abstract(pe) and not 0.0 <= pe <= 1.0:
             raise ValueError("pe must be between 0 and 1.")
@@ -964,29 +891,29 @@ class ThermalRelaxationError(Channel):
             pr1 = pe * p_reset
             pid = 1 - pz - pr0 - pr1
 
-            K0 = np.sqrt(pid + _SQRT_STABILITY_EPS) * np.eye(2)
-            K1 = np.sqrt(pz + _SQRT_STABILITY_EPS) * np.array([[1, 0], [0, -1]])
-            K2 = np.sqrt(pr0 + _SQRT_STABILITY_EPS) * np.array([[1, 0], [0, 0]])
-            K3 = np.sqrt(pr0 + _SQRT_STABILITY_EPS) * np.array([[0, 1], [0, 0]])
-            K4 = np.sqrt(pr1 + _SQRT_STABILITY_EPS) * np.array([[0, 0], [1, 0]])
-            K5 = np.sqrt(pr1 + _SQRT_STABILITY_EPS) * np.array([[0, 0], [0, 1]])
+            K0 = np.sqrt(pid + np.eps) * np.eye(2)
+            K1 = np.sqrt(pz + np.eps) * np.array([[1, 0], [0, -1]])
+            K2 = np.sqrt(pr0 + np.eps) * np.array([[1, 0], [0, 0]])
+            K3 = np.sqrt(pr0 + np.eps) * np.array([[0, 1], [0, 0]])
+            K4 = np.sqrt(pr1 + np.eps) * np.array([[0, 0], [1, 0]])
+            K5 = np.sqrt(pr1 + np.eps) * np.array([[0, 0], [0, 1]])
 
             return [K0, K1, K2, K3, K4, K5]
 
         def kraus_ops_large_t2():
             e0 = p_reset * pe
             v0 = np.array([[0, 0], [1, 0]])
-            K0 = np.sqrt(e0 + _SQRT_STABILITY_EPS) * v0
+            K0 = np.sqrt(e0 + np.eps) * v0
             e1 = -p_reset * pe + p_reset
             v1 = np.array([[0, 1], [0, 0]])
-            K1 = np.sqrt(e1 + _SQRT_STABILITY_EPS) * v1
+            K1 = np.sqrt(e1 + np.eps) * v1
             base = sum(
                 (
                     4 * eT2**2,
                     4 * p_reset**2 * pe**2,
                     -4 * p_reset**2 * pe,
                     p_reset**2,
-                    _SQRT_STABILITY_EPS,
+                    np.eps,
                 )
             )
             common_term = np.sqrt(base)
@@ -995,13 +922,13 @@ class ThermalRelaxationError(Channel):
             v2 = (term2 * np.array([[1, 0], [0, 0]]) + np.array([[0, 0], [0, 1]])) / np.sqrt(
                 term2**2 + 1
             )
-            K2 = np.sqrt(e2 + _SQRT_STABILITY_EPS) * v2
+            K2 = np.sqrt(e2 + np.eps) * v2
             term3 = 2 * eT2 / (2 * p_reset * pe - p_reset + common_term)
             e3 = 1 - p_reset / 2 + common_term / 2
             v3 = (term3 * np.array([[1, 0], [0, 0]]) + np.array([[0, 0], [0, 1]])) / np.sqrt(
                 term3**2 + 1
             )
-            K3 = np.sqrt(e3 + _SQRT_STABILITY_EPS) * v3
+            K3 = np.sqrt(e3 + np.eps) * v3
             K4 = np.cast_like(np.zeros((2, 2)), K1)
             K5 = np.cast_like(np.zeros((2, 2)), K1)
 

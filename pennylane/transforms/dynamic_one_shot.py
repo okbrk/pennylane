@@ -14,39 +14,24 @@
 """
 Contains the batch dimension transform.
 """
-
-import itertools
+# pylint: disable=import-outside-toplevel
 from collections import Counter
-from collections.abc import Sequence
-from functools import partial, singledispatch
+from typing import Callable, Sequence
+import warnings
 
 import numpy as np
 
-import pennylane as qp
-from pennylane import math
-from pennylane.core.measurements import MeasurementProcess
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.core.shots import Shots
-from pennylane.exceptions import QuantumFunctionError, TransformError
+import pennylane as qml
 from pennylane.measurements import (
     CountsMP,
     ExpectationMP,
+    MidMeasureMP,
     ProbabilityMP,
     SampleMP,
     VarianceMP,
 )
-from pennylane.ops import MeasurementValue, MidMeasure
-from pennylane.typing import PostprocessingFn, Result, ResultBatch, TensorLike
 
 from .core import transform
-
-fill_in_value = np.iinfo(np.int32).min
-
-
-def is_mcm(operation):
-    """Returns True if the operation is a mid-circuit measurement and False otherwise."""
-    mcm = isinstance(operation, MidMeasure)
-    return mcm or "MidCircuitMeasure" in str(type(operation))
 
 
 def null_postprocessing(results):
@@ -56,162 +41,108 @@ def null_postprocessing(results):
     return results[0]
 
 
-# pylint: disable=unused-argument
-def _expand_fn(
-    tape: QuantumScript, postselect_mode=None, **_
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
-    if not any(is_mcm(o) for o in tape.operations):
-        return (tape,), null_postprocessing
-    samples_present = any(isinstance(mp, SampleMP) for mp in tape.measurements)
-    postselect_present = any(op.postselect is not None for op in tape.operations if is_mcm(op))
-    if postselect_present and samples_present and tape.batch_size is not None:
-        raise ValueError(
-            "Returning qp.sample is not supported when postselecting mid-circuit "
-            "measurements with broadcasting"
-        )
-
-    return qp.transforms.broadcast_expand(tape)
-
-
-def _add_shot_vector_support(fn: PostprocessingFn, shots: Shots) -> PostprocessingFn:
-    def new_fn(results: ResultBatch) -> Result:
-        results = results[0]
-        return tuple(fn((results[slice(*sl)],)) for sl in shots.bins())
-
-    return new_fn
-
-
-@partial(transform, expand_transform=_expand_fn, pass_name="dynamic-one-shot")
-def dynamic_one_shot(
-    tape: QuantumScript, postselect_mode=None, **_
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+@transform
+def dynamic_one_shot(tape: qml.tape.QuantumTape) -> (Sequence[qml.tape.QuantumTape], Callable):
     """Transform a QNode to into several one-shot tapes to support dynamic circuit execution.
 
-    This transform enables the ``"one-shot"`` mid-circuit measurement method. The ``"one-shot"`` method prompts the
-    device to perform a series of one-shot executions, where in each execution, the ``qp.measure``
-    operation applies a probabilistic mid-circuit measurement to the circuit.
-    This is in contrast with ``qp.defer_measurement``, which instead introduces an extra
-    wire for each mid-circuit measurement. The ``"one-shot"`` method is favourable in the few-shots
-    and several-mid-circuit-measurements limit, whereas ``qp.defer_measurements`` is favourable in
-    the opposite limit.
-
-    .. warning::
-
-        This transform should not be directly applied on a QNode. It is automatically added to the
-        compile pipeline when a QNode is constructed with `mcm_method='one-shot'`.
-
     Args:
-        tape (QNode or QuantumScript or Callable): a quantum circuit.
+        tape (QNode or QuantumTape or Callable): a quantum circuit to add a batch dimension to
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumScript], function]:
+        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]:
 
-        The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
         This circuit will provide the results of a dynamic execution.
+
 
     **Example**
 
-    Most devices that support mid-circuit measurements will include this transform in its
-    preprocessing automatically when applicable. The recommended way to use dynamic one
-    shot is to specify ``mcm_method="one-shot"`` in the ``qp.qnode`` decorator.
+    Consider the following circuit:
 
     .. code-block:: python
 
-        dev = qp.device("default.qubit")
+        dev = qml.device("default.qubit", shots=100)
         params = np.pi / 4 * np.ones(2)
 
-        @qp.set_shots(100)
-        @qp.qnode(dev, mcm_method="one-shot")
+        @qml.dynamic_one_shot
+        @qml.qnode(dev)
         def func(x, y):
-            qp.RX(x, wires=0)
-            m0 = qp.measure(0)
-            qp.cond(m0, qp.RY)(y, wires=1)
-            return qp.expval(op=m0)
+            qml.RX(x, wires=0)
+            m0 = qml.measure(0)
+            qml.cond(m0, qml.RY)(y, wires=1)
+            return measure_f(op=m0)
 
-    ..details::
-        :title: Usage with Catalyst (qjit)
-
-        This transform is compatible with ``qjit``, where it will be applied as an MLIR pass
-        rather than a tape-level transform.
-        That being said, there are a few differences to be aware of when using the MLIR pass:
-
-        - Shot vectors or broadcasting are not supported
-        - Workflows involving gradients are not supported
-        - ``qp.var()`` on observables (non-MCM) are unsupported
-
-        To apply the MLIR pass version simply decorate your ``QNode`` with ``@qp.qjit``:
-
-        .. code-block:: python
-
-            @qp.qjit
-            @qp.set_shots(10)
-            @qp.qnode(qp.device("lightning.qubit", wires=2), mcm_method="one-shot")
-            def circ():
-                return qp.expval(qp.X(0)+2*qp.Y(1))
-
-        >>> circ() # doctest: +SKIP
-        Array(0.4, dtype=float64)
-
+    The ``qml.dynamic_one_shot`` decorator prompts the QNode to perform a hundred one-shot
+    calculations, where in each calculation the ``qml.measure`` operations dynamically
+    measures the 0-wire and collapse the state vector stochastically. This transforms
+    contrasts with ``qml.defer_measurements``, which instead introduces an extra wire
+    for each mid-circuit measurement. The ``qml.dynamic_one_shot`` transform is favorable in the few-shots
+    several-mid-circuit-measurement limit, whereas ``qml.defer_measurements`` is favorable
+    in the opposite limit.
     """
-    if not any(is_mcm(o) for o in tape.operations):
+
+    if not any(isinstance(o, MidMeasureMP) for o in tape.operations):
         return (tape,), null_postprocessing
 
     for m in tape.measurements:
         if not isinstance(m, (CountsMP, ExpectationMP, ProbabilityMP, SampleMP, VarianceMP)):
             raise TypeError(
-                f"Native mid-circuit measurement mode does not support {type(m).__name__} "
-                "measurements."
+                f"Native mid-circuit measurement mode does not support {type(m).__name__} measurements."
             )
 
-    if not tape.shots:
-        raise QuantumFunctionError("dynamic_one_shot is only supported with finite shots.")
+    aux_tape = init_auxiliary_tape(tape)
+    output_tapes = [aux_tape] * tape.shots.total_shots
 
-    aux_tapes = [init_auxiliary_tape(tape)]
-    num_mp = len(aux_tapes[0].measurements)
+    def processing_fn(results, has_partitioned_shots=None):
+        if has_partitioned_shots is None and tape.shots.has_partitioned_shots:
+            results = list(results)
+            final_results = []
+            for s in tape.shots:
+                final_results.append(processing_fn(results[0:s], has_partitioned_shots=False))
+                del results[0:s]
+            return tuple(final_results)
+        all_shot_meas, list_mcm_values_dict, valid_shots = None, [], 0
+        for res in results:
+            one_shot_meas, mcm_values_dict = res
+            if one_shot_meas is None:
+                continue
+            valid_shots += 1
+            all_shot_meas = accumulate_native_mcm(aux_tape, all_shot_meas, one_shot_meas)
+            list_mcm_values_dict.append(mcm_values_dict)
+        if not valid_shots:
+            warnings.warn(
+                "All shots were thrown away as invalid. This can happen for example when post-selecting the 1-branch of a 0-state. Make sure your circuit has some probability of producing a valid shot.",
+                UserWarning,
+            )
+        return parse_native_mid_circuit_measurements(tape, all_shot_meas, list_mcm_values_dict)
 
-    def processing_fn(results: ResultBatch) -> Result:
-        results = results[0]
-        if num_mp == 1:
-            results = [tuple(results)]
-        else:
-            results = [tuple(res[i] for res in results) for i in range(num_mp)]
-        return parse_native_mid_circuit_measurements(
-            tape, results=results, postselect_mode=postselect_mode
-        )
-
-    if tape.shots.has_partitioned_shots:
-        processing_fn = _add_shot_vector_support(processing_fn, tape.shots)
-
-    return aux_tapes, processing_fn
-
-
-def get_legacy_capabilities(dev):
-    """Gets the capabilities dictionary of a device."""
-    assert isinstance(dev, qp.devices.LegacyDeviceFacade)
-    return dev.target_device.capabilities()
-
-
-def _supports_one_shot(dev: "qp.devices.Device"):
-    """Checks whether a device supports one-shot."""
-
-    if isinstance(dev, qp.devices.LegacyDevice):
-        return get_legacy_capabilities(dev).get("supports_mid_measure", False)
-
-    return dev.name in ("default.qubit", "lightning.qubit") or (
-        dev.capabilities is not None and "one-shot" in dev.capabilities.supported_mcm_methods
-    )
+    return output_tapes, processing_fn
 
 
 @dynamic_one_shot.custom_qnode_transform
 def _dynamic_one_shot_qnode(self, qnode, targs, tkwargs):
     """Custom qnode transform for ``dynamic_one_shot``."""
-    raise TransformError(
-        "The dynamic_one_shot transform cannot be applied directly on a QNode. "
-        "Use mcm_method='one-shot' instead."
-    )
+    if tkwargs.get("device", None):
+        raise ValueError(
+            "Cannot provide a 'device' value directly to the dynamic_one_shot decorator "
+            "when transforming a QNode."
+        )
+    if qnode.device is not None:
+        support_mcms = hasattr(qnode.device, "capabilities") and qnode.device.capabilities().get(
+            "supports_mid_measure", False
+        )
+        support_mcms = support_mcms or isinstance(
+            qnode.device, qml.devices.default_qubit.DefaultQubit
+        )
+        if not support_mcms:
+            raise TypeError(
+                f"Device {qnode.device.name} does not support mid-circuit measurements natively, and hence it does not support the dynamic_one_shot transform. `default.qubit` and `lightning.qubit` currently support mid-circuit measurements and the dynamic_one_shot transform."
+            )
+    tkwargs.setdefault("device", qnode.device)
+    return self.default_qnode_transform(qnode, targs, tkwargs)
 
 
-def init_auxiliary_tape(circuit: qp.tape.QuantumScript):
+def init_auxiliary_tape(circuit: qml.tape.QuantumScript):
     """Creates an auxiliary circuit to perform one-shot mid-circuit measurement calculations.
 
     Measurements are replaced by SampleMP measurements on wires and observables found in the
@@ -225,309 +156,148 @@ def init_auxiliary_tape(circuit: qp.tape.QuantumScript):
     """
     new_measurements = []
     for m in circuit.measurements:
-        if m.mv is None:
+        if not m.mv:
             if isinstance(m, VarianceMP):
                 new_measurements.append(SampleMP(obs=m.obs))
             else:
                 new_measurements.append(m)
-    for op in circuit.operations:
-        if "MidCircuitMeasure" in str(type(op)):  # pragma: no cover
-            new_measurements.append(qp.sample(op.out_classical_tracers[0]))
-        elif isinstance(op, MidMeasure):
-            new_measurements.append(qp.sample(MeasurementValue([op])))
-    return qp.tape.QuantumScript(
-        circuit.operations,
-        new_measurements,
-        shots=[1] * circuit.shots.total_shots,
-        trainable_params=circuit.trainable_params,
+    return qml.tape.QuantumScript(
+        circuit.operations, new_measurements, shots=1, trainable_params=circuit.trainable_params
     )
 
 
-def _measurement_with_no_shots(measurement):
-    return (
-        np.nan * np.ones_like(measurement.eigvals())
-        if isinstance(measurement, ProbabilityMP)
-        else np.nan
-    )
+def accumulate_native_mcm(circuit: qml.tape.QuantumScript, all_shot_meas, one_shot_meas):
+    """Incorporates new measurements in current measurement sequence.
 
+    Args:
+        circuit (QuantumTape): A one-shot (auxiliary) QuantumScript
+        all_shot_meas (Sequence[Any]): List of accumulated measurement results
+        one_shot_meas (Sequence[Any]): List of measurement results
 
-def _get_is_valid_has_valid(mcm_samples, all_mcms, interface):
-    # Can't use boolean dtype array with tf, hence why conditionally setting items to 0 or 1
-    has_postselect = math.array(
-        [[op.postselect is not None for op in all_mcms]],
-        like=interface,
-        dtype=mcm_samples.dtype,
-    )
-    postselect = math.array(
-        [[0 if op.postselect is None else op.postselect for op in all_mcms]],
-        like=interface,
-        dtype=mcm_samples.dtype,
-    )
-    is_valid = math.all(mcm_samples * has_postselect == postselect, axis=1)
-    has_valid = math.any(is_valid)
-    return is_valid, has_valid
+    Returns:
+        tuple(TensorLike): The results of the simulation
+    """
+    if len(circuit.measurements) == 1:
+        one_shot_meas = [one_shot_meas]
+    if all_shot_meas is None:
+        new_shot_meas = list(one_shot_meas)
+        for i, (m, s) in enumerate(zip(circuit.measurements, new_shot_meas)):
+            if isinstance(m, SampleMP) and isinstance(s, np.ndarray):
+                new_shot_meas[i] = [s]
+        return new_shot_meas
+    new_shot_meas = all_shot_meas
+    for i, m in enumerate(circuit.measurements):
+        if isinstance(m, CountsMP):
+            tmp = Counter(all_shot_meas[i])
+            tmp.update(Counter(one_shot_meas[i]))
+            new_shot_meas[i] = tmp
+        elif isinstance(m, (ExpectationMP, ProbabilityMP)):
+            new_shot_meas[i] = all_shot_meas[i] + one_shot_meas[i]
+        elif isinstance(m, SampleMP):
+            new_shot_meas[i].append(one_shot_meas[i])
+        else:
+            raise TypeError(
+                f"Native mid-circuit measurement mode does not support {type(m).__name__} measurements."
+            )
+    return new_shot_meas
 
 
 def parse_native_mid_circuit_measurements(
-    circuit: qp.tape.QuantumScript,
-    _removed_arg=None,  # need to not break catalyst
-    results: None | TensorLike = None,
-    postselect_mode=None,
+    circuit: qml.tape.QuantumScript, all_shot_meas, mcm_shot_meas
 ):
     """Combines, gathers and normalizes the results of native mid-circuit measurement runs.
 
     Args:
-        circuit (QuantumTape): The original ``QuantumScript``.
-        _removed_arg : a placeholder for an argument that used to exist. Can be removed pending update to catalyst.
-        aux_tapes (List[QuantumTape]): List of auxiliary ``QuantumScript`` objects.
-        results (TensorLike): Array of measurement results.
-        postselect_mode (None | str): how to handle postselection.
+        circuit (QuantumTape): A one-shot (auxiliary) QuantumScript
+        all_shot_meas (Sequence[Any]): List of accumulated measurement results
+        mcm_shot_meas (Sequence[dict]): List of dictionaries containing the mid-circuit measurement results of each shot
 
     Returns:
-        tuple(TensorLike): The results of the simulation.
+        tuple(TensorLike): The results of the simulation
     """
-    assert results is not None  # condition needed to not break signature
-    interface = math.get_deep_interface(results)
-    interface = "numpy" if interface == "builtins" else interface
 
-    all_mcms = [op for op in circuit.operations if is_mcm(op)]
-    mcm_samples = math.hstack(
-        tuple(math.reshape(math.vstack(res), (-1, 1)) for res in results[-len(all_mcms) :])
-    )
-    mcm_samples = math.array(mcm_samples, like=interface)
+    def measurement_with_no_shots(measurement):
+        return (
+            np.nan * np.ones_like(measurement.eigvals())
+            if isinstance(measurement, ProbabilityMP)
+            else np.nan
+        )
 
-    is_valid, has_valid = _get_is_valid_has_valid(mcm_samples, all_mcms, interface)
-
-    mcm_samples_map = {mcm: mcm_samples[:, i : i + 1] for i, mcm in enumerate(all_mcms)}
-    normalized_meas, m_count = [], 0
-
-    handler = _handle_measurement_qjit if qp.compiler.active() else _handle_measurement
-    for m in circuit.measurements:
+    normalized_meas = []
+    for i, m in enumerate(circuit.measurements):
         if not isinstance(m, (CountsMP, ExpectationMP, ProbabilityMP, SampleMP, VarianceMP)):
             raise TypeError(
                 f"Native mid-circuit measurement mode does not support {type(m).__name__} measurements."
             )
-        r, m_count = handler(
-            m,
-            m_count,
-            results,
-            mcm_samples_map,
-            interface=interface,
-            has_valid=has_valid,
-            postselect_mode=postselect_mode,
-            is_valid=is_valid,
-        )
-        normalized_meas.append(r)
+        if m.mv and not mcm_shot_meas:
+            meas = measurement_with_no_shots(m)
+        elif m.mv:
+            meas = gather_mcm(m, mcm_shot_meas)
+        elif not all_shot_meas:
+            meas = measurement_with_no_shots(m)
+        else:
+            meas = gather_non_mcm(m, all_shot_meas[i], mcm_shot_meas)
+        if isinstance(m, SampleMP):
+            meas = qml.math.squeeze(meas)
+        normalized_meas.append(meas)
 
     return tuple(normalized_meas) if len(normalized_meas) > 1 else normalized_meas[0]
 
 
-# pylint: disable=too-many-arguments
-def _handle_measurement_qjit(
-    m: MeasurementProcess,
-    m_count: int,
-    results,
-    mcm_samples,
-    *,
-    is_valid: bool,
-    postselect_mode,
-    **_,
-):
-    if m.mv is not None:
-        return (
-            gather_mcm_qjit(m, mcm_samples, is_valid, postselect_mode=postselect_mode),
-            m_count,
-        )  # pragma: no cover
-
-    result = results[m_count]
-    if isinstance(m, CountsMP):
-        res = (
-            result[0][0],
-            math.sum(result[1] * math.reshape(is_valid, (-1, 1)), axis=0),
-        )
-        return res, m_count + 1
-    result = math.squeeze(result)
-    if isinstance(m, SampleMP) and result.ndim == 1:
-        result = math.expand_dims(result, axis=1)  # pragma: no cover
-    return gather_non_mcm(m, result, is_valid, postselect_mode=postselect_mode), m_count + 1
-
-
-# pylint: disable=too-many-arguments
-def _handle_measurement(
-    m: MeasurementProcess,
-    m_count: int,
-    results,
-    mcm_samples,
-    *,
-    interface,
-    has_valid: bool,
-    postselect_mode,
-    is_valid,
-):
-    if interface != "jax" and not has_valid:
-        return _measurement_with_no_shots(m), m_count + int(m.mv is None)
-
-    if m.mv is not None:
-        return gather_mcm(m, mcm_samples, is_valid, postselect_mode=postselect_mode), m_count
-
-    result = results[m_count]
-    return gather_non_mcm(m, result, is_valid, postselect_mode=postselect_mode), m_count + 1
-
-
-def gather_mcm_qjit(measurement, samples, is_valid, postselect_mode=None):  # pragma: no cover
-    """Process MCM measurements when the Catalyst compiler is active.
-
-    Args:
-        measurement (MeasurementProcess): measurement
-        samples (dict): Mid-circuit measurement samples
-        is_valid (TensorLike): Boolean array with the same shape as ``samples`` where the value at
-            each index specifies whether or not the respective sample is valid.
-
-    Returns:
-        TensorLike: The combined measurement outcome
-    """
-    found, meas = False, None
-    for k, meas in samples.items():
-        if measurement.mv is k.out_classical_tracers[0]:
-            found = True
-            break
-    if not found:
-        raise LookupError("MCM not found")
-    meas = math.squeeze(meas)
-    if isinstance(measurement, (CountsMP, ProbabilityMP)):
-        interface = math.get_interface(is_valid)
-        sum_valid = math.sum(is_valid)
-        count_1 = math.sum(meas * is_valid)
-        if isinstance(measurement, CountsMP):
-            return math.array([0, 1], like=interface), math.array(
-                [sum_valid - count_1, count_1], like=interface
-            )
-        if isinstance(measurement, ProbabilityMP):
-            counts = math.array([sum_valid - count_1, count_1], like=interface)
-            return counts / sum_valid
-    return gather_non_mcm(measurement, meas, is_valid, postselect_mode=postselect_mode)
-
-
-@singledispatch
-def gather_non_mcm(measurement, samples, is_valid, postselect_mode=None) -> TensorLike:
+def gather_non_mcm(circuit_measurement, measurement, samples):
     """Combines, gathers and normalizes several measurements with trivial measurement values.
 
     Args:
-        measurement (MeasurementProcess): measurement
-        samples (TensorLike): Post-processed measurement samples
-        is_valid (TensorLike): Boolean array with the same shape as ``samples`` where the value at
-            each index specifies whether or not the respective sample is valid.
-        postselect_mode (None | str): the postselect mode to use.
+        circuit_measurement (MeasurementProcess): measurement
+        measurement (TensorLike): measurement results
+        samples (List[dict]): Mid-circuit measurement samples
 
     Returns:
         TensorLike: The combined measurement outcome
     """
-    raise TypeError(
-        f"Native mid-circuit measurement mode does not support {type(measurement).__name__} measurements."
-    )
+    if isinstance(circuit_measurement, CountsMP):
+        return dict(sorted(measurement.items()))
+    if isinstance(circuit_measurement, (ExpectationMP, ProbabilityMP)):
+        return measurement / len(samples)
+    if isinstance(circuit_measurement, SampleMP):
+        return np.squeeze(np.concatenate(tuple(s.reshape(1, -1) for s in measurement)))
+    # VarianceMP
+    return qml.math.var(np.concatenate(tuple(s.ravel() for s in measurement)))
 
 
-@gather_non_mcm.register
-def _gather_counts(measurement: CountsMP, samples, is_valid, postselect_mode=None):
-    tmp = Counter()
-
-    if measurement.all_outcomes:
-        if isinstance(measurement.mv, Sequence):
-            values = [list(m.branches.values()) for m in measurement.mv]
-            values = list(itertools.product(*values))
-            tmp = Counter({"".join(map(str, v)): 0 for v in values})
-        else:
-            values = [list(measurement.mv.branches.values())]
-            values = list(itertools.product(*values))
-            tmp = Counter({float(*v): 0 for v in values})
-
-    for i, d in enumerate(samples):
-        tmp.update({k if isinstance(k, str) else float(k): v * is_valid[i] for k, v in d.items()})
-
-    if not measurement.all_outcomes:
-        tmp = Counter({k: v for k, v in tmp.items() if v > 0})
-    return dict(sorted(tmp.items()))
-
-
-@gather_non_mcm.register
-def _gather_samples(measurement: SampleMP, samples, is_valid, postselect_mode=None):
-    samples = math.concatenate(samples) if isinstance(samples, (list, tuple)) else samples
-    if postselect_mode == "pad-invalid-samples" and samples.ndim == 2:
-        is_valid = math.reshape(is_valid, (-1, 1))
-    if postselect_mode == "pad-invalid-samples":
-        return math.where(is_valid, samples, fill_in_value)
-    return samples[is_valid]
-
-
-# pylint: disable=unused-arguement
-@gather_non_mcm.register
-def _gather_expval(measurement: ExpectationMP, samples, is_valid, postselect_mode=None):
-    samples = math.stack(samples)
-    return math.sum(math.squeeze(samples) * is_valid) / math.sum(is_valid)
-
-
-# pylint: disable=unused-arguement
-@gather_non_mcm.register
-def _gather_probability(measurement: ProbabilityMP, samples, is_valid, postselect_mode=None):
-    samples = math.stack(samples, axis=0)
-    return math.sum(samples * math.reshape(is_valid, (-1, 1)), axis=0) / math.sum(is_valid)
-
-
-@gather_non_mcm.register
-def _gather_variance(measurement: VarianceMP, samples, is_valid, postselect_mode=None):
-    samples = math.stack(samples)
-    samples = math.squeeze(samples)
-    expval = math.sum(samples * is_valid) / math.sum(is_valid)
-    return math.sum((samples - expval) ** 2 * is_valid) / math.sum(is_valid)
-
-
-def gather_mcm(measurement: MeasurementProcess, samples, is_valid, postselect_mode=None):
+def gather_mcm(measurement, samples):
     """Combines, gathers and normalizes several measurements with non-trivial measurement values.
 
     Args:
         measurement (MeasurementProcess): measurement
         samples (List[dict]): Mid-circuit measurement samples
-        is_valid (TensorLike): Boolean array with the same shape as ``samples`` where the value at
-            each index specifies whether or not the respective sample is valid.
 
     Returns:
         TensorLike: The combined measurement outcome
     """
-
-    interface = math.get_deep_interface(is_valid)
     mv = measurement.mv
-    # The following block handles measurement value lists, like ``qp.counts(op=[mcm0, mcm1, mcm2])``.
     if isinstance(measurement, (CountsMP, ProbabilityMP, SampleMP)) and isinstance(mv, Sequence):
-        mcm_samples = [m.concretize(samples) for m in mv]
-        mcm_samples = math.concatenate(mcm_samples, axis=1)
-        if isinstance(measurement, ProbabilityMP):
-            values = [list(m.branches.values()) for m in mv]
-            values = list(itertools.product(*values))
-            values = [math.array([v], like=interface, dtype=mcm_samples.dtype) for v in values]
-            # Use boolean functions explicitly; integer math on boolean arrays is not portable.
-            counts = [
-                math.count_nonzero(math.logical_and(math.all(mcm_samples == v, axis=1), is_valid))
-                for v in values
-            ]
-            counts = math.array(counts, like=interface)
-            return counts / math.sum(counts)
-        if isinstance(measurement, CountsMP):
-            mcm_samples = [{"".join(str(int(v)) for v in tuple(s)): 1} for s in mcm_samples]
-        return gather_non_mcm(measurement, mcm_samples, is_valid, postselect_mode=postselect_mode)
-
-    mcm_samples = math.array(mv.concretize(samples), like=interface)
-    if isinstance(measurement, ProbabilityMP):
-        # Use boolean functions explicitly; integer math on boolean arrays is not portable.
-        mcm_samples = math.squeeze(mcm_samples)
-        counts = [
-            math.count_nonzero(math.logical_and((mcm_samples == v), is_valid))
-            for v in list(mv.branches.values())
-        ]
-        counts = math.array(counts, like=interface)
-        return counts / math.sum(counts)
-    if isinstance(measurement, CountsMP):
-        mcm_samples = [{float(s.item()): 1} for s in mcm_samples]
-    results = gather_non_mcm(measurement, mcm_samples, is_valid, postselect_mode=postselect_mode)
-    if isinstance(measurement, SampleMP):
-        results = math.squeeze(results)
-    return results
+        wires = qml.wires.Wires(range(len(mv)))
+        mcm_samples = list(
+            np.array([m.concretize(dct) for dct in samples]).reshape((-1, 1)) for m in mv
+        )
+        mcm_samples = np.concatenate(mcm_samples, axis=1)
+        meas_tmp = measurement.__class__(wires=wires)
+        return meas_tmp.process_samples(mcm_samples, wire_order=wires)
+    mcm_samples = np.array([mv.concretize(dct) for dct in samples]).reshape((-1, 1))
+    use_as_is = len(mv.measurements) == 1
+    if use_as_is:
+        wires, meas_tmp = mv.wires, measurement
+    else:
+        # For composite measurements, `mcm_samples` has one column but
+        # `mv.wires` usually includes several wires. We therefore need to create a
+        # single-wire measurement for `process_samples` to handle the conversion
+        # correctly.
+        if isinstance(measurement, (ExpectationMP, VarianceMP)):
+            mcm_samples = mcm_samples.ravel()
+        wires = qml.wires.Wires(0)
+        meas_tmp = measurement.__class__(wires=wires)
+    new_measurement = meas_tmp.process_samples(mcm_samples, wire_order=wires)
+    if isinstance(measurement, CountsMP) and not use_as_is:
+        new_measurement = dict(sorted((int(x, 2), y) for x, y in new_measurement.items()))
+    return new_measurement

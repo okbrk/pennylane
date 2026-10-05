@@ -14,125 +14,126 @@
 """
 Tests for the accessibility of the Lightning-Qubit device
 """
-
 import pytest
 from flaky import flaky
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
-from pennylane.exceptions import QuantumFunctionError
 
 
 def test_integration():
     """Test that the execution of lightning.qubit is possible and agrees with default.qubit"""
     wires = 2
     layers = 2
-    dev_l = qp.device("lightning.qubit", wires=wires)
-    dev_d = qp.device("default.qubit", wires=wires)
+    dev_l = qml.device("lightning.qubit", wires=wires)
+    dev_d = qml.device("default.qubit", wires=wires)
 
     def circuit(weights):
-        qp.templates.StronglyEntanglingLayers(weights, wires=range(wires))
-        return qp.expval(qp.PauliZ(0))
+        qml.templates.StronglyEntanglingLayers(weights, wires=range(wires))
+        return qml.expval(qml.PauliZ(0))
 
+    np.random.seed(1967)
     weights = np.random.random(
-        qp.templates.StronglyEntanglingLayers.shape(layers, wires), requires_grad=True
+        qml.templates.StronglyEntanglingLayers.shape(layers, wires), requires_grad=True
     )
 
-    qn_l = qp.QNode(circuit, dev_l)
-    qn_d = qp.QNode(circuit, dev_d)
+    qn_l = qml.QNode(circuit, dev_l)
+    qn_d = qml.QNode(circuit, dev_d)
 
     assert np.allclose(qn_l(weights), qn_d(weights))
-    assert np.allclose(qp.grad(qn_l)(weights), qp.grad(qn_d)(weights))
+    assert np.allclose(qml.grad(qn_l)(weights), qml.grad(qn_d)(weights))
 
 
 def test_no_backprop_auto_interface():
     """Test that lightning.qubit does not support the backprop
     differentiation method."""
 
-    dev = qp.device("lightning.qubit", wires=2)
+    dev = qml.device("lightning.qubit", wires=2)
 
     def circuit():
         """Simple quantum function."""
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
-    with pytest.raises(QuantumFunctionError, match="does not support backprop"):
-        qp.QNode(circuit, dev, diff_method="backprop")
+    with pytest.raises(qml.QuantumFunctionError, match="does not support backprop"):
+        qml.QNode(circuit, dev, diff_method="backprop")
 
 
 def test_finite_shots_adjoint():
     """Test that shots and adjoint diff raises an error."""
 
-    dev = qp.device("lightning.qubit", wires=2)
+    dev = qml.device("lightning.qubit", wires=2, shots=2)
 
     def circuit():
         """Simple quantum function."""
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
-    with pytest.raises(QuantumFunctionError, match="does not support adjoint"):
-        qp.set_shots(qp.QNode(circuit, dev, diff_method="adjoint"), shots=2)()
+    with pytest.raises(qml.QuantumFunctionError, match="does not support adjoint"):
+        qml.QNode(circuit, dev, diff_method="adjoint")()
 
 
 @flaky(max_runs=5)
-def test_finite_shots(seed):
+def test_finite_shots():
     """Test that shots in LQ and DQ give the same results."""
 
-    dev = qp.device("lightning.qubit", wires=2, seed=seed)
-    dq = qp.device("default.qubit", seed=seed)
+    dev = qml.device("lightning.qubit", wires=2, shots=50000)
+    dq = qml.device("default.qubit", shots=50000)
 
     def circuit():
-        qp.RX(np.pi / 4, 0)
-        qp.RY(-np.pi / 4, 1)
-        return qp.expval(qp.PauliY(0))
+        qml.RX(np.pi / 4, 0)
+        qml.RY(-np.pi / 4, 1)
+        return qml.expval(qml.PauliY(0))
 
-    circ0 = qp.set_shots(qp.QNode(circuit, dev, diff_method=None), shots=50000)
-    circ1 = qp.set_shots(qp.QNode(circuit, dq, diff_method=None), shots=50000)
+    circ0 = qml.QNode(circuit, dev, diff_method=None)
+    circ1 = qml.QNode(circuit, dq, diff_method=None)
 
     assert np.allclose(circ0(), circ1(), rtol=0.01)
 
 
+@pytest.mark.skip(reason="New lightning.qubit needs to be updated to work with dtypes")
 class TestDtypePreserved:
     """Test that the user-defined dtype of the device is preserved for QNode
     evaluation"""
 
-    # pylint: disable=too-few-public-methods
-
-    @pytest.mark.parametrize(
-        "c_dtype",
-        [
-            np.complex64,
-            np.complex128,
-        ],
-    )
+    @pytest.mark.parametrize("r_dtype", [np.float32, np.float64])
     @pytest.mark.parametrize(
         "measurement",
         [
-            qp.state(),
-            qp.density_matrix(wires=[1]),
-            qp.density_matrix(wires=[2, 0]),
-            qp.expval(qp.PauliY(0)),
-            qp.var(qp.PauliY(0)),
-            qp.probs(wires=[1]),
-            qp.probs(wires=[0, 2]),
+            qml.expval(qml.PauliY(0)),
+            qml.var(qml.PauliY(0)),
+            qml.probs(wires=[1]),
+            qml.probs(wires=[0, 2]),
         ],
     )
-    def test_dtype(self, c_dtype, measurement):
+    def test_real_dtype(self, r_dtype, measurement):
         """Test that the default qubit plugin provides correct result for a simple circuit"""
         p = 0.543
 
-        dev = qp.device("lightning.qubit", wires=3, c_dtype=c_dtype)
+        dev = qml.device("lightning.qubit", wires=3)
+        dev.R_DTYPE = r_dtype
 
-        @qp.qnode(dev)
+        @qml.qnode(dev, diff_method="parameter-shift")
         def circuit(x):
-            qp.RX(x, wires=0)
-            return qp.apply(measurement)
+            qml.RX(x, wires=0)
+            return qml.apply(measurement)
 
         res = circuit(p)
+        assert res.dtype == r_dtype
 
-        if isinstance(measurement, (qp.measurements.StateMP, qp.measurements.DensityMatrixMP)):
-            expected_dtype = c_dtype
-        else:
-            expected_dtype = np.float64 if c_dtype == np.complex128 else np.float32
-        if isinstance(res, np.ndarray):
-            assert res.dtype == expected_dtype
-        else:
-            assert isinstance(res, float)
+    @pytest.mark.parametrize("c_dtype", [np.complex64, np.complex128])
+    @pytest.mark.parametrize(
+        "measurement",
+        [qml.state(), qml.density_matrix(wires=[1]), qml.density_matrix(wires=[2, 0])],
+    )
+    def test_complex_dtype(self, c_dtype, measurement):
+        """Test that the default qubit plugin provides correct result for a simple circuit"""
+        p = 0.543
+
+        dev = qml.device("lightning.qubit", wires=3, c_dtype=c_dtype)
+
+        @qml.qnode(dev)
+        def circuit(x):
+            qml.RX(x, wires=0)
+            return qml.apply(measurement)
+
+        res = circuit(p)
+        assert res.dtype == c_dtype

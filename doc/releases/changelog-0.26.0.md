@@ -1,3 +1,4 @@
+:orphan:
 
 # Release 0.26.0
 
@@ -226,7 +227,7 @@
       params, cost = opt.step_and_cost(cost, params)
   ```  
 
-  Check out [our demo](https://pennylane.ai/qml/demos/qnspsa) on the QNSPSA optimizer for more information.
+  Check out [our demo](https://pennylane.ai/qml/demos/qnspsa.html) on the QNSPSA optimizer for more information.
 
 <h4>Operator and parameter broadcasting supplements 📈</h4>
 

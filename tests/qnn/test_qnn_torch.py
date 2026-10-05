@@ -14,14 +14,14 @@
 """
 Tests for the pennylane.qnn.torch module.
 """
-
-import math
 from unittest import mock
+import math
+from collections import defaultdict
 
 import numpy as np
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane.qnn.torch import TorchLayer
 
 torch = pytest.importorskip("torch")
@@ -36,6 +36,7 @@ def indices_up_to(n_max):
     return zip(*[a + 1, b + 1])
 
 
+@pytest.mark.usefixtures("get_circuit")  # this fixture is in tests/qnn/conftest.py
 @pytest.fixture
 def module(get_circuit, n_qubits, output_dim):
     """Fixture for creating a hybrid Torch module. The module is composed of quantum TorchLayers
@@ -76,7 +77,7 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
         """Test if an ImportError is raised when instantiated without PyTorch"""
         c, w = get_circuit
         with monkeypatch.context() as m:
-            m.setattr(qp.qnn.torch, "TORCH_IMPORTED", False)
+            m.setattr(qml.qnn.torch, "TORCH_IMPORTED", False)
             with pytest.raises(ImportError, match="TorchLayer requires PyTorch"):
                 TorchLayer(c, w)
 
@@ -84,12 +85,12 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
     def test_no_input(self):  # pylint: disable=no-self-use
         """Test if a TypeError is raised when instantiated with a QNode that does not have an
         argument with name equal to the input_arg class attribute of TorchLayer"""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
         weight_shapes = {"w1": (3, 3), "w2": 1}
 
-        @qp.qnode(dev, interface="torch")
+        @qml.qnode(dev, interface="torch")
         def circuit(w1, w2):  # pylint: disable=unused-argument
-            return qp.expval(qp.PauliZ(0))
+            return qml.expval(qml.PauliZ(0))
 
         with pytest.raises(TypeError, match="QNode must include an argument with name"):
             TorchLayer(circuit, weight_shapes)
@@ -100,10 +101,10 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
         contains the shape of the input argument given by the input_arg class attribute of
         TorchLayer"""
         c, w = get_circuit
-        w[qp.qnn.torch.TorchLayer._input_arg] = n_qubits  # pylint: disable=protected-access
+        w[qml.qnn.torch.TorchLayer._input_arg] = n_qubits  # pylint: disable=protected-access
         with pytest.raises(
             ValueError,
-            match=f"{qp.qnn.torch.TorchLayer._input_arg} argument should not have its dimension",  # pylint: disable=protected-access
+            match=f"{qml.qnn.torch.TorchLayer._input_arg} argument should not have its dimension",  # pylint: disable=protected-access
         ):
             TorchLayer(c, w)
 
@@ -120,12 +121,12 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
     def test_var_pos(self):  # pylint: disable=no-self-use
         """Test if a TypeError is raised when instantiated with a variable number of positional
         arguments"""
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
         weight_shapes = {"w1": (3, 3), "w2": 1}
 
-        @qp.qnode(dev, interface="torch")
+        @qml.qnode(dev, interface="torch")
         def circuit(inputs, w1, w2, *args):  # pylint: disable=unused-argument
-            return qp.expval(qp.PauliZ(0))
+            return qml.expval(qml.PauliZ(0))
 
         with pytest.raises(TypeError, match="Cannot have a variable number of positional"):
             TorchLayer(circuit, weight_shapes)
@@ -133,7 +134,7 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
     @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(1))
     def test_var_keyword(self, n_qubits, output_dim):  # pylint: disable=no-self-use
         """Test that variable number of keyword arguments works"""
-        dev = qp.device("default.qubit", wires=n_qubits)
+        dev = qml.device("default.qubit", wires=n_qubits)
         w = {
             "w1": (3, n_qubits, 3),
             "w2": (1,),
@@ -144,20 +145,20 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
             "w7": 1,
         }
 
-        @qp.qnode(dev, interface="torch")
+        @qml.qnode(dev, interface="torch")
         def c(inputs, **kwargs):
             """A circuit that embeds data using the AngleEmbedding and then performs a variety of
             operations. The output is a PauliZ measurement on the first output_dim qubits. One set of
             parameters, w5, are specified as non-trainable."""
-            qp.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
-            qp.templates.StronglyEntanglingLayers(kwargs["w1"], wires=list(range(n_qubits)))
-            qp.RX(kwargs["w2"][0], wires=0 % n_qubits)
-            qp.RX(kwargs["w3"], wires=1 % n_qubits)
-            qp.Rot(*kwargs["w4"], wires=2 % n_qubits)
-            qp.templates.StronglyEntanglingLayers(kwargs["w5"], wires=list(range(n_qubits)))
-            qp.Rot(*kwargs["w6"], wires=3 % n_qubits)
-            qp.RX(kwargs["w7"], wires=4 % n_qubits)
-            return [qp.expval(qp.PauliZ(i)) for i in range(output_dim)]
+            qml.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
+            qml.templates.StronglyEntanglingLayers(kwargs["w1"], wires=list(range(n_qubits)))
+            qml.RX(kwargs["w2"][0], wires=0 % n_qubits)
+            qml.RX(kwargs["w3"], wires=1 % n_qubits)
+            qml.Rot(*kwargs["w4"], wires=2 % n_qubits)
+            qml.templates.StronglyEntanglingLayers(kwargs["w5"], wires=list(range(n_qubits)))
+            qml.Rot(*kwargs["w6"], wires=3 % n_qubits)
+            qml.RX(kwargs["w7"], wires=4 % n_qubits)
+            return [qml.expval(qml.PauliZ(i)) for i in range(output_dim)]
 
         layer = TorchLayer(c, w)
         x = torch.ones(n_qubits)
@@ -283,7 +284,7 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
     def test_non_input_defaults(self, n_qubits, output_dim):  # pylint: disable=no-self-use
         """Test that everything works when default arguments that are not the input argument are
         present in the QNode"""
-        dev = qp.device("default.qubit", wires=n_qubits)
+        dev = qml.device("default.qubit", wires=n_qubits)
         w = {
             "w1": (3, n_qubits, 3),
             "w2": (1,),
@@ -294,20 +295,20 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
             "w7": 1,
         }
 
-        @qp.qnode(dev, interface="torch")
+        @qml.qnode(dev, interface="torch")
         def c(inputs, w1, w2, w4, w5, w6, w7, w3=0.5):  # pylint: disable=too-many-arguments
             """A circuit that embeds data using the AngleEmbedding and then performs a variety of
             operations. The output is a PauliZ measurement on the first output_dim qubits. One set of
             parameters, w5, are specified as non-trainable."""
-            qp.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
-            qp.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
-            qp.RX(w2[0], wires=0 % n_qubits)
-            qp.RX(w3, wires=1 % n_qubits)
-            qp.Rot(*w4, wires=2 % n_qubits)
-            qp.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
-            qp.Rot(*w6, wires=3 % n_qubits)
-            qp.RX(w7, wires=4 % n_qubits)
-            return [qp.expval(qp.PauliZ(i)) for i in range(output_dim)]
+            qml.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
+            qml.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
+            qml.RX(w2[0], wires=0 % n_qubits)
+            qml.RX(w3, wires=1 % n_qubits)
+            qml.Rot(*w4, wires=2 % n_qubits)
+            qml.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
+            qml.Rot(*w6, wires=3 % n_qubits)
+            qml.RX(w7, wires=4 % n_qubits)
+            return [qml.expval(qml.PauliZ(i)) for i in range(output_dim)]
 
         layer = TorchLayer(c, w)
         x = torch.ones(n_qubits)
@@ -366,32 +367,6 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
 
         assert torch.allclose(layer_out, circuit_out)
 
-    @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(2))
-    @pytest.mark.parametrize("shots", [5, [5, 5]])
-    def test_evaluate_qnode_shots(
-        self, get_circuit_shots, n_qubits, shots
-    ):  # pylint: disable=no-self-use
-        """Tests _evaluate_qnode() works with different type of shots"""
-
-        c, w = get_circuit_shots
-        layer = TorchLayer(c, w)
-        x = torch.ones(n_qubits)
-
-        layer_out = layer._evaluate_qnode(x)  # pylint: disable=protected-access
-        weights = layer.qnode_weights.values()
-        circuit_out_raw = c(x, *weights)
-
-        if isinstance(shots, list):
-
-            assert isinstance(layer_out, tuple)
-            for out, exp in zip(layer_out, circuit_out_raw):
-                circuit_out = torch.hstack(exp)
-                assert out.shape == circuit_out.shape
-
-        else:
-            circuit_out = torch.hstack(circuit_out_raw)
-            assert layer_out.shape == circuit_out.shape
-
     @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(1))
     def test_evaluate_qnode_shuffled_args(
         self, get_circuit, output_dim, n_qubits
@@ -401,18 +376,18 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
         directly"""
         c, w = get_circuit
 
-        @qp.qnode(qp.device("default.qubit", wires=n_qubits), interface="torch")
+        @qml.qnode(qml.device("default.qubit", wires=n_qubits), interface="torch")
         def c_shuffled(w1, inputs, w2, w3, w4, w5, w6, w7):  # pylint: disable=too-many-arguments
             """Version of the circuit with a shuffled signature"""
-            qp.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
-            qp.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
-            qp.RX(w2[0], wires=0)
-            qp.RX(w3, wires=0)
-            qp.Rot(*w4, wires=0)
-            qp.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
-            qp.Rot(*w6, wires=0)
-            qp.RX(w7, wires=0)
-            return [qp.expval(qp.PauliZ(i)) for i in range(output_dim)]
+            qml.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
+            qml.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
+            qml.RX(w2[0], wires=0)
+            qml.RX(w3, wires=0)
+            qml.Rot(*w4, wires=0)
+            qml.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
+            qml.Rot(*w6, wires=0)
+            qml.RX(w7, wires=0)
+            return [qml.expval(qml.PauliZ(i)) for i in range(output_dim)]
 
         layer = TorchLayer(c_shuffled, w)
         x = torch.Tensor(np.ones(n_qubits))
@@ -431,20 +406,20 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
         default argument, i.e., that it gives the same result as calling the QNode directly"""
         c, w = get_circuit
 
-        @qp.qnode(qp.device("default.qubit", wires=n_qubits), interface="torch")
+        @qml.qnode(qml.device("default.qubit", wires=n_qubits), interface="torch")
         def c_default(
             w1, w2, w3, w4, w5, w6, w7, inputs=None
         ):  # pylint: disable=too-many-arguments
             """Version of the circuit with inputs as a default argument"""
-            qp.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
-            qp.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
-            qp.RX(w2[0], wires=0)
-            qp.RX(w3, wires=0)
-            qp.Rot(*w4, wires=0)
-            qp.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
-            qp.Rot(*w6, wires=0)
-            qp.RX(w7, wires=0)
-            return [qp.expval(qp.PauliZ(i)) for i in range(output_dim)]
+            qml.templates.AngleEmbedding(inputs, wires=list(range(n_qubits)))
+            qml.templates.StronglyEntanglingLayers(w1, wires=list(range(n_qubits)))
+            qml.RX(w2[0], wires=0)
+            qml.RX(w3, wires=0)
+            qml.Rot(*w4, wires=0)
+            qml.templates.StronglyEntanglingLayers(w5, wires=list(range(n_qubits)))
+            qml.Rot(*w6, wires=0)
+            qml.RX(w7, wires=0)
+            return [qml.expval(qml.PauliZ(i)) for i in range(output_dim)]
 
         layer = TorchLayer(c_default, w)
         x = torch.Tensor(np.ones(n_qubits))
@@ -479,33 +454,6 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
         layer_out = layer.forward(x)
 
         assert layer_out.shape == torch.Size((2, output_dim))
-
-    @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(2))
-    @pytest.mark.parametrize("shots", [[10, 10]])
-    def test_forward_shot_batching(self, get_circuit_shots, output_dim, n_qubits):
-        """Tests forward() works with shot batching"""
-
-        c, w = get_circuit_shots
-        layer = TorchLayer(c, w)
-        x = torch.Tensor(np.ones(n_qubits))
-
-        layer_out = layer.forward(x)
-        assert layer_out.shape == torch.Size((2, output_dim))
-
-    @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(2))
-    @pytest.mark.parametrize("batch_size", [4, 6])
-    @pytest.mark.parametrize("shots", [[10, 10]])
-    def test_forward_shot_batching_broadcasting(
-        self, get_circuit_shots, batch_size, output_dim, n_qubits
-    ):
-        """Tests forward() works with shot batching and broadcasting"""
-
-        c, w = get_circuit_shots
-        layer = TorchLayer(c, w)
-        x = torch.Tensor(np.ones((batch_size, n_qubits)))
-
-        layer_out = layer.forward(x)
-        assert layer_out.shape == torch.Size((2, batch_size, output_dim))
 
     @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(2))
     @pytest.mark.parametrize("batch_size", [2, 4, 6])
@@ -563,113 +511,17 @@ class TestTorchLayer:  # pylint: disable=too-many-public-methods
             assert torch.allclose(g1, g2)
         assert len(weights) == len(list(layer.parameters()))
 
-    @pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(3))
-    def test_construct(self, get_circuit, n_qubits):
-        """Test that the construct method builds the correct tape with correct differentiability"""
-        c, w = get_circuit
-        layer = TorchLayer(c, w)
-
-        x = torch.ones(n_qubits)
-
-        tape = qp.workflow.construct_tape(layer)(x)
-
-        assert tape is not None
-        assert (
-            len(tape.get_parameters(trainable_only=False))
-            == len(tape.get_parameters(trainable_only=True)) + 1
-        )
-
-
-@pytest.mark.parametrize(
-    "num_qubits, weight_shapes",
-    [(2, {"weights": [3, 2, 3]}), (3, {"weights": [7, 3, 3]}), (4, {"weights": [3, 4, 3]})],
-)
-def test_forward_tuple(num_qubits, weight_shapes):
-    """Test that the forward method accepts a tuple input and returns a torch tensor."""
-
-    dev = qp.device("default.qubit", wires=num_qubits)
-
-    @qp.qnode(dev)
-    def qnode(inputs, weights):
-        qp.templates.AngleEmbedding(inputs, wires=range(num_qubits))
-        qp.templates.StronglyEntanglingLayers(weights, wires=range(num_qubits))
-        return qp.expval(qp.Z(0)), qp.var(qp.Y(1))
-
-    qlayer = qp.qnn.TorchLayer(qnode, weight_shapes)
-    x = torch.tensor(np.random.random((5, num_qubits)), dtype=torch.float32)
-    assert isinstance(qlayer.forward(x), torch.Tensor)
-
-
-def test_forward_tuple_batched_expval():
-    """Test that TorchLayer produces correct shape and gradient flow when the
-    QNode returns a tuple of expval measurements with batched inputs.
-
-    This is a regression test for a bug where TorchLayer._evaluate_qnode fails
-    with 'shape is invalid for input of size N' when the QNode returns multiple
-    qp.expval as a tuple and receives batched inputs. The output should have
-    shape (batch_size, n_measurements) so it can feed into nn.Linear downstream.
-    """
-    dev = qp.device("default.qubit", wires=2)
-
-    @qp.qnode(dev, interface="torch")
-    def circuit(inputs, weights):
-        qp.templates.AngleEmbedding(inputs, wires=range(2))
-        qp.RY(weights[0], wires=0)
-        qp.RY(weights[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        return qp.expval(qp.Z(0)), qp.expval(qp.Z(1))
-
-    weight_shapes = {"weights": 2}
-    qlayer = qp.qnn.TorchLayer(circuit, weight_shapes)
-    batch = torch.rand(5, 2, requires_grad=True)
-
-    result = qlayer(batch)
-
-    assert isinstance(result, torch.Tensor)
-    assert result.shape == (5, 2), (
-        f"Expected shape (5, 2) but got {result.shape}. "
-        "TorchLayer must produce (batch_size, n_measurements) for tuple expval returns."
-    )
-
-    # Verify gradient flow through the layer
-    loss = result.sum()
-    loss.backward()
-    for param in qlayer.parameters():
-        assert param.grad is not None, "Gradient did not flow to TorchLayer weights"
-
 
 @pytest.mark.all_interfaces
-@pytest.mark.parametrize("interface", ["autograd", "jax"])
-def test_invalid_interface_error(interface):
-    """Test an error gets raised if input QNode has the wrong interface"""
-    dev = qp.device("default.qubit", wires=3)
-    weight_shapes = {"w1": 1}
-
-    @qp.qnode(dev, interface=interface)
-    def circuit(inputs, w1):
-        qp.templates.AngleEmbedding(inputs, wires=[0, 1])
-        qp.RX(w1, wires=0)
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.PauliZ(1))
-
-    with pytest.raises(ValueError, match="Invalid interface"):
-        _ = TorchLayer(circuit, weight_shapes)
-
-
-@pytest.mark.torch
-@pytest.mark.parametrize("interface", ("auto", "torch"))
-def test_qnode_interface_not_mutated(interface):
-    """Test that the input QNode's interface is not mutated by TorchLayer"""
-    dev = qp.device("default.qubit", wires=3)
-    weight_shapes = {"w1": 1}
-
-    @qp.qnode(dev, interface=interface)
-    def circuit(inputs, w1):
-        qp.templates.AngleEmbedding(inputs, wires=[0, 1])
-        qp.RX(w1, wires=0)
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.PauliZ(1))
-
-    qlayer = TorchLayer(circuit, weight_shapes)
-    assert qlayer.qnode.interface == circuit.interface == qp.math.Interface(interface).value
+@pytest.mark.parametrize("interface", ["autograd", "torch", "tf"])
+@pytest.mark.parametrize("n_qubits, output_dim", indices_up_to(1))
+@pytest.mark.usefixtures("get_circuit")  # this fixture is in tests/qnn/conftest.py
+def test_interface_conversion(get_circuit):
+    """Test if input QNodes with all types of interface are converted internally to the PyTorch
+    interface"""
+    c, w = get_circuit
+    layer = TorchLayer(c, w)
+    assert layer.qnode.interface == "torch"
 
 
 @pytest.mark.torch
@@ -744,9 +596,9 @@ class TestTorchLayerIntegration:
         state_dict = module.state_dict()
         dict_keys = set(state_dict.keys())
 
-        clayer_weights = {f"clayer{i + 1}.weight" for i in range(3)}
-        clayer_biases = {f"clayer{i + 1}.bias" for i in range(3)}
-        qlayer_params = {f"qlayer{i + 1}.w{j + 1}" for i in range(2) for j in range(len(w))}
+        clayer_weights = set(f"clayer{i + 1}.weight" for i in range(3))
+        clayer_biases = set(f"clayer{i + 1}.bias" for i in range(3))
+        qlayer_params = set(f"qlayer{i + 1}.w{j + 1}" for i in range(2) for j in range(len(w)))
 
         all_params = clayer_weights | clayer_biases | qlayer_params
 
@@ -793,14 +645,15 @@ def test_vjp_is_unwrapped_for_param_shift():
     """Test that the intermediate vjps used by the batch Torch interface
     are unwrapped and no error is raised for a custom operation.
 
-    Note: the execution flow of the operation resembles a custom diagonal
-    gate whose matrix is built from a trainable parameter.
+    Note: the execution flow of the operation resembles the implementation
+    of the Kerr gate in Strawberry Fields as a similar example was failing
+    for qml.Kerr and the strawberryfields.fock device.
     """
     nqubits = 2
 
-    device = qp.device("default.qubit", wires=nqubits)
+    device = qml.device("default.qubit", wires=nqubits)
 
-    class DummyOp(qp.operation.Operation):  # pylint: disable=too-few-public-methods
+    class DummyOp(qml.operation.Operation):  # pylint: disable=too-few-public-methods
         """Dummy operation."""
 
         num_wires = 1
@@ -813,14 +666,14 @@ def test_vjp_is_unwrapped_for_param_shift():
             z = params[0]
             return np.diag([z, z])
 
-    @qp.qnode(device=device, interface="torch", diff_method="parameter-shift")
+    @qml.qnode(device=device, interface="torch", diff_method="parameter-shift")
     def circ(inputs, w0):  # pylint: disable=unused-argument
         DummyOp(inputs[0], wires=0)
-        return qp.expval(qp.PauliZ(0))
+        return qml.expval(qml.PauliZ(0))
 
     weight_shapes = {"w0": (1)}
 
-    qlayer = qp.qnn.TorchLayer(circ, weight_shapes)
+    qlayer = qml.qnn.TorchLayer(circ, weight_shapes)
     qlayers = torch.nn.Sequential(qlayer)
 
     x = torch.tensor([0.1], dtype=float, requires_grad=True)
@@ -841,14 +694,14 @@ def test_vjp_is_unwrapped_for_param_shift():
 @pytest.mark.torch
 def test_batch_input_single_measure(tol):
     """Test input batching in torch"""
-    dev = qp.device("default.qubit")
+    dev = qml.device("default.qubit.torch", wires=4)
 
-    @qp.qnode(dev, interface="torch", diff_method="parameter-shift")
+    @qml.qnode(dev, diff_method="parameter-shift")
     def circuit(x, weights):
-        qp.AngleEmbedding(x, wires=range(4), rotation="Y")
-        qp.RY(weights[0], wires=0)
-        qp.RY(weights[1], wires=1)
-        return qp.probs(op=qp.PauliZ(1))
+        qml.AngleEmbedding(x, wires=range(4), rotation="Y")
+        qml.RY(weights[0], wires=0)
+        qml.RY(weights[1], wires=1)
+        return qml.probs(op=qml.PauliZ(1))
 
     TorchLayer.set_input_argument("x")
     layer = TorchLayer(circuit, weight_shapes={"weights": (2,)})
@@ -856,9 +709,10 @@ def test_batch_input_single_measure(tol):
     res = layer(x)
 
     assert res.shape == (10, 2)
+    assert dev.num_executions == 1
 
     for x_, r in zip(x, res):
-        assert qp.math.allclose(r, circuit(x_, layer.qnode_weights["weights"]), atol=tol)
+        assert qml.math.allclose(r, circuit(x_, layer.qnode_weights["weights"]), atol=tol)
 
     # reset back to the old name
     TorchLayer.set_input_argument("inputs")
@@ -867,14 +721,14 @@ def test_batch_input_single_measure(tol):
 @pytest.mark.torch
 def test_batch_input_multi_measure(tol):
     """Test input batching in torch for multiple measurements"""
-    dev = qp.device("default.qubit")
+    dev = qml.device("default.qubit.torch", wires=4)
 
-    @qp.qnode(dev, interface="torch", diff_method="parameter-shift")
+    @qml.qnode(dev, diff_method="parameter-shift")
     def circuit(x, weights):
-        qp.AngleEmbedding(x, wires=range(4), rotation="Y")
-        qp.RY(weights[0], wires=0)
-        qp.RY(weights[1], wires=1)
-        return [qp.expval(qp.PauliZ(1)), qp.probs(wires=range(2))]
+        qml.AngleEmbedding(x, wires=range(4), rotation="Y")
+        qml.RY(weights[0], wires=0)
+        qml.RY(weights[1], wires=1)
+        return [qml.expval(qml.PauliZ(1)), qml.probs(wires=range(2))]
 
     TorchLayer.set_input_argument("x")
     layer = TorchLayer(circuit, weight_shapes={"weights": (2,)})
@@ -882,10 +736,11 @@ def test_batch_input_multi_measure(tol):
     res = layer(x)
 
     assert res.shape == (10, 5)
+    assert dev.num_executions == 1
 
     for x_, r in zip(x, res):
         exp = torch.hstack(circuit(x_, layer.qnode_weights["weights"]))
-        assert qp.math.allclose(r, exp, atol=tol)
+        assert qml.math.allclose(r, exp, atol=tol)
 
     # reset back to the old name
     TorchLayer.set_input_argument("inputs")
@@ -893,17 +748,17 @@ def test_batch_input_multi_measure(tol):
 
 @pytest.mark.torch
 def test_draw():
-    """Test that a TorchLayer can be drawn using qp.draw"""
+    """Test that a TorchLayer can be drawn using qml.draw"""
 
-    dev = qp.device("default.qubit", wires=2)
+    dev = qml.device("default.qubit", wires=2)
     weight_shapes = {"w1": 1, "w2": (3, 2, 3)}
 
-    @qp.qnode(dev, interface="torch")
+    @qml.qnode(dev, interface="torch")
     def circuit(inputs, w1, w2):
-        qp.templates.AngleEmbedding(inputs, wires=[0, 1])
-        qp.RX(w1, wires=0)
-        qp.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.PauliZ(1))
+        qml.templates.AngleEmbedding(inputs, wires=[0, 1])
+        qml.RX(w1, wires=0)
+        qml.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.PauliZ(1))
 
     qlayer = TorchLayer(circuit, weight_shapes)
 
@@ -913,7 +768,7 @@ def test_draw():
     batch_size = 5
     x = torch.Tensor(np.random.uniform(0, 1, (batch_size, 2)))
 
-    actual = qp.draw(qlayer)(x)
+    actual = qml.draw(qlayer)(x)
 
     w1 = f"{qlayer.qnode_weights['w1'].detach().numpy():.2f}"
     m1 = f"{qlayer.qnode_weights['w2'].detach()}"
@@ -930,17 +785,17 @@ def test_draw():
 
 @pytest.mark.torch
 def test_draw_mpl():
-    """Test that a TorchLayer can be drawn using qp.draw_mpl"""
+    """Test that a TorchLayer can be drawn using qml.draw_mpl"""
 
-    dev = qp.device("default.qubit", wires=2)
+    dev = qml.device("default.qubit", wires=2)
     weight_shapes = {"w1": 1, "w2": (3, 2, 3)}
 
-    @qp.qnode(dev, interface="torch")
+    @qml.qnode(dev, interface="torch")
     def circuit(inputs, w1, w2):
-        qp.templates.AngleEmbedding(inputs, wires=[0, 1])
-        qp.RX(w1, wires=0)
-        qp.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.PauliZ(1))
+        qml.templates.AngleEmbedding(inputs, wires=[0, 1])
+        qml.RX(w1, wires=0)
+        qml.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.PauliZ(1))
 
     qlayer = TorchLayer(circuit, weight_shapes)
 
@@ -950,7 +805,7 @@ def test_draw_mpl():
     batch_size = 5
     x = torch.Tensor(np.random.uniform(0, 1, (batch_size, 2)))
 
-    _, ax = qp.draw_mpl(qlayer)(x)
+    _, ax = qml.draw_mpl(qlayer)(x)
 
     assert len(ax.patches) == 9  # 3 boxes, 3 patches for each measure
     assert len(ax.lines) == 2  # 2 wires
@@ -965,33 +820,35 @@ def test_draw_mpl():
 
 @pytest.mark.torch
 def test_specs():
-    """Test that the qp.specs transform works for TorchLayer"""
+    """Test that the qml.specs transform works for TorchLayer"""
 
-    dev = qp.device("default.qubit", wires=3)
+    dev = qml.device("default.qubit", wires=3)
     weight_shapes = {"w1": 1, "w2": (3, 2, 3)}
 
-    @qp.qnode(dev, interface="torch")
+    @qml.qnode(dev, interface="torch")
     def circuit(inputs, w1, w2):
-        qp.templates.AngleEmbedding(inputs, wires=[0, 1])
-        qp.RX(w1, wires=0)
-        qp.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.PauliZ(1))
+        qml.templates.AngleEmbedding(inputs, wires=[0, 1])
+        qml.RX(w1, wires=0)
+        qml.templates.StronglyEntanglingLayers(w2, wires=[0, 1])
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.PauliZ(1))
 
     qlayer = TorchLayer(circuit, weight_shapes)
 
     batch_size = 5
     x = torch.Tensor(np.random.uniform(0, 1, (batch_size, 2)))
 
-    info = qp.specs(qlayer)(x)
+    info = qml.specs(qlayer)(x)
 
-    gate_types = {"AngleEmbedding": 1, "RX": 1, "StronglyEntanglingLayers": 1}
-    expected_resources = qp.resource.SpecsResources(
-        num_wires=2,
-        counts=gate_types,
-        measurement_processes={"expval(PauliZ)": 2},
-        circuit_depth=3,
+    gate_sizes = defaultdict(int, {1: 1, 2: 2})
+    gate_types = defaultdict(int, {"AngleEmbedding": 1, "RX": 1, "StronglyEntanglingLayers": 1})
+    expected_resources = qml.resource.Resources(
+        num_wires=2, num_gates=3, gate_types=gate_types, gate_sizes=gate_sizes, depth=3
     )
     assert info["resources"] == expected_resources
 
-    assert info["num_device_wires"] == 3
+    assert info["num_observables"] == 2
+    assert info["num_diagonalizing_gates"] == 0
+    assert info["num_device_wires"] == 2
+    assert info["num_trainable_params"] == 0
+    assert info["interface"] == "torch"
     assert info["device_name"] == "default.qubit"

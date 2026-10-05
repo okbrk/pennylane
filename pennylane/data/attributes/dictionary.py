@@ -14,8 +14,10 @@
 """Contains an DatasetAttribute that allows for heterogenous dictionaries
 of Dataset attributes."""
 
-from collections.abc import Iterator, Mapping, MutableMapping
-from typing import Generic
+
+import typing
+from collections.abc import Mapping
+from typing import Dict, Generic, Union
 
 from pennylane.data.base.attribute import DatasetAttribute
 from pennylane.data.base.hdf5 import HDF5Any, HDF5Group
@@ -23,10 +25,10 @@ from pennylane.data.base.mapper import MapperMixin
 from pennylane.data.base.typing_util import T
 
 
-class DatasetDict(
+class DatasetDict(  # pylint: disable=too-many-ancestors
     Generic[T],
-    DatasetAttribute[HDF5Group, Mapping[str, T], Mapping[str, T]],
-    MutableMapping[str, T],
+    DatasetAttribute[HDF5Group, typing.Mapping[str, T], typing.Mapping[str, T]],
+    typing.MutableMapping[str, T],
     MapperMixin,
 ):
     """Provides a dict-like collection for Dataset attribute types. Keys must
@@ -34,15 +36,15 @@ class DatasetDict(
 
     type_id = "dict"
 
-    def __post_init__(self, value: Mapping[str, T]):
+    def __post_init__(self, value: typing.Mapping[str, T]):
         super().__post_init__(value)
         self.update(value)
 
     @classmethod
-    def default_value(cls) -> dict:
+    def default_value(cls) -> Dict:
         return {}
 
-    def hdf5_to_value(self, bind: HDF5Group) -> MutableMapping[str, T]:
+    def hdf5_to_value(self, bind: HDF5Group) -> typing.MutableMapping[str, T]:
         return self
 
     def value_to_hdf5(self, bind_parent: HDF5Group, key: str, value: None) -> HDF5Group:
@@ -50,10 +52,10 @@ class DatasetDict(
 
         return grp
 
-    def copy_value(self) -> dict[str, T]:
+    def copy_value(self) -> Dict[str, T]:
         return {key: attr.copy_value() for key, attr in self._mapper.items()}
 
-    def copy(self) -> dict[str, T]:
+    def copy(self) -> Dict[str, T]:
         """Returns a copy of this mapping as a builtin ``dict``, with all
         elements copied."""
         return self.copy_value()
@@ -63,7 +65,7 @@ class DatasetDict(
 
         return self._mapper[__key].get_value()
 
-    def __setitem__(self, __key: str, __value: T | DatasetAttribute[HDF5Any, T, T]) -> None:
+    def __setitem__(self, __key: str, __value: Union[T, DatasetAttribute[HDF5Any, T, T]]) -> None:
         self._check_key(__key)
 
         if __key in self:
@@ -91,7 +93,7 @@ class DatasetDict(
 
         return all(__value[key] == self[key] for key in __value.keys())
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> typing.Iterator[str]:
         return (key for key in self.bind.keys())
 
     def __str__(self) -> str:

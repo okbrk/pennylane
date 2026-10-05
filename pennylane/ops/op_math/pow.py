@@ -14,31 +14,29 @@
 """
 This submodule defines the symbolic operation that stands for the power of an operator.
 """
-
 import copy
 from typing import Union
 
 from scipy.linalg import fractional_matrix_power
 
-import pennylane as qp
-from pennylane import math
-from pennylane.core.operator import Operation, Operator, Operator2, abstractify
-from pennylane.core.queuing import QueuingManager, apply
-from pennylane.exceptions import (
-    AdjointUndefinedError,
+import pennylane as qml
+from pennylane import math as qmlmath
+from pennylane.operation import (
     DecompositionUndefinedError,
+    Observable,
+    Operation,
     PowUndefinedError,
     SparseMatrixUndefinedError,
 )
 from pennylane.ops.identity import Identity
+from pennylane.queuing import QueuingManager, apply
 
-from .pow2 import Pow2
 from .symbolicop import ScalarSymbolicOp
 
 _superscript = str.maketrans("0123456789.+-", "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁺⁻")
 
 
-def pow(base, z=1, lazy=True) -> Operator:
+def pow(base, z=1, lazy=True, id=None):
     """Raise an Operator to a power.
 
     Args:
@@ -48,6 +46,8 @@ def pow(base, z=1, lazy=True) -> Operator:
     Keyword Args:
         lazy=True (bool): In lazy mode, all operations are wrapped in a ``Pow`` class
             and handled later. If ``lazy=False``, operation-specific simplifications are first attempted.
+        id (str): custom label given to an operator instance,
+            can be useful for some applications where the instance has to be identified
 
     Returns:
         Operator
@@ -56,53 +56,51 @@ def pow(base, z=1, lazy=True) -> Operator:
 
         This operator supports a batched base, a batched coefficient and a combination of both:
 
-        >>> op = qp.pow(qp.RX([1, 2, 3], wires=0), z=4)
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.pow(qml.RX([1, 2, 3], wires=0), z=4)
+        >>> qml.matrix(op).shape
         (3, 2, 2)
-        >>> op = qp.pow(qp.RX(1, wires=0), z=[1, 2, 3])
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.pow(qml.RX(1, wires=0), z=[1, 2, 3])
+        >>> qml.matrix(op).shape
         (3, 2, 2)
-        >>> op = qp.pow(qp.RX([1, 2, 3], wires=0), z=[4, 5, 6])
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.pow(qml.RX([1, 2, 3], wires=0), z=[4, 5, 6])
+        >>> qml.matrix(op).shape
         (3, 2, 2)
 
         But it doesn't support batching of operators:
 
-        >>> op = qp.pow([qp.RX(1, wires=0), qp.RX(2, wires=0)], z=4)
-        Traceback (most recent call last):
-            ...
+        >>> op = qml.pow([qml.RX(1, wires=0), qml.RX(2, wires=0)], z=4)
         AttributeError: 'list' object has no attribute 'name'
 
     .. seealso:: :class:`~.Pow`, :meth:`~.Operator.pow`.
 
     **Example**
 
-    >>> qp.pow(qp.X(0), 0.5)
+    >>> qml.pow(qml.X(0), 0.5)
     X(0)**0.5
-    >>> qp.pow(qp.X(0), 0.5, lazy=False)
-    SX(0)
-    >>> qp.pow(qp.X(0), 0.1, lazy=False)
+    >>> qml.pow(qml.X(0), 0.5, lazy=False)
+    SX(wires=[0])
+    >>> qml.pow(qml.X(0), 0.1, lazy=False)
     X(0)**0.1
-    >>> qp.pow(qp.X(0), 2, lazy=False)
+    >>> qml.pow(qml.X(0), 2, lazy=False)
     I(0)
 
-    Lazy behaviour can also be accessed via ``op ** z``.
+    Lazy behavior can also be accessed via ``op ** z``.
 
     """
     if lazy:
-        return Pow2(base, z) if isinstance(base, Operator2) else Pow(base, z)
+        return Pow(base, z, id=id)
     try:
         pow_ops = base.pow(z)
     except PowUndefinedError:
-        return Pow2(base, z) if isinstance(base, Operator2) else Pow(base, z)
+        return Pow(base, z, id=id)
 
     num_ops = len(pow_ops)
     if num_ops == 0:
-        pow_op = qp.Identity(base.wires)
+        pow_op = qml.Identity(base.wires, id=id)
     elif num_ops == 1:
         pow_op = pow_ops[0]
     else:
-        pow_op = qp.prod(*pow_ops)
+        pow_op = qml.prod(*pow_ops)
     QueuingManager.remove(base)
 
     return pow_op
@@ -117,61 +115,66 @@ class Pow(ScalarSymbolicOp):
 
     **Example**
 
-    >>> sqrt_x = Pow(qp.X(0), 0.5)
+    >>> sqrt_x = Pow(qml.X(0), 0.5)
     >>> sqrt_x.decomposition()
-    [SX(0)]
-    >>> qp.matrix(sqrt_x)
+    [SX(wires=[0])]
+    >>> qml.matrix(sqrt_x)
     array([[0.5+0.5j, 0.5-0.5j],
-           [0.5-0.5j, 0.5+0.5j]])
-    >>> qp.matrix(qp.SX(0))
+                [0.5-0.5j, 0.5+0.5j]])
+    >>> qml.matrix(qml.SX(0))
     array([[0.5+0.5j, 0.5-0.5j],
-           [0.5-0.5j, 0.5+0.5j]])
-    >>> qp.matrix(Pow(qp.T(0), 1.234))
+       [0.5-0.5j, 0.5+0.5j]])
+    >>> qml.matrix(Pow(qml.T(0), 1.234))
     array([[1.        +0.j        , 0.        +0.j        ],
-           [0.        +0.j        , 0.56...+0.8244...j]])
+       [0.        +0.j        , 0.56597465+0.82442265j]])
 
     """
 
-    resource_keys = {"base_class", "base_params", "z"}
-
     def _flatten(self):
-        return (self.base,), (self.z,)
+        return (self.base, self.z), tuple()
 
     @classmethod
-    def _unflatten(cls, data, metadata):
-        return pow(data[0], z=metadata[0])
+    def _unflatten(cls, data, _):
+        return pow(data[0], z=data[1])
 
-    def __new__(cls, base=None, z=1):
+    # pylint: disable=unused-argument
+    def __new__(cls, base=None, z=1, id=None):
         """Mixes in parents based on inheritance structure of base.
 
         Though all the types will be named "Pow", their *identity* and location in memory will be
         different based on ``base``'s inheritance.  We cache the different types in private class
         variables so that:
 
-        >>> z = 2
         >>> Pow(op, z).__class__ is Pow(op, z).__class__
         True
         >>> type(Pow(op, z)) == type(Pow(op, z))
         True
         >>> isinstance(Pow(op, z), type(Pow(op, z)))
         True
-        >>> Pow(qp.RX(1.2, wires=0), 0.5).__class__ is PowOperation
+        >>> Pow(qml.RX(1.2, wires=0), 0.5).__class__ is Pow._operation_type
+        True
+        >>> Pow(qml.X(0), 1.2).__class__ is Pow._operation_observable_type
         True
 
         """
 
         if isinstance(base, Operation):
+            if isinstance(base, Observable):
+                return object.__new__(PowOpObs)
 
             # not an observable
             return object.__new__(PowOperation)
 
+        if isinstance(base, Observable):
+            return object.__new__(PowObs)
+
         return object.__new__(Pow)
 
-    def __init__(self, base=None, z=1):
+    def __init__(self, base=None, z=1, id=None):
         self.hyperparameters["z"] = z
         self._name = f"{base.name}**{z}"
 
-        super().__init__(base, scalar=z)
+        super().__init__(base, scalar=z, id=id)
 
         if isinstance(self.z, int) and self.z > 0:
             if (base_pauli_rep := getattr(self.base, "pauli_rep", None)) and (
@@ -193,26 +196,6 @@ class Pow(ScalarSymbolicOp):
             else f"{self.base}**{self.z}"
         )
 
-    @classmethod
-    def __subclasshook__(cls, subclass):
-        if subclass == Pow2:
-            return True
-        return NotImplemented
-
-    @property
-    def resource_params(self) -> dict:
-        if isinstance(self.base, Operator2):
-            return {
-                "base_class": type(self.base),
-                "base_params": abstractify(self.base).arguments,
-                "z": self.z,
-            }
-        return {
-            "base_class": type(self.base),
-            "base_params": self.base.resource_params,
-            "z": self.z,
-        }
-
     @property
     def z(self):
         """The exponent."""
@@ -227,6 +210,10 @@ class Pow(ScalarSymbolicOp):
         """The trainable parameters"""
         return self.base.data
 
+    @data.setter
+    def data(self, new_data):
+        self.base.data = new_data
+
     def label(self, decimals=None, base_label=None, cache=None):
         z_string = format(self.z).translate(_superscript)
         base_label = self.base.label(decimals, base_label, cache=cache)
@@ -237,21 +224,33 @@ class Pow(ScalarSymbolicOp):
     @staticmethod
     def _matrix(scalar, mat):
         if isinstance(scalar, int):
-            return math.linalg.matrix_power(mat, scalar)
+            if qml.math.get_deep_interface(mat) != "tensorflow":
+                return qmlmath.linalg.matrix_power(mat, scalar)
+
+            # TensorFlow doesn't have a matrix_power func, and scipy.linalg.fractional_matrix_power
+            # is not differentiable. So we use a custom implementation of matrix power for integer
+            # exponents below.
+            if scalar == 0:
+                # Used instead of qml.math.eye for tracing derivatives
+                return mat @ qmlmath.linalg.inv(mat)
+            if scalar > 0:
+                out = mat
+            else:
+                out = mat = qmlmath.linalg.inv(mat)
+                scalar *= -1
+
+            for _ in range(scalar - 1):
+                out @= mat
+            return out
 
         return fractional_matrix_power(mat, scalar)
 
-    # pylint: disable=arguments-renamed, invalid-overridden-method
-    @property
-    def has_sparse_matrix(self) -> bool:
-        return self.base.has_sparse_matrix and isinstance(self.z, int)
-
     # pylint: disable=arguments-differ
     @staticmethod
-    def compute_sparse_matrix(*params, base=None, z=0, format="csr"):
+    def compute_sparse_matrix(*params, base=None, z=0):
         if isinstance(z, int):
             base_matrix = base.compute_sparse_matrix(*params, **base.hyperparameters)
-            return (base_matrix**z).asformat(format)
+            return base_matrix**z
         raise SparseMatrixUndefinedError
 
     # pylint: disable=arguments-renamed, invalid-overridden-method
@@ -263,11 +262,6 @@ class Pow(ScalarSymbolicOp):
             self.base.pow(self.z)
         except PowUndefinedError:
             return False
-        except Exception as e:
-            # some pow methods cant handle a batched z
-            if qp.math.ndim(self.z) != 0:
-                return False
-            raise e
         return True
 
     def decomposition(self):
@@ -280,8 +274,6 @@ class Pow(ScalarSymbolicOp):
                 return [copy.copy(self.base) for _ in range(self.z)]
             # TODO: consider: what if z is an int and less than 0?
             # do we want Pow(base, -1) to be a "more fundamental" op
-            raise DecompositionUndefinedError from e
-        except Exception as e:
             raise DecompositionUndefinedError from e
 
     @property
@@ -318,9 +310,7 @@ class Pow(ScalarSymbolicOp):
 
     def eigvals(self):
         base_eigvals = self.base.eigvals()
-        is_single_precision = math.get_dtype_name(base_eigvals) in ("float32", "complex64")
-        complex_dtype = "complex64" if is_single_precision else "complex128"
-        return math.cast(base_eigvals, complex_dtype) ** self.z
+        return [value**self.z for value in base_eigvals]
 
     # pylint: disable=arguments-renamed, invalid-overridden-method
     @property
@@ -339,61 +329,32 @@ class Pow(ScalarSymbolicOp):
 
         See also :func:`~.generator`
         """
-        return self.z * self.base.generator()
+        return qml.s_prod(self.z, self.base.generator(), lazy=False)
 
     def pow(self, z):
         return [Pow(base=self.base, z=self.z * z)]
 
-    # pylint: disable=arguments-renamed, invalid-overridden-method
-    @property
-    def has_adjoint(self):
-        return isinstance(self.z, int)
-
     def adjoint(self):
-        """Create an operation that is the adjoint of this one.
-
-        Adjointed operations are the conjugated and transposed version of the
-        original operation. Adjointed ops are equivalent to the inverted operation for unitary
-        gates.
-
-        .. warning::
-
-            The adjoint of a fractional power of an operator is not well-defined due to branch cuts in the power function.
-            Therefore, an ``AdjointUndefinedError`` is raised when the power ``z`` is not an integer.
-
-            The integer power check is a type check, so that floats like ``2.0`` are not considered to be integers.
-
-        Returns:
-            The adjointed operation.
-
-        Raises:
-            AdjointUndefinedError: If the exponent ``z`` is not of type ``int``.
-
-        """
-        if isinstance(self.z, int):
-            return Pow(base=qp.adjoint(self.base), z=self.z)
-        raise AdjointUndefinedError(
-            "The adjoint of Pow operators only is well-defined for integer powers."
-        )
+        return Pow(base=qml.adjoint(self.base), z=self.z)
 
     def simplify(self) -> Union["Pow", Identity]:
         # try using pauli_rep:
         if pr := self.pauli_rep:
-            pr.prune()
+            pr.simplify()
             return pr.operation(wire_order=self.wires)
 
-        base = self.base if qp.capture.enabled() else self.base.simplify()
+        base = self.base.simplify()
         try:
             ops = base.pow(z=self.z)
             if not ops:
-                return qp.Identity(self.wires)
-            if not qp.capture.enabled():
-                ops = [op.simplify() for op in ops]
-            return qp.prod(*ops) if len(ops) > 1 else ops[0]
+                return qml.Identity(self.wires)
+            op = qml.prod(*ops) if len(ops) > 1 else ops[0]
+            return op.simplify()
         except PowUndefinedError:
             return Pow(base=base, z=self.z)
 
 
+# pylint: disable=no-member
 class PowOperation(Pow, Operation):
     """Operation-specific methods and properties for the ``Pow`` class.
 
@@ -416,4 +377,21 @@ class PowOperation(Pow, Operation):
 
     @property
     def control_wires(self):
-        return self.base.control_wires  # pragma: no cover
+        return self.base.control_wires
+
+
+class PowObs(Pow, Observable):
+    """A child class of ``Pow`` that also inherits from ``Observable``."""
+
+    def __new__(cls, *_, **__):
+        return object.__new__(cls)
+
+
+# pylint: disable=too-many-ancestors
+class PowOpObs(PowOperation, Observable):
+    """A child class of ``Pow`` that inherits from both
+    ``Observable`` and ``Operation``.
+    """
+
+    def __new__(cls, *_, **__):
+        return object.__new__(cls)

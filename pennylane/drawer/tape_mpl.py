@@ -18,32 +18,17 @@ Developer note: when making changes to this file, you can run
 `pennylane/doc/_static/tape_mpl/tape_mpl_examples.py` to generate docstring
 images.  If you change the docstring examples, please update this file.
 """
-
-from __future__ import annotations
-
+# pylint: disable=no-member
 from collections import namedtuple
-from collections.abc import Sequence
 from functools import singledispatch
-from typing import TYPE_CHECKING
 
+import pennylane as qml
 from pennylane import ops
-from pennylane.ops.mid_measure.pauli_measure import PauliMeasure
-
-from .drawable_layers import drawable_layers
+from pennylane.measurements import MidMeasureMP
 from .mpldrawer import MPLDrawer
+from .drawable_layers import drawable_layers
+from .utils import convert_wire_order, unwrap_controls, cwire_connections, default_bit_map
 from .style import _set_style
-from .utils import (
-    convert_wire_order,
-    cwire_connections,
-    default_bit_map,
-    transform_deferred_measurements_tape,
-    unwrap_controls,
-)
-
-if TYPE_CHECKING:
-    from pennylane.core.operator import Operator
-    from pennylane.core.qscript import QuantumScript
-
 
 has_mpl = True
 try:
@@ -51,13 +36,14 @@ try:
 except (ModuleNotFoundError, ImportError):  # pragma: no cover
     has_mpl = False
 
-_Config = namedtuple(
-    "_Config", ("decimals", "active_wire_notches", "bit_map", "cwire_layers", "cwire_wires")
-)
+
+_Config = namedtuple("_Config", ("decimals", "active_wire_notches", "bit_map", "terminal_layers"))
 
 
 @singledispatch
-def _add_operation_to_drawer(op: Operator, drawer: MPLDrawer, layer: int, config: _Config) -> None:
+def _add_operation_to_drawer(
+    op: qml.operation.Operator, drawer: MPLDrawer, layer: int, config: _Config
+) -> None:
     """Adds the ``op`` to an ``MPLDrawer`` at the designated location.
 
     Args:
@@ -70,13 +56,16 @@ def _add_operation_to_drawer(op: Operator, drawer: MPLDrawer, layer: int, config
         Adds a depiction of ``op`` to ``drawer``
 
     """
-    op_control_wires, control_values, base = unwrap_controls(op)
-    is_global_op = isinstance(base, (ops.GlobalPhase, ops.Identity))
-    op_wires = list(range(drawer.n_wires)) if len(op.wires) == 0 or is_global_op else op.wires
-    target_wires = [w for w in op_wires if w not in op_control_wires]
+    op_control_wires, control_values = unwrap_controls(op)
 
-    if is_global_op and len(target_wires) == 0:
-        raise ValueError("Can't draw controlled global gate with unknown non-control wires.")
+    target_wires = (
+        [w for w in op.wires if w not in op_control_wires]
+        if len(op.wires) != 0
+        else list(range(drawer.n_wires))
+    )
+
+    if control_values is None:
+        control_values = [True for _ in op_control_wires]
 
     if op_control_wires:
         drawer.ctrl(
@@ -85,7 +74,6 @@ def _add_operation_to_drawer(op: Operator, drawer: MPLDrawer, layer: int, config
             wires_target=target_wires,
             control_values=control_values,
         )
-
     drawer.box_gate(
         layer,
         target_wires,
@@ -119,7 +107,7 @@ def _(op: ops.Toffoli, drawer, layer, _):
 
 @_add_operation_to_drawer.register
 def _(op: ops.MultiControlledX, drawer, layer, _):
-    drawer.CNOT(layer, op.wires, control_values=op.control_values)
+    drawer.CNOT(layer, op.active_wires, control_values=op.control_values)
 
 
 @_add_operation_to_drawer.register
@@ -144,7 +132,15 @@ def _(op: ops.Barrier, drawer, layer, _):
 
 
 @_add_operation_to_drawer.register
-def _(op: ops.MidMeasure, drawer, layer, _):
+def _(op: ops.WireCut, drawer, layer, _):
+    ymin = min(op.wires) - 0.5
+    ymax = max(op.wires) + 0.5
+    drawer.ax.text(layer - 0.35, y=max(op.wires), s="✂", fontsize=40)
+    drawer.ax.vlines(layer, ymin=ymin, ymax=ymax, linestyle="--")
+
+
+@_add_operation_to_drawer.register
+def _(op: MidMeasureMP, drawer, layer, _):
     text = None if op.postselect is None else str(int(op.postselect))
     drawer.measure(layer, op.wires[0], text=text)  # assume one wire
 
@@ -160,29 +156,24 @@ def _(op: ops.MidMeasure, drawer, layer, _):
 
 
 @_add_operation_to_drawer.register
-def _(op: ops.PauliMeasure, drawer, layer, _):
-    drawer.pauli_measure(layer, op.pauli_word, op.wires, op.postselect)
-
-
-@_add_operation_to_drawer.register
-def _(op: ops.Conditional, drawer, layer, config) -> None:
+def _(op: qml.ops.op_math.Conditional, drawer, layer, config) -> None:
     drawer.box_gate(
         layer,
         list(op.wires),
-        op.base.label(decimals=config.decimals),
+        op.then_op.label(decimals=config.decimals),
         box_options={"zorder": 4},
         text_options={"zorder": 5},
     )
     sorted_bits = sorted([config.bit_map[m] for m in op.meas_val.measurements])
     for b in sorted_bits[:-1]:
-        erase_right = layer < config.cwire_layers[b][-1][-1]
+        erase_right = layer < config.terminal_layers[b]
         drawer.cwire_join(layer, b + drawer.n_wires, erase_right=erase_right)
 
 
 def _get_measured_wires(measurements, wires) -> set:
     measured_wires = set()
     for m in measurements:
-        if m.mv is None:
+        if not m.mv:
             # state and probs
             if len(m.wires) == 0:
                 return wires
@@ -192,31 +183,18 @@ def _get_measured_wires(measurements, wires) -> set:
     return measured_wires
 
 
-def _add_classical_wires(drawer, layers, cwire_layers, cwire_wires):
-    for cwire, layer_ids_per_cwire in cwire_layers.items():
-        for layer_ids, layer_wires in zip(layer_ids_per_cwire, cwire_wires[cwire], strict=True):
-            xs, ys = [], []
+def _add_classical_wires(drawer, layers, wires):
+    for cwire, (cwire_layers, layer_wires) in enumerate(zip(layers, wires), start=drawer.n_wires):
+        xs, ys = [], []
 
-            len_diff = len(layer_ids) - len(layer_wires)
-            if len_diff > 0:
-                layer_wires += [cwire + drawer.n_wires] * len_diff
-            for l, w in zip(layer_ids, layer_wires, strict=True):
-                if l < len(layers) and _ppm_controlled(layers[l]):
-                    l -= drawer.ppm_offset
-                xs.extend([l, l, l])
-                ys.extend([cwire + drawer.n_wires, w, cwire + drawer.n_wires])
+        len_diff = len(cwire_layers) - len(layer_wires)
+        if len_diff > 0:
+            layer_wires += [cwire] * len_diff
+        for l, w in zip(cwire_layers, layer_wires):
+            xs.extend([l, l, l])
+            ys.extend([cwire, w, cwire])
 
-            drawer.classical_wire(xs, ys)
-
-
-def _ppm_controlled(layer):
-    last_op = layer[0]
-    last_wire = max(last_op.wires)
-    for op in layer[1:]:
-        if (wire := max(op.wires)) > last_wire:
-            last_wire = wire
-            last_op = op
-    return isinstance(last_op, PauliMeasure)
+        drawer.classical_wire(xs, ys)
 
 
 def _get_measured_bits(measurements, bit_map, offset):
@@ -225,131 +203,77 @@ def _get_measured_bits(measurements, bit_map, offset):
         if isinstance(m.mv, list):
             for mv in m.mv:
                 measured_bits += [bit_map[mcm] + offset for mcm in mv.measurements]
-        elif m.mv is not None:
+        elif m.mv:
             measured_bits += [bit_map[mcm] + offset for mcm in m.mv.measurements]
     return measured_bits
 
 
-def _draw_layers(layers, measurements, wire_map, config, starting_dots=False, **kwargs):
-    """Private function drawing the given layers."""
+def _tape_mpl(tape, wire_order=None, show_all_wires=False, decimals=None, *, fig=None, **kwargs):
+    """Private function wrapped with styling."""
+    wire_options = kwargs.get("wire_options", None)
+    label_options = kwargs.get("label_options", None)
+    active_wire_notches = kwargs.get("active_wire_notches", True)
+    fontsize = kwargs.get("fontsize", None)
+
+    wire_map = convert_wire_order(tape, wire_order=wire_order, show_all_wires=show_all_wires)
+    tape = qml.map_wires(tape, wire_map=wire_map)[0][0]
+    bit_map = default_bit_map(tape)
+
+    layers = drawable_layers(tape.operations, wire_map={i: i for i in tape.wires}, bit_map=bit_map)
+
+    for i, layer in enumerate(layers):
+        if any(isinstance(o, qml.measurements.MidMeasureMP) and o.reset for o in layer):
+            layers.insert(i + 1, [])
+
     n_layers = len(layers)
     n_wires = len(wire_map)
 
+    cwire_layers, cwire_wires = cwire_connections(layers + [tape.measurements], bit_map)
+
     drawer = MPLDrawer(
         n_layers=n_layers,
-        wire_map=wire_map,
-        c_wires=len(config.bit_map),
-        wire_options=kwargs.get("wire_options", None),
-        fig=kwargs.get("fig", None),
-        starting_dots=starting_dots,
+        n_wires=n_wires,
+        c_wires=len(bit_map),
+        wire_options=wire_options,
+        fig=fig,
+    )
+
+    config = _Config(
+        decimals=decimals,
+        active_wire_notches=active_wire_notches,
+        bit_map=bit_map,
+        terminal_layers=[cl[-1] for cl in cwire_layers],
     )
 
     if n_wires == 0:
         return drawer.fig, drawer.ax
 
-    fontsize = kwargs.get("fontsize", None)
     if fontsize is not None:
         drawer.fontsize = fontsize
 
-    if kwargs.get("show_wire_labels", True):
-        drawer.label(list(wire_map), text_options=kwargs.get("label_options", None))
-    else:
-        drawer.crop_wire_labels()
+    drawer.label(list(wire_map), text_options=label_options)
 
-    _add_classical_wires(drawer, layers, config.cwire_layers, config.cwire_wires)
+    _add_classical_wires(drawer, cwire_layers, cwire_wires)
 
     for layer, layer_ops in enumerate(layers):
         for op in layer_ops:
             _add_operation_to_drawer(op, drawer, layer, config)
 
-    if measurements == "dots":
-        for wire in wire_map.values():
-            drawer.ax.text(
-                n_layers + 0.25,
-                wire,
-                s="···",
-                ha="center",
-                va="center_baseline",
-                fontsize=21,
-            )
-    else:
-        for wire in _get_measured_wires(measurements, list(range(n_wires))):
-            drawer.measure(n_layers, wire)
+    for wire in _get_measured_wires(tape.measurements, list(range(n_wires))):
+        drawer.measure(n_layers, wire)
 
-        measured_bits = _get_measured_bits(measurements, config.bit_map, drawer.n_wires)
-        if measured_bits:
-            drawer.measure(n_layers, measured_bits)
+    measured_bits = _get_measured_bits(tape.measurements, bit_map, drawer.n_wires)
+    if measured_bits:
+        drawer.measure(n_layers, measured_bits)
 
     return drawer.fig, drawer.ax
 
 
-def _tape_mpl(tape, wire_order=None, show_all_wires=False, max_length=None, **kwargs):
-    """Internal implementation for matplotlib circuit visualization.
-
-    Handles the core drawing logic while the public tape_mpl wrapper manages styling.
-
-    Returns:
-        When max_length is None: tuple(Figure, Axes) for the complete circuit
-        Otherwise: list[tuple(Figure, Axes)] with one pair per circuit segment
-    """
-    full_wire_map, used_wire_map = convert_wire_order(
-        tape, wire_order=wire_order, show_all_wires=show_all_wires
-    )
-    tape = transform_deferred_measurements_tape(tape)
-    tape = ops.functions.map_wires(tape, wire_map=full_wire_map)[0][0]
-    bit_map = default_bit_map(tape)
-
-    mapped_wire_map = {i: i for i in tape.wires}
-    layers = drawable_layers(tape.operations, wire_map=mapped_wire_map, bit_map=bit_map)
-
-    for i, layer in enumerate(layers):
-        if any(isinstance(o, ops.MidMeasure) and o.reset for o in layer):
-            layers.insert(i + 1, [])
-
-    bit_map, cwire_layers, cwire_wires = cwire_connections(
-        layers + [tape.measurements], bit_map, mapped_wire_map
-    )
-
-    config = _Config(
-        decimals=kwargs.get("decimals", None),
-        active_wire_notches=kwargs.get("active_wire_notches", True),
-        bit_map=bit_map,
-        cwire_layers=cwire_layers,
-        cwire_wires=cwire_wires,
-    )
-
-    if max_length is None:
-        return _draw_layers(
-            layers, tape.measurements, config=config, wire_map=used_wire_map, **kwargs
-        )
-
-    layer_count = len(layers)
-    return [
-        _draw_layers(
-            layers=layers[i : i + max_length],
-            measurements=tape.measurements if i + max_length >= layer_count else "dots",
-            config=config,
-            wire_map=used_wire_map,
-            starting_dots=i > 0,
-            **kwargs,
-        )
-        for i in range(0, layer_count, max_length)
-    ]
-
-
 # pylint: disable=too-many-arguments
 def tape_mpl(
-    tape: QuantumScript,
-    wire_order: Sequence | None = None,
-    show_all_wires: bool = False,
-    decimals: int | None = None,
-    style: str | None = None,
-    *,
-    fig: mpl.figure.Figure | None = None,
-    max_length: int | None = None,
-    **kwargs,
+    tape, wire_order=None, show_all_wires=False, decimals=None, style=None, *, fig=None, **kwargs
 ):
-    """Produces matplotlib graphic objects (``fig`` and ``ax``) from a tape.
+    """Produces a matplotlib graphic from a tape.
 
     Args:
         tape (QuantumTape): the operations and measurements to draw
@@ -367,38 +291,31 @@ def tape_mpl(
         fontsize (float or str): fontsize for text. Valid strings are
             ``{'xx-small', 'x-small', 'small', 'medium', large', 'x-large', 'xx-large'}``.
             Default is ``14``.
-        wire_options (dict): matplotlib formatting options for the wire lines. In addition to
-            standard options, options per wire can be specified with ``wire_label: options``
-            pairs, also see examples below.
+        wire_options (dict): matplotlib formatting options for the wire lines
         label_options (dict): matplotlib formatting options for the wire labels
-        show_wire_labels (bool): Whether or not to show the wire labels.
         active_wire_notches (bool): whether or not to add notches indicating active wires.
             Defaults to ``True``.
         fig (None or matplotlib Figure): Matplotlib figure to plot onto. If None, then create a new figure.
-        max_length (Optional[int]): When there is more than ``max_length`` layers, additional plots
-            will be produced with at most ``max_length`` individual layers.
 
     Returns:
         matplotlib.figure.Figure, matplotlib.axes._axes.Axes: The key elements for matplotlib's object oriented interface.
-        If ``max_length`` is less than the required number of layers, a list of tuples containing the figures
-        and axes will be returned instead.
 
     **Example:**
 
     .. code-block:: python
 
         ops = [
-            qp.QFT(wires=(0,1,2,3)),
-            qp.IsingXX(1.234, wires=(0,2)),
-            qp.Toffoli(wires=(0,1,2)),
-            qp.CSWAP(wires=(0,2,3)),
-            qp.RX(1.2345, wires=0),
-            qp.CRZ(1.2345, wires=(3,0))
+            qml.QFT(wires=(0,1,2,3)),
+            qml.IsingXX(1.234, wires=(0,2)),
+            qml.Toffoli(wires=(0,1,2)),
+            qml.CSWAP(wires=(0,2,3)),
+            qml.RX(1.2345, wires=0),
+            qml.CRZ(1.2345, wires=(3,0))
         ]
-        measurements = [qp.expval(qp.Z(0))]
-        tape = qp.tape.QuantumTape(ops, measurements)
+        measurements = [qml.expval(qml.Z(0))]
+        tape = qml.tape.QuantumTape(ops, measurements)
 
-        fig, ax = qp.drawer.tape_mpl(tape)
+        fig, ax = tape_mpl(tape)
         fig.show()
 
     .. figure:: ../../_static/tape_mpl/default.png
@@ -416,11 +333,11 @@ def tape_mpl(
 
     .. code-block:: python
 
-        ops = [qp.RX(1.23456, wires=0), qp.Rot(1.2345,2.3456, 3.456, wires=0)]
-        measurements = [qp.expval(qp.Z(0))]
-        tape2 = qp.tape.QuantumTape(ops, measurements)
+        ops = [qml.RX(1.23456, wires=0), qml.Rot(1.2345,2.3456, 3.456, wires=0)]
+        measurements = [qml.expval(qml.Z(0))]
+        tape2 = qml.tape.QuantumTape(ops, measurements)
 
-        fig, ax = qp.drawer.tape_mpl(tape2, decimals=2)
+        fig, ax = tape_mpl(tape2, decimals=2)
 
     .. figure:: ../../_static/tape_mpl/decimals.png
         :align: center
@@ -433,7 +350,7 @@ def tape_mpl(
 
     .. code-block:: python
 
-        fig, ax = qp.drawer.tape_mpl(tape, wire_order=[3,2,1,0])
+        fig, ax = tape_mpl(tape, wire_order=[3,2,1,0])
 
     .. figure:: ../../_static/tape_mpl/wire_order.png
             :align: center
@@ -445,7 +362,7 @@ def tape_mpl(
 
     .. code-block:: python
 
-        fig, ax = qp.drawer.tape_mpl(tape, wire_order=["aux"], show_all_wires=True)
+        fig, ax = tape_mpl(tape, wire_order=["aux"], show_all_wires=True)
 
     .. figure:: ../../_static/tape_mpl/show_all_wires.png
             :align: center
@@ -459,9 +376,7 @@ def tape_mpl(
 
     .. code-block:: python
 
-        import matplotlib.pyplot as plt
-
-        fig, ax = qp.drawer.tape_mpl(tape)
+        fig, ax = tape_mpl(tape)
         fig.suptitle("My Circuit", fontsize="xx-large")
 
         options = {'facecolor': "white", 'edgecolor': "#f57e7e", "linewidth": 6, "zorder": -1}
@@ -479,13 +394,13 @@ def tape_mpl(
     **Formatting:**
 
     PennyLane has inbuilt styles for controlling the appearance of the circuit drawings.
-    All available styles can be determined by evaluating ``qp.drawer.available_styles()``.
+    All available styles can be determined by evaluating ``qml.drawer.available_styles()``.
     Any available string can then be passed via the kwarg ``style`` to change the settings for
     that plot. This will not affect style settings for subsequent matplotlib plots.
 
     .. code-block:: python
 
-        fig, ax = qp.drawer.tape_mpl(tape, style='sketch')
+        fig, ax = tape_mpl(tape, style='sketch')
 
     .. figure:: ../../_static/tape_mpl/sketch_style.png
             :align: center
@@ -495,7 +410,7 @@ def tape_mpl(
     You can also control the appearance with matplotlib's provided tools, see the
     `matplotlib docs <https://matplotlib.org/stable/tutorials/introductory/customizing.html>`_ .
     For example, we can customize ``plt.rcParams``. To use a customized appearance based on matplotlib's
-    ``plt.rcParams``, ``qp.drawer.tape_mpl`` must be run with ``style="rcParams"``:
+    ``plt.rcParams``, ``qml.drawer.tape_mpl`` must be run with ``style="rcParams"``:
 
     .. code-block:: python
 
@@ -509,7 +424,7 @@ def tape_mpl(
         plt.rcParams['lines.linewidth'] = 5
         plt.rcParams['figure.facecolor'] = 'ghostwhite'
 
-        fig, ax = qp.drawer.tape_mpl(tape, style="rcParams")
+        fig, ax = tape_mpl(tape, style="rcParams")
 
     .. figure:: ../../_static/tape_mpl/rcparams.png
             :align: center
@@ -522,7 +437,7 @@ def tape_mpl(
 
     .. code-block:: python
 
-        fig, ax = qp.drawer.tape_mpl(tape, wire_options={'color':'teal', 'linewidth': 5},
+        fig, ax = tape_mpl(tape, wire_options={'color':'teal', 'linewidth': 5},
                     label_options={'size': 20})
 
     .. figure:: ../../_static/tape_mpl/wires_labels.png
@@ -530,29 +445,12 @@ def tape_mpl(
             :width: 60%
             :target: javascript:void(0);
 
-    Additionally, ``wire_options`` may contain sub-dictionaries of matplotlib options assigned
-    to separate wire labels, which will control the line style for the respective individual wires.
-
-    .. code-block:: python
-
-        wire_options = {
-            'color': 'teal', # all wires but wire 2 will be teal
-            'linewidth': 5, # all wires but wire 2 will be bold
-            2: {'color': 'orange', 'linestyle': '--'}, # wire 2 will be orange and dashed
-        }
-        fig, ax = qp.drawer.tape_mpl(tape, wire_options=wire_options)
-
-    .. figure:: ../../_static/tape_mpl/per_wire_options.png
-            :align: center
-            :width: 60%
-            :target: javascript:void(0);
     """
 
     restore_params = {}
     if update_style := (has_mpl and style != "rcParams"):
         restore_params = mpl.rcParams.copy()
         _set_style(style)
-
     try:
         return _tape_mpl(
             tape,
@@ -560,7 +458,6 @@ def tape_mpl(
             show_all_wires=show_all_wires,
             decimals=decimals,
             fig=fig,
-            max_length=max_length,
             **kwargs,
         )
     finally:

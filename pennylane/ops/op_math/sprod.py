@@ -15,21 +15,20 @@
 This file contains the implementation of the SProd class which contains logic for
 computing the scalar product of operations.
 """
+from typing import Union
+from copy import copy
 
-import pennylane as qp
-from pennylane import math
-from pennylane.core.operator import Operator
-from pennylane.core.queuing import QueuingManager
-from pennylane.exceptions import DecompositionUndefinedError, TermsUndefinedError
+import pennylane as qml
+import pennylane.math as qnp
+from pennylane.operation import Operator, convert_to_opmath
 from pennylane.ops.op_math.pow import Pow
 from pennylane.ops.op_math.sum import Sum
-from pennylane.typing import TensorLike
+from pennylane.queuing import QueuingManager
 
-from .composite import handle_recursion_error
 from .symbolicop import ScalarSymbolicOp
 
 
-def s_prod(scalar, operator, lazy=True):
+def s_prod(scalar, operator, lazy=True, id=None):
     r"""Construct an operator which is the scalar product of the
     given scalar and operator provided.
 
@@ -39,6 +38,7 @@ def s_prod(scalar, operator, lazy=True):
 
     Keyword Args:
         lazy=True (bool): If ``lazy=False`` and the operator is already a scalar product operator, the scalar provided will simply be combined with the existing scaling factor.
+        id (str or None): id for the scalar product operator. Default is None.
     Returns:
         ~ops.op_math.SProd: The operator representing the scalar product.
 
@@ -46,33 +46,37 @@ def s_prod(scalar, operator, lazy=True):
 
         This operator supports a batched base, a batched coefficient and a combination of both:
 
-        >>> op = qp.s_prod(scalar=4, operator=qp.RX([1, 2, 3], wires=0))
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.s_prod(scalar=4, operator=qml.RX([1, 2, 3], wires=0))
+        >>> qml.matrix(op).shape
         (3, 2, 2)
-        >>> op = qp.s_prod(scalar=[1, 2, 3], operator=qp.RX(1, wires=0))
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.s_prod(scalar=[1, 2, 3], operator=qml.RX(1, wires=0))
+        >>> qml.matrix(op).shape
         (3, 2, 2)
-        >>> op = qp.s_prod(scalar=[4, 5, 6], operator=qp.RX([1, 2, 3], wires=0))
-        >>> qp.matrix(op).shape  # doctest: +SKIP
+        >>> op = qml.s_prod(scalar=[4, 5, 6], operator=qml.RX([1, 2, 3], wires=0))
+        >>> qml.matrix(op).shape
         (3, 2, 2)
 
-        But it doesn't support batching of operators.
+        But it doesn't support batching of operators:
+
+        >>> op = qml.s_prod(scalar=4, operator=[qml.RX(1, wires=0), qml.RX(2, wires=0)])
+        AttributeError: 'list' object has no attribute 'batch_size'
 
     .. seealso:: :class:`~.ops.op_math.SProd` and :class:`~.ops.op_math.SymbolicOp`
 
     **Example**
 
-    >>> sprod_op = s_prod(2.0, qp.X(0))
+    >>> sprod_op = s_prod(2.0, qml.X(0))
     >>> sprod_op
     2.0 * X(0)
     >>> sprod_op.matrix()
-    array([[0., 2.],
-           [2., 0.]])
+    array([[ 0., 2.],
+           [ 2., 0.]])
     """
+    operator = convert_to_opmath(operator)
     if lazy or not isinstance(operator, SProd):
-        return SProd(scalar, operator)
+        return SProd(scalar, operator, id=id)
 
-    sprod_op = SProd(scalar=scalar * operator.scalar, base=operator.base)
+    sprod_op = SProd(scalar=scalar * operator.scalar, base=operator.base, id=id)
     QueuingManager.remove(operator)
     return sprod_op
 
@@ -85,6 +89,9 @@ class SProd(ScalarSymbolicOp):
         scalar (float or complex): the scale factor being multiplied to the operator.
         base (~.operation.Operator): the operator which will get scaled.
 
+    Keyword Args:
+        id (str or None): id for the scalar product operator. Default is None.
+
     .. note::
         Currently this operator can not be queued in a circuit as an operation, only measured terminally.
 
@@ -92,33 +99,33 @@ class SProd(ScalarSymbolicOp):
 
     **Example**
 
-    >>> sprod_op = SProd(1.23, qp.X(0))
+    >>> sprod_op = SProd(1.23, qml.X(0))
     >>> sprod_op
     1.23 * X(0)
-    >>> qp.matrix(sprod_op)
+    >>> qml.matrix(sprod_op)
     array([[0.  , 1.23],
            [1.23, 0.  ]])
     >>> sprod_op.terms()
-    ([1.23], [X(0)])
+    ([1.23], [PauliX(wires=[0]])
 
     .. details::
         :title: Usage Details
 
         The SProd operation can also be measured inside a qnode as an observable.
-        If the circuit is parametrized, then we can also differentiate through the observable.
+        If the circuit is parameterized, then we can also differentiate through the observable.
 
         .. code-block:: python
 
-            dev = qp.device("default.qubit", wires=1)
+            dev = qml.device("default.qubit", wires=1)
 
-            @qp.qnode(dev, diff_method="best")
+            @qml.qnode(dev, diff_method="best")
             def circuit(scalar, theta):
-                qp.RX(theta, wires=0)
-                return qp.expval(qp.s_prod(scalar, qp.Hadamard(wires=0)))
+                qml.RX(theta, wires=0)
+                return qml.expval(qml.s_prod(scalar, qml.Hadamard(wires=0)))
 
         >>> scalar, theta = (1.2, 3.4)
-        >>> qp.grad(circuit, argnums=[0,1])(scalar, theta)
-        (array(-0.6836...), array(0.2168...))
+        >>> qml.grad(circuit, argnum=[0,1])(scalar, theta)
+        (array(-0.68362956), array(0.21683382))
 
     """
 
@@ -131,40 +138,40 @@ class SProd(ScalarSymbolicOp):
     def _unflatten(cls, data, _):
         return cls(data[0], data[1])
 
-    def __init__(self, scalar: TensorLike, base: Operator, _pauli_rep=None):
-        super().__init__(base=base, scalar=scalar)
+    def __init__(
+        self, scalar: Union[int, float, complex], base: Operator, id=None, _pauli_rep=None
+    ):
+        super().__init__(base=base, scalar=scalar, id=id)
 
         if _pauli_rep:
             self._pauli_rep = _pauli_rep
         elif (base_pauli_rep := getattr(self.base, "pauli_rep", None)) and (
             self.batch_size is None
         ):
+            scalar = copy(self.scalar)
 
-            pr = {pw: math.dot(coeff, scalar) for pw, coeff in base_pauli_rep.items()}
-            self._pauli_rep = qp.pauli.PauliSentence(pr)
+            pr = {pw: qnp.dot(coeff, scalar) for pw, coeff in base_pauli_rep.items()}
+            self._pauli_rep = qml.pauli.PauliSentence(pr)
         else:
             self._pauli_rep = None
 
-    @handle_recursion_error
     def __repr__(self):
         """Constructor-call-like representation."""
-        if isinstance(self.base, qp.ops.CompositeOp):
+        if isinstance(self.base, qml.ops.CompositeOp):
             return f"{self.scalar} * ({self.base})"
         return f"{self.scalar} * {self.base}"
 
-    @handle_recursion_error
     def label(self, decimals=None, base_label=None, cache=None):
         """The label produced for the SProd op."""
         scalar_val = (
             f"{self.scalar}"
             if decimals is None
-            else format(math.toarray(self.scalar), f".{decimals}f")
+            else format(qml.math.toarray(self.scalar), f".{decimals}f")
         )
 
         return base_label or f"{scalar_val}*{self.base.label(decimals=decimals, cache=cache)}"
 
     @property
-    @handle_recursion_error
     def num_params(self):
         """Number of trainable parameters that the operator depends on.
         Usually 1 + the number of trainable parameters for the base op.
@@ -174,8 +181,7 @@ class SProd(ScalarSymbolicOp):
         """
         return 1 + self.base.num_params
 
-    @handle_recursion_error
-    def terms(self):
+    def terms(self):  # is this method necessary for this class?
         r"""Representation of the operator as a linear combination of other operators.
 
         .. math:: O = \sum_i c_i O_i
@@ -185,33 +191,21 @@ class SProd(ScalarSymbolicOp):
         Returns:
             tuple[list[tensor_like or float], list[.Operation]]: list of coefficients :math:`c_i`
             and list of operations :math:`O_i`
-
         """
-        try:
-            base_coeffs, base_ops = self.base.terms()
-            return [self.scalar * coeff for coeff in base_coeffs], base_ops
-        except TermsUndefinedError:
-            return [self.scalar], [self.base]
+        return [self.scalar], [self.base]
 
     @property
-    @handle_recursion_error
-    def is_verified_hermitian(self):
+    def is_hermitian(self):
         """If the base operator is hermitian and the scalar is real,
         then the scalar product operator is hermitian."""
-        if not self.base.is_verified_hermitian:
-            return False
-        if math.is_abstract(self.scalar):
-            return not math.get_dtype_name(self.scalar).startswith("complex")
-        return not math.iscomplex(self.scalar)
+        return self.base.is_hermitian and not qml.math.iscomplex(self.scalar)
 
     # pylint: disable=arguments-renamed,invalid-overridden-method
     @property
-    @handle_recursion_error
     def has_diagonalizing_gates(self):
         """Bool: Whether the Operator returns defined diagonalizing gates."""
         return self.base.has_diagonalizing_gates
 
-    @handle_recursion_error
     def diagonalizing_gates(self):
         r"""Sequence of gates that diagonalize the operator in the computational basis.
 
@@ -231,7 +225,6 @@ class SProd(ScalarSymbolicOp):
         """
         return self.base.diagonalizing_gates()
 
-    @handle_recursion_error
     def eigvals(self):
         r"""Return the eigenvalues of the specified operator.
 
@@ -242,12 +235,11 @@ class SProd(ScalarSymbolicOp):
             array: array containing the eigenvalues of the operator.
         """
         base_eigs = self.base.eigvals()
-        if math.get_interface(self.scalar) == "torch" and self.scalar.requires_grad:
-            base_eigs = math.convert_like(base_eigs, self.scalar)
+        if qml.math.get_interface(self.scalar) == "torch" and self.scalar.requires_grad:
+            base_eigs = qml.math.convert_like(base_eigs, self.scalar)
         return self.scalar * base_eigs
 
-    @handle_recursion_error
-    def sparse_matrix(self, wire_order=None, format="csr"):
+    def sparse_matrix(self, wire_order=None):
         """Computes, by default, a `scipy.sparse.csr_matrix` representation of this Tensor.
 
         This is useful for larger qubit numbers, where the dense matrix becomes very large, while
@@ -261,26 +253,29 @@ class SProd(ScalarSymbolicOp):
             :class:`scipy.sparse._csr.csr_matrix`: sparse matrix representation
         """
         if self.pauli_rep:  # Get the sparse matrix from the PauliSentence representation
-            return self.pauli_rep.to_mat(wire_order=wire_order or self.wires, format=format)
+            return self.pauli_rep.to_mat(wire_order=wire_order or self.wires, format="csr")
         mat = self.base.sparse_matrix(wire_order=wire_order).multiply(self.scalar)
         mat.eliminate_zeros()
-        return mat.asformat(format)
+        return mat
 
     @property
-    @handle_recursion_error
-    def has_sparse_matrix(self):
-        return self.pauli_rep is not None or self.base.has_sparse_matrix
-
-    @property
-    @handle_recursion_error
     def has_matrix(self):
         """Bool: Whether or not the Operator returns a defined matrix."""
-        return self.base.has_matrix
+        return isinstance(self.base, qml.Hamiltonian) or self.base.has_matrix
 
     @staticmethod
-    @handle_recursion_error
     def _matrix(scalar, mat):
         return scalar * mat
+
+    @property
+    def _queue_category(self):  # don't queue scalar prods as they might not be Unitary!
+        """Used for sorting objects into their respective lists in `QuantumTape` objects.
+        This property is a temporary solution that should not exist long-term and should not be
+        used outside of ``QuantumTape._process_queue``.
+
+        Returns: None
+        """
+        return None
 
     def pow(self, z):
         """Returns the operator raised to a given power."""
@@ -296,10 +291,9 @@ class SProd(ScalarSymbolicOp):
         Returns:
             The adjointed operation.
         """
-        return SProd(scalar=math.conjugate(self.scalar), base=qp.adjoint(self.base))
+        return SProd(scalar=qml.math.conjugate(self.scalar), base=qml.adjoint(self.base))
 
     # pylint: disable=too-many-return-statements
-    @handle_recursion_error
     def simplify(self) -> Operator:
         """Reduce the depth of nested operators to the minimum.
 
@@ -308,7 +302,7 @@ class SProd(ScalarSymbolicOp):
         """
         # try using pauli_rep:
         if pr := self.pauli_rep:
-            pr.prune()
+            pr.simplify()
             return pr.operation(wire_order=self.wires)
 
         if self.scalar == 1:
@@ -327,17 +321,3 @@ class SProd(ScalarSymbolicOp):
         if isinstance(new_base, SProd):
             return SProd(scalar=self.scalar, base=new_base).simplify()
         return SProd(scalar=self.scalar, base=new_base)
-
-    @property
-    def has_decomposition(self):
-        return not math.is_abstract(self.scalar) and math.allclose(math.abs(self.scalar), 1)
-
-    def decomposition(self):
-        if math.is_abstract(self.scalar) or not math.allclose(math.abs(self.scalar), 1):
-            raise DecompositionUndefinedError(
-                "Decompositins of SProd are only defined for scalars with norm 1."
-            )
-        ops = [qp.GlobalPhase(-math.angle(self.scalar)), self.base]
-        if QueuingManager.recording():
-            qp.apply(self.base)
-        return ops

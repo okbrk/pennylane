@@ -12,21 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for the quantum_monte_carlo transform"""
-
 import itertools
 
 import numpy as np
 import pytest
-from scipy.stats import norm, unitary_group
+from scipy.stats import unitary_group, norm
 
-import pennylane as qp
-from pennylane.templates.subroutines.qmc import _make_V, _make_Z, make_Q
+import pennylane as qml
 from pennylane.transforms.qmc import (
-    _apply_controlled_v,
     _apply_controlled_z,
+    _apply_controlled_v,
     apply_controlled_Q,
     quantum_monte_carlo,
 )
+from pennylane.templates.subroutines.qmc import _make_V, _make_Z, make_Q
 from pennylane.wires import Wires
 
 
@@ -52,33 +51,38 @@ def r_unitary(gate, alpha, control_wires, target_wire):
         target_wire (int): wire that acts as target
     """
 
-    theta = qp.templates.state_preparations.mottonen.compute_theta(alpha)
+    theta = qml.templates.state_preparations.mottonen.compute_theta(alpha)
 
     gray_code_rank = len(control_wires)
 
     if gray_code_rank == 0:
-        if qp.math.all(theta[..., 0] != 0.0):
+        if qml.math.all(theta[..., 0] != 0.0):
             gate(theta[..., 0], wires=[target_wire])
         return
 
-    code = qp.templates.state_preparations.mottonen.gray_code(gray_code_rank)
-    control_indices = np.log2(code ^ np.roll(code, -1)).astype(int)
+    code = qml.templates.state_preparations.mottonen.gray_code(gray_code_rank)
+    num_selections = len(code)
+
+    control_indices = [
+        int(np.log2(int(code[i], 2) ^ int(code[(i + 1) % num_selections], 2)))
+        for i in range(num_selections)
+    ]
 
     for i, control_index in enumerate(control_indices):
-        if qp.math.all(theta[..., i] != 0.0):
+        if qml.math.all(theta[..., i] != 0.0):
             gate(theta[..., i], wires=[target_wire])
-        qp.CNOT(wires=[control_wires[control_index], target_wire])
+        qml.CNOT(wires=[control_wires[control_index], target_wire])
 
 
 def get_unitary(circ, n_wires):
     """Helper function to find unitary of a circuit"""
-    dev = qp.device("default.qubit", wires=range(n_wires))
+    dev = qml.device("default.qubit", wires=range(n_wires))
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def unitary_z(basis_state):
-        qp.BasisState(basis_state, wires=range(n_wires))
+        qml.BasisState(basis_state, wires=range(n_wires))
         circ()
-        return qp.state()
+        return qml.state()
 
     bitstrings = list(itertools.product([0, 1], repeat=n_wires))
     u = [unitary_z(np.array(bitstring)) for bitstring in bitstrings]
@@ -92,12 +96,12 @@ def test_apply_controlled_z(n_wires):
     unitary and comparing against the one provided in _make_Z."""
     n_all_wires = n_wires + 1
 
-    target_wires = Wires(range(n_wires))
+    wires = Wires(range(n_wires))
     control_wire = n_wires
     work_wires = None
 
     circ = lambda: _apply_controlled_z(
-        wires=target_wires, control_wire=control_wire, work_wires=work_wires
+        wires=wires, control_wire=control_wire, work_wires=work_wires
     )
     u = get_unitary(circ, n_all_wires)
 
@@ -105,7 +109,7 @@ def test_apply_controlled_z(n_wires):
     # because two Zs are used.
     z_ideal = -_make_Z(2**n_wires)
 
-    circ = lambda: qp.ControlledQubitUnitary(z_ideal, wires=control_wire + target_wires)
+    circ = lambda: qml.ControlledQubitUnitary(z_ideal, wires=wires, control_wires=control_wire)
     u_ideal = get_unitary(circ, n_all_wires)
 
     assert np.allclose(u, u_ideal)
@@ -117,7 +121,7 @@ def test_apply_controlled_v(n_wires):
     unitary and comparing against the one provided in _make_V."""
     n_all_wires = n_wires + 1
 
-    target_wires = Wires(range(n_wires))
+    wires = Wires(range(n_wires))
     control_wire = Wires(n_wires)
 
     circ = lambda: _apply_controlled_v(target_wire=Wires([n_wires - 1]), control_wire=control_wire)
@@ -127,7 +131,7 @@ def test_apply_controlled_v(n_wires):
     # because two Vs are used.
     v_ideal = -_make_V(2**n_wires)
 
-    circ = lambda: qp.ControlledQubitUnitary(v_ideal, wires=control_wire + target_wires)
+    circ = lambda: qml.ControlledQubitUnitary(v_ideal, wires=wires, control_wires=control_wire)
     u_ideal = get_unitary(circ, n_all_wires)
 
     assert np.allclose(u, u_ideal)
@@ -153,8 +157,8 @@ class TestApplyControlledQ:
         q_mat = make_Q(a_mat, r_mat)
 
         def fn():
-            qp.QubitUnitary(a_mat, wires=wires[:-1])
-            qp.QubitUnitary(r_mat, wires=wires)
+            qml.QubitUnitary(a_mat, wires=wires[:-1])
+            qml.QubitUnitary(r_mat, wires=wires)
 
         circ = apply_controlled_Q(
             fn, wires=wires, target_wire=target_wire, control_wire=control_wire, work_wires=None
@@ -162,7 +166,7 @@ class TestApplyControlledQ:
 
         u = get_unitary(circ, n_all_wires)
 
-        circ = lambda: qp.ControlledQubitUnitary(q_mat, wires=Wires(control_wire) + Wires(wires))
+        circ = lambda: qml.ControlledQubitUnitary(q_mat, wires=wires, control_wires=control_wire)
         u_ideal = get_unitary(circ, n_all_wires)
 
         assert np.allclose(u_ideal, u)
@@ -195,8 +199,8 @@ class TestQuantumMonteCarlo:
         q_mat = make_Q(a_mat, r_mat)
 
         def fn():
-            qp.QubitUnitary(a_mat, wires=wires[:-1])
-            qp.QubitUnitary(r_mat, wires=wires)
+            qml.QubitUnitary(a_mat, wires=wires[:-1])
+            qml.QubitUnitary(r_mat, wires=wires)
 
         circ = quantum_monte_carlo(
             fn, wires=wires, target_wire=target_wire, estimation_wires=estimation_wires
@@ -206,8 +210,8 @@ class TestQuantumMonteCarlo:
 
         def circ_ideal():
             fn()
-            qp.templates.QuantumPhaseEstimation(
-                qp.QubitUnitary(q_mat, wires=wires), estimation_wires=estimation_wires
+            qml.templates.QuantumPhaseEstimation(
+                q_mat, target_wires=wires, estimation_wires=estimation_wires
             )
 
         u_ideal = get_unitary(circ_ideal, n_all_wires)
@@ -242,31 +246,31 @@ class TestQuantumMonteCarlo:
         r_rotations = np.array([2 * np.arcsin(np.sqrt(func(i))) for i in range(M)])
 
         A_wires = [0, "a", -1.1, -10, "bbb"]
-        target_wire = "Auxiliary"
+        target_wire = "Ancilla"
         wires = A_wires + [target_wire]
         estimation_wires = ["bob", -3, 42, "penny", "lane"]
 
         def fn():
-            qp.templates.MottonenStatePreparation(np.sqrt(probs), wires=A_wires)
-            r_unitary(qp.RY, r_rotations, control_wires=A_wires[::-1], target_wire=target_wire)
+            qml.templates.MottonenStatePreparation(np.sqrt(probs), wires=A_wires)
+            r_unitary(qml.RY, r_rotations, control_wires=A_wires[::-1], target_wire=target_wire)
 
-        qmc_circuit = qp.quantum_monte_carlo(
+        qmc_circuit = qml.quantum_monte_carlo(
             fn, wires=wires, target_wire=target_wire, estimation_wires=estimation_wires
         )
 
-        dev = qp.device("default.qubit", wires=wires + estimation_wires)
+        dev = qml.device("default.qubit", wires=wires + estimation_wires)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
             qmc_circuit()
-            return qp.probs(estimation_wires)
+            return qml.probs(estimation_wires)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit_expected():
-            qp.templates.QuantumMonteCarlo(
+            qml.templates.QuantumMonteCarlo(
                 probs, func, target_wires=wires, estimation_wires=estimation_wires
             )
-            return qp.probs(estimation_wires)
+            return qml.probs(estimation_wires)
 
         res = circuit()
         res_expected = circuit_expected()

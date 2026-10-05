@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""A module containing utility functions and reduced representation classes for working with Pauli operators."""
+"""A module containing utility functions and reduced representation classes for working with Pauli operators. """
 
 from .pauli_arithmetic import PauliWord, PauliSentence
 
@@ -33,7 +33,7 @@ from .utils import (
     diagonalize_pauli_word,
     diagonalize_qwc_pauli_words,
     diagonalize_qwc_groupings,
-    pauli_eigs,
+    simplify,
 )
 
 from .pauli_interface import pauli_word_prefactor
@@ -48,9 +48,4 @@ from .grouping import (
     PauliGroupingStrategy,
     optimize_measurements,
     graph_colouring,
-    compute_partition_indices,
 )
-
-from .pauli_vspace import PauliVSpace
-
-from .trace_inner_product import trace_inner_product

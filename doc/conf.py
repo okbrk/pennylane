@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #
 # PennyLane documentation build configuration file, created by
 # sphinx-quickstart on Tue Apr 17 11:43:51 2018.
@@ -14,11 +15,6 @@
 import os
 import re
 import sys
-from docutils import nodes
-from datetime import datetime
-from sphinx.util import logging, inspect
-
-logger = logging.getLogger(__name__)
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -30,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(".")), "doc"))
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-needs_sphinx = "9.0"
+needs_sphinx = "3.3"
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named "sphinx.ext.*") or your custom
@@ -50,9 +46,7 @@ extensions = [
     "sphinx_automodapi.automodapi",
     "sphinx_copybutton",
     "sphinxext.opengraph",
-    "sphinx_sitemap",
     "m2r2",
-    "sphinx_automodapi.smart_resolver",
 ]
 
 # Open Graph metadata
@@ -62,16 +56,11 @@ ogp_social_cards = {
     "site_url": "https://docs.pennylane.ai/",
     "line_color": "#03b2ff",
 }
-ogp_image = "_static/opengraph.png"
-numpydoc_show_class_members = False
+ogp_image = "_static/header-tall.png"
 
 
 # The base URL with a proper language and version.
-html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "https://docs.pennylane.ai/")
-
-# Tell Jinja2 templates the build is running on Read the Docs
-if os.environ.get("READTHEDOCS", "") == "True":
-    html_context = {"READTHEDOCS": True}
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
 
 os.environ["SPHINX_BUILD"] = "1"
 
@@ -81,11 +70,6 @@ automodapi_toctreedirnm = "code/api"
 automodapi_inheritance_diagram = False
 automodsumm_inherited_members = True
 
-# Prevent Sphinx from identifying functions/methods as single-dispatch.
-# This forces autodoc to output only the single base signature.
-inspect.is_singledispatch_function = lambda _: False
-inspect.is_singledispatch_method = lambda _: False
-
 # Hot fix for the error: 'You must configure the bibtex_bibfiles setting'
 bibtex_bibfiles = ["bibfile.bib"]
 
@@ -93,18 +77,14 @@ copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: 
 copybutton_prompt_is_regexp = True
 
 intersphinx_mapping = {
-    "demo": ("https://pennylane.ai/qml", None),
-    "catalyst": ("https://docs.pennylane.ai/projects/catalyst/en/stable", None),
+    "demo": ("https://pennylane.ai/qml/", None),
+    "catalyst": ("https://docs.pennylane.ai/projects/catalyst/en/stable", None)
 }
 
 mathjax_path = (
     "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML"
 )
-ignore_warnings = [
-    ("code/api/qp_transforms*", "no module named pennylane.transforms"),
-]
-# suppress_warnings = ["docutils"]  # Suppress docutils warnings from Sphinx 9 autodoc alias-of rendering
-autodoc_mock_imports = ["torch"]
+ignore_warnings = [("code/api/qml_transforms*", "no module named pennylane.transforms")]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -118,7 +98,7 @@ master_doc = "index"
 
 # General information about the project.
 project = "PennyLane"
-copyright = f"{datetime.now().year} | Xanadu | All rights reserved"
+copyright = "2023, Xanadu Quantum Technologies"
 author = "Xanadu Inc."
 
 add_module_names = False
@@ -128,9 +108,6 @@ add_module_names = False
 # built documents.
 
 import pennylane
-
-pennylane.Hamiltonian = pennylane.ops.op_math.linear_combination.LinearCombination
-
 
 # The full version, including alpha/beta/rc tags.
 release = pennylane.__version__
@@ -143,7 +120,7 @@ version = re.match(r"^(\d+\.\d+)", release).expand(r"\1")
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = "en"
+language = None
 
 # today_fmt is used as the format for a strftime call.
 today_fmt = "%Y-%m-%d"
@@ -151,7 +128,7 @@ today_fmt = "%Y-%m-%d"
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "releases/*.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # If true, sectionauthor and moduleauthor directives will be shown in the
 # output. They are ignored by default.
@@ -271,19 +248,15 @@ html_theme = "pennylane"
 
 # Xanadu theme options (see theme.conf for more information).
 html_theme_options = {
+    "navbar_active_link": 4,
     "extra_copyrights": [
         "TensorFlow, the TensorFlow logo, and any related marks are trademarks " "of Google Inc."
     ],
     "google_analytics_tracking_id": "G-C480Z9JL0D",
-    "search_on_pennylane_ai": True,
 }
 
 edit_on_github_project = "PennyLaneAI/pennylane"
 edit_on_github_branch = "master/doc"
-
-# -- Sitemap settings -----------------------------------------------------
-sitemap_url_scheme = "{link}"
-sitemap_excludes = []  # Explicitly set to empty to avoid accidental excludes
 
 # -- Options for LaTeX output ---------------------------------------------
 
@@ -347,60 +320,3 @@ autodoc_typehints = "none"
 
 # inheritance_diagram graphviz attributes
 inheritance_node_attrs = dict(color="lightskyblue1", style="filled")
-
-
-# pylint: disable=unused-argument
-def add_noindex_to_estimator_stubs(app, docname, source):
-    """Dynamically add :noindex: to estimator stubs during the build process."""
-    if not docname.startswith("code/api/"):
-        return
-
-    content = source[0]
-    # Update the regex to match either ops or templates
-    if not re.search(r"\bpennylane\.estimator\.(ops|templates)\b", content):
-        return
-
-    def _add_noindex_func(match):
-        """Replacement function for re.sub to add :noindex: idempotently."""
-        directive_block = match.group(0)
-        if ":noindex:" in directive_block:
-            return directive_block
-        return f"{match.group(1)}\n   :noindex:{match.group(2)}"
-
-    # TODO [sc-99226]: Replace with :no-index-entry: when support for sphinx >=8.2 is available.
-    new_content, num_subs = re.subn(
-        r"(^\s*\.\.\s+auto(?:class|function|method)::.*?)(\n\s*($|\S.*))",
-        _add_noindex_func,
-        content,
-        flags=re.MULTILINE | re.DOTALL,
-    )
-
-    if num_subs:
-        source[0] = new_content
-        logger.info(f"[add_noindex] Patched {docname} with :noindex: directive.")
-
-
-def add_links_to_estimator_table(app, doctree, fromdocname):
-    """Replace literal names in automodsumm tables with links to stub HTML files."""
-    if "qp_estimator" not in fromdocname:
-        return
-    # Define the modules and their corresponding table indices
-    modules = {3: "ops", 4: "templates"}
-    for table_idx, module_name in modules.items():
-        table = doctree.traverse(nodes.table)[table_idx]
-        for literal in table.traverse(nodes.literal):
-            name = literal.astext()
-            url = f"code/api/pennylane.estimator.{module_name}.{name}"
-            refuri = app.builder.get_relative_uri(fromdocname, url)
-            refnode = nodes.reference("", refuri=refuri)
-            refnode += nodes.literal(text=name)
-            literal.parent.replace(literal, refnode)
-            logger.info(
-                f"[add_noindex_links] Linked pennylane.estimator.{module_name}.{name} to {refuri}"
-            )
-
-
-def setup(app):
-    """Sphinx entry point for this extension."""
-    app.connect("source-read", add_noindex_to_estimator_stubs)
-    app.connect("doctree-resolved", add_links_to_estimator_table)

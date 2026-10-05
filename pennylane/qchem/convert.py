@@ -14,14 +14,14 @@
 """
 This module contains the functions for converting an external operator to a Pennylane operator.
 """
-
 import warnings
 from itertools import product
-
 import numpy as np
 
-# pylint: disable=import-outside-toplevel
-import pennylane as qp
+# pylint: disable= import-outside-toplevel,no-member,too-many-function-args
+import pennylane as qml
+from pennylane.operation import Tensor, active_new_opmath
+from pennylane.pauli import pauli_sentence
 from pennylane.wires import Wires
 
 
@@ -57,23 +57,23 @@ def _process_wires(wires, n_wires=None):
 
     >>> # consec int wires if no wires mapping provided, ie. identity map: 0<->0, 1<->1, 2<->2
     >>> _process_wires(None, 3)
-    Wires([0, 1, 2])
+    <Wires = [0, 1, 2]>
 
     >>> # List as mapping, qubit indices with wire label values: 0<->w0, 1<->w1, 2<->w2
     >>> _process_wires(['w0','w1','w2'])
-    Wires(['w0', 'w1', 'w2'])
+    <Wires = ['w0', 'w1', 'w2']>
 
     >>> # Wires as mapping, qubit indices with wire label values: 0<->w0, 1<->w1, 2<->w2
     >>> _process_wires(Wires(['w0', 'w1', 'w2']))
-    Wires(['w0', 'w1', 'w2'])
+    <Wires = ['w0', 'w1', 'w2']>
 
     >>> # Dict as partial mapping, int qubits keys to wire label values: 0->w0, 1 unchanged, 2->w2
     >>> _process_wires({0:'w0',2:'w2'})
-    Wires(['w0', 1, 'w2'])
+    <Wires = ['w0', 1, 'w2']>
 
     >>> # Dict as mapping, wires label keys to consec int qubit values: w2->2, w0->0, w1->1
     >>> _process_wires({'w2':2, 'w0':0, 'w1':1})
-    Wires(['w0', 'w1', 'w2'])
+    <Wires = ['w0', 'w1', 'w2']>
     """
 
     # infer from wires, or assume 1 if wires is not of accepted types.
@@ -117,7 +117,7 @@ def _process_wires(wires, n_wires=None):
     return wires
 
 
-def _openfermion_to_pennylane(qubit_operator, wires=None, tol=1.0e-16):
+def _openfermion_to_pennylane(qubit_operator, wires=None):
     r"""Convert OpenFermion ``QubitOperator`` to a 2-tuple of coefficients and
     PennyLane Pauli observables.
 
@@ -130,8 +130,6 @@ def _openfermion_to_pennylane(qubit_operator, wires=None, tol=1.0e-16):
             corresponding to the qubit number equal to its index.
             For type dict, only int-keyed dict (for qubit-to-wire conversion) is accepted.
             If None, will use identity map (e.g. 0->0, 1->1, ...).
-        tol (float): whether to keep the imaginary part of the coefficients if they are smaller
-            than the provided tolerance.
 
     Returns:
         tuple[array[float], Iterable[pennylane.operation.Operator]]: coefficients and their
@@ -139,12 +137,15 @@ def _openfermion_to_pennylane(qubit_operator, wires=None, tol=1.0e-16):
 
     **Example**
 
-    >>> q_op = 0.1 * QubitOperator('X0') + 0.2 * QubitOperator('Y0 Z2')
+    >>> q_op = 0.1*QubitOperator('X0') + 0.2*QubitOperator('Y0 Z2')
     >>> q_op
     0.1 [X0] +
     0.2 [Y0 Z2]
     >>> _openfermion_to_pennylane(q_op, wires=['w0','w1','w2','extra_wire'])
     (tensor([0.1, 0.2], requires_grad=False), [X('w0'), Y('w0') @ Z('w2')])
+
+    If the new op-math is active, the list of operators will be cast as :class:`~.Prod` instances instead of
+    :class:`~.Tensor` instances when appropriate.
     """
     n_wires = (
         1 + max(max(i for i, _ in t) if t else 1 for t in qubit_operator.terms)
@@ -154,51 +155,47 @@ def _openfermion_to_pennylane(qubit_operator, wires=None, tol=1.0e-16):
     wires = _process_wires(wires, n_wires=n_wires)
 
     if not qubit_operator.terms:  # added since can't unpack empty zip to (coeffs, ops) below
-        return np.array([0.0]), [qp.Identity(wires[0])]
+        return np.array([0.0]), [qml.Identity(wires[0])]
 
-    xyz2pauli = {"X": qp.X, "Y": qp.Y, "Z": qp.Z}
+    xyz2pauli = {"X": qml.X, "Y": qml.Y, "Z": qml.Z}
 
     def _get_op(term, wires):
         """A function to compute the PL operator associated with the term string."""
         if len(term) > 1:
-            return qp.prod(*[xyz2pauli[op[1]](wires=wires[op[0]]) for op in term])
+            if active_new_opmath():
+                return qml.prod(*[xyz2pauli[op[1]](wires=wires[op[0]]) for op in term])
+
+            return Tensor(*[xyz2pauli[op[1]](wires=wires[op[0]]) for op in term])
 
         if len(term) == 1:
             return xyz2pauli[term[0][1]](wires=wires[term[0][0]])
 
-        return qp.Identity(wires[0])
+        return qml.Identity(wires[0])
 
     coeffs, ops = zip(
-        *[(coef, _get_op(term, wires)) for term, coef in qubit_operator.terms.items()],
-        strict=True,
+        *[(coef, _get_op(term, wires)) for term, coef in qubit_operator.terms.items()]
         # example term: ((0,'X'), (2,'Z'), (3,'Y'))
     )
-    coeffs = np.array(coeffs)
 
-    if (np.abs(coeffs.imag) < tol).all():
-        coeffs = coeffs.real
-
-    return coeffs, list(ops)
+    return np.array(coeffs).real, list(ops)
 
 
 def _ps_to_coeff_term(ps, wire_order):
     """Convert a non-empty pauli sentence to a list of coeffs and terms."""
     ops_str = []
-    pws, coeffs = zip(*ps.items(), strict=True)
+    pws, coeffs = zip(*ps.items())
 
     for pw in pws:
         if len(pw) == 0:
             ops_str.append("")
             continue
-        wires, ops = zip(*pw.items(), strict=True)
-        ops_str.append(
-            " ".join([f"{op}{wire_order.index(wire)}" for op, wire in zip(ops, wires, strict=True)])
-        )
+        wires, ops = zip(*pw.items())
+        ops_str.append(" ".join([f"{op}{wire_order.index(wire)}" for op, wire in zip(ops, wires)]))
 
     return coeffs, ops_str
 
 
-def _pennylane_to_openfermion(coeffs, ops, wires=None, tol=1.0e-16):
+def _pennylane_to_openfermion(coeffs, ops, wires=None):
     r"""Convert a 2-tuple of complex coefficients and PennyLane operations to
     OpenFermion ``QubitOperator``.
 
@@ -212,9 +209,7 @@ def _pennylane_to_openfermion(coeffs, ops, wires=None, tol=1.0e-16):
             For types Wires/list/tuple, each item in the iterable represents a wire label
             corresponding to the qubit number equal to its index.
             For type dict, only consecutive-int-valued dict (for wire-to-qubit conversion) is
-            accepted. If ``None``, the identity map (e.g., ``0->0, 1->1, ...``) will be used.
-        tol (float): whether to keep the imaginary part of the coefficients if they are smaller
-            than the provided tolerance.
+            accepted. If None, will map sorted wires from all `ops` to consecutive int.
 
     Returns:
         QubitOperator: an instance of OpenFermion's ``QubitOperator``.
@@ -223,10 +218,10 @@ def _pennylane_to_openfermion(coeffs, ops, wires=None, tol=1.0e-16):
 
     >>> coeffs = np.array([0.1, 0.2, 0.3, 0.4])
     >>> ops = [
-    ...     qp.prod(qp.X('w0')),
-    ...     qp.prod(qp.Y('w0'), qp.Z('w2')),
-    ...     qp.sum(qp.Z('w0'), qp.s_prod(-0.5, qp.X('w0'))),
-    ...     qp.prod(qp.X('w0'), qp.Z('w1')),
+    ...     qml.operation.Tensor(qml.X('w0')),
+    ...     qml.operation.Tensor(qml.Y('w0'), qml.Z('w2')),
+    ...     qml.sum(qml.Z('w0'), qml.s_prod(-0.5, qml.X('w0'))),
+    ...     qml.prod(qml.X('w0'), qml.Z('w1')),
     ... ]
     >>> _pennylane_to_openfermion(coeffs, ops, wires=Wires(['w0', 'w1', 'w2']))
     (-0.05+0j) [X0] +
@@ -251,23 +246,27 @@ def _pennylane_to_openfermion(coeffs, ops, wires=None, tol=1.0e-16):
         if not set(all_wires).issubset(set(qubit_indexed_wires)):
             raise ValueError("Supplied `wires` does not cover all wires defined in `ops`.")
     else:
-        qubit_indexed_wires = qp.wires.Wires(range(max(all_wires) + 1))
-
-    coeffs = np.array(coeffs)
-    if (np.abs(coeffs.imag) < tol).all():
-        coeffs = coeffs.real
+        qubit_indexed_wires = all_wires
 
     q_op = openfermion.QubitOperator()
-    for coeff, op in zip(coeffs, ops, strict=True):
+    for coeff, op in zip(coeffs, ops):
+        if isinstance(op, Tensor):
+            try:
+                ps = pauli_sentence(op)
+            except ValueError as e:
+                raise ValueError(
+                    f"Expected a Pennylane operator with a valid Pauli word representation, "
+                    f"but got {op}."
+                ) from e
 
-        if (ps := op.pauli_rep) is None:
+        elif (ps := op.pauli_rep) is None:
             raise ValueError(
                 f"Expected a Pennylane operator with a valid Pauli word representation, but got {op}."
             )
 
         if len(ps) > 0:
             sub_coeffs, op_strs = _ps_to_coeff_term(ps, wire_order=qubit_indexed_wires)
-            for c, op_str in zip(sub_coeffs, op_strs, strict=True):
+            for c, op_str in zip(sub_coeffs, op_strs):
                 # This is how one makes QubitOperator in OpenFermion
                 q_op += complex(coeff * c) * openfermion.QubitOperator(op_str)
 
@@ -298,9 +297,7 @@ def _openfermion_pennylane_equivalent(
         (bool): True if equivalent
     """
     coeffs, ops = pennylane_qubit_operator.terms()
-    return openfermion_qubit_operator == _pennylane_to_openfermion(
-        np.array(coeffs), ops, wires=wires
-    )
+    return openfermion_qubit_operator == _pennylane_to_openfermion(coeffs, ops, wires=wires)
 
 
 def import_operator(qubit_observable, format="openfermion", wires=None, tol=1e010):
@@ -329,11 +326,20 @@ def import_operator(qubit_observable, format="openfermion", wires=None, tol=1e01
 
     **Example**
 
+    >>> from openfermion import QubitOperator
+    >>> h_of = QubitOperator('X0 X1 Y2 Y3', -0.0548) + QubitOperator('Z0 Z1', 0.14297)
+    >>> h_pl = import_operator(h_of, format='openfermion')
+    >>> print(h_pl)
+    (0.14297) [Z0 Z1]
+    + (-0.0548) [X0 X1 Y2 Y3]
+
+    If the new op-math is active, an arithmetic operator is returned instead.
+
+    >>> qml.operation.enable_new_opmath()
     >>> h_pl = import_operator(h_of, format='openfermion')
     >>> print(h_pl)
     (-0.0548 * X(0 @ X(1) @ Y(2) @ Y(3))) + (0.14297 * Z(0 @ Z(1)))
     """
-    format = format.strip().lower()
     if format not in ["openfermion"]:
         raise TypeError(f"Converter does not exist for {format} format.")
 
@@ -346,7 +352,10 @@ def import_operator(qubit_observable, format="openfermion", wires=None, tol=1e01
             f" {list(coeffs[np.iscomplex(coeffs)])}"
         )
 
-    return qp.dot(*_openfermion_to_pennylane(qubit_observable, wires=wires))
+    if active_new_opmath():
+        return qml.dot(*_openfermion_to_pennylane(qubit_observable, wires=wires))
+
+    return qml.Hamiltonian(*_openfermion_to_pennylane(qubit_observable, wires=wires))
 
 
 def _excitations(electrons, orbitals):
@@ -438,7 +447,7 @@ def _excited_configurations(electrons, orbitals, excitation):
             "Only single (excitation = 1) and double (excitation = 2) excitations are supported."
         )
 
-    hf_state = qp.qchem.hf_state(electrons, orbitals)
+    hf_state = qml.qchem.hf_state(electrons, orbitals)
     singles, doubles = _excitations(electrons, orbitals)
     states, signs = [], []
 
@@ -490,7 +499,7 @@ def import_state(solver, tol=1e-15):
     >>> mol = gto.M(atom=[['H', (0, 0, 0)], ['H', (0,0,0.71)]], basis='sto6g')
     >>> myhf = scf.UHF(mol).run()
     >>> myci = ci.UCISD(myhf).run()
-    >>> wf_cisd = qp.qchem.import_state(myci, tol=1e-1)
+    >>> wf_cisd = qml.qchem.import_state(myci, tol=1e-1)
     >>> print(wf_cisd)
     [ 0.        +0.j  0.        +0.j  0.        +0.j  0.1066467 +0.j
       0.        +0.j  0.        +0.j  0.        +0.j  0.        +0.j
@@ -534,17 +543,6 @@ def import_state(solver, tol=1e-15):
     return wf
 
 
-def _fock_occupations_to_statevec_idx(int_a, int_b, norbs):
-    """Translate Fock occupation vectors for alpha and beta electrons into the corresponding
-    computational basis index in a dense statevector."""
-    bin_a = bin(int_a)[2:][::-1]
-    bin_b = bin(int_b)[2:][::-1]
-    bin_a += "0" * (norbs - len(bin_a))
-    bin_b += "0" * (norbs - len(bin_b))
-    bin_ab = "".join(i + j for i, j in zip(bin_a, bin_b, strict=True))
-    return int(bin_ab, 2)
-
-
 def _wfdict_to_statevector(fcimatr_dict, norbs):
     r"""Convert a wavefunction in sparse dictionary format to a PennyLane statevector.
 
@@ -562,10 +560,14 @@ def _wfdict_to_statevector(fcimatr_dict, norbs):
     statevector = np.zeros(2 ** (2 * norbs), dtype=complex)
 
     for (int_a, int_b), coeff in fcimatr_dict.items():
-        statevec_idx = _fock_occupations_to_statevec_idx(int_a, int_b, norbs)
-        statevector[statevec_idx] += coeff
+        bin_a = bin(int_a)[2:][::-1]
+        bin_b = bin(int_b)[2:][::-1]
+        bin_a += "0" * (norbs - len(bin_a))
+        bin_b += "0" * (norbs - len(bin_b))
+        bin_ab = "".join(i + j for i, j in zip(bin_a, bin_b))
+        statevector[int(bin_ab, 2)] += coeff
 
-    statevector /= np.linalg.norm(statevector)
+    statevector = statevector / np.sqrt(np.sum(statevector**2))
 
     return statevector
 
@@ -623,28 +625,16 @@ def _rcisd_state(cisd_solver, tol=1e-15):
     ref_a = int(2**nocc - 1)
     ref_b = ref_a
 
-    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b], strict=True)), [c0], strict=True))
+    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b])), [c0]))
 
     # alpha -> alpha excitations
     c1a_configs, c1a_signs = _excited_configurations(nocc, norb, 1)
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip(c1a_configs, [ref_b] * len(c1a_configs), strict=True)),
-                c1 * c1a_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip(c1a_configs, [ref_b] * len(c1a_configs))), c1 * c1a_signs))
     )
     # beta -> beta excitations
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip([ref_a] * len(c1a_configs), c1a_configs, strict=True)),
-                c1 * c1a_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip([ref_a] * len(c1a_configs), c1a_configs)), c1 * c1a_signs))
     )
 
     # check if double excitations within one spin sector (aa->aa and bb->bb) are possible
@@ -658,23 +648,11 @@ def _rcisd_state(cisd_solver, tol=1e-15):
         # alpha, alpha -> alpha, alpha excitations
         c2aa_configs, c2aa_signs = _excited_configurations(nocc, norb, 2)
         fcimatr_dict.update(
-            dict(
-                zip(
-                    list(zip(c2aa_configs, [ref_b] * len(c2aa_configs), strict=True)),
-                    c2aa * c2aa_signs,
-                    strict=True,
-                )
-            )
+            dict(zip(list(zip(c2aa_configs, [ref_b] * len(c2aa_configs))), c2aa * c2aa_signs))
         )
         # beta, beta -> beta, beta excitations
         fcimatr_dict.update(
-            dict(
-                zip(
-                    list(zip([ref_a] * len(c2aa_configs), c2aa_configs, strict=True)),
-                    c2aa * c2aa_signs,
-                    strict=True,
-                )
-            )
+            dict(zip(list(zip([ref_a] * len(c2aa_configs), c2aa_configs)), c2aa * c2aa_signs))
         )
 
     # alpha, beta -> alpha, beta excitations
@@ -684,7 +662,6 @@ def _rcisd_state(cisd_solver, tol=1e-15):
             zip(
                 list(product(c1a_configs, c1a_configs)),
                 np.einsum("i,j,ij->ij", c1a_signs, c1a_signs, c2ab, optimize=True).ravel(),
-                strict=True,
             )
         )
     )
@@ -750,9 +727,9 @@ def _ucisd_state(cisd_solver, tol=1e-15):
     size_ab = size_a * size_b
 
     cumul = np.cumsum([0, 1, size_a, size_b, size_ab, size_aa, size_bb])
-    c0, c1a, c1b, c2ab, c2aa, c2bb = (
+    c0, c1a, c1b, c2ab, c2aa, c2bb = [
         cisdvec[cumul[idx] : cumul[idx + 1]] for idx in range(len(cumul) - 1)
-    )
+    ]
     c2ab = (
         c2ab.reshape(nelec_a, nelec_b, nvir_a, nvir_b)
         .transpose(0, 2, 1, 3)
@@ -763,35 +740,19 @@ def _ucisd_state(cisd_solver, tol=1e-15):
     ref_a = int(2**nelec_a - 1)
     ref_b = int(2**nelec_b - 1)
 
-    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b], strict=True)), c0, strict=True))
+    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b])), c0))
 
     # alpha -> alpha excitations
     c1a_configs, c1a_signs = _excited_configurations(nelec_a, norb, 1)
-    fcimatr_dict.update(
-        dict(
-            zip(list(zip(c1a_configs, [ref_b] * size_a, strict=True)), c1a * c1a_signs, strict=True)
-        )
-    )
+    fcimatr_dict.update(dict(zip(list(zip(c1a_configs, [ref_b] * size_a)), c1a * c1a_signs)))
 
     # beta -> beta excitations
     c1b_configs, c1b_signs = _excited_configurations(nelec_b, norb, 1)
-    fcimatr_dict.update(
-        dict(
-            zip(list(zip([ref_a] * size_b, c1b_configs, strict=True)), c1b * c1b_signs, strict=True)
-        )
-    )
+    fcimatr_dict.update(dict(zip(list(zip([ref_a] * size_b, c1b_configs)), c1b * c1b_signs)))
 
     # alpha, alpha -> alpha, alpha excitations
     c2aa_configs, c2aa_signs = _excited_configurations(nelec_a, norb, 2)
-    fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip(c2aa_configs, [ref_b] * size_aa, strict=True)),
-                c2aa * c2aa_signs,
-                strict=True,
-            )
-        )
-    )
+    fcimatr_dict.update(dict(zip(list(zip(c2aa_configs, [ref_b] * size_aa)), c2aa * c2aa_signs)))
 
     # alpha, beta -> alpha, beta excitations
     fcimatr_dict.update(
@@ -799,22 +760,13 @@ def _ucisd_state(cisd_solver, tol=1e-15):
             zip(
                 list(product(c1a_configs, c1b_configs)),
                 np.einsum("i,j,ij->ij", c1a_signs, c1b_signs, c2ab, optimize=True).ravel(),
-                strict=True,
             )
         )
     )
 
     # beta, beta -> beta, beta excitations
     c2bb_configs, c2bb_signs = _excited_configurations(nelec_b, norb, 2)
-    fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip([ref_a] * size_bb, c2bb_configs, strict=True)),
-                c2bb * c2bb_signs,
-                strict=True,
-            )
-        )
-    )
+    fcimatr_dict.update(dict(zip(list(zip([ref_a] * size_bb, c2bb_configs)), c2bb * c2bb_signs)))
 
     # filter based on tolerance cutoff
     fcimatr_dict = {key: value for key, value in fcimatr_dict.items() if abs(value) > tol}
@@ -904,30 +856,18 @@ def _rccsd_state(ccsd_solver, tol=1e-15):
     ref_a = int(2**nelec_a - 1)
     ref_b = int(2**nelec_b - 1)
 
-    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b], strict=True)), [1.0], strict=True))
+    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b])), [1.0]))
 
     # alpha -> alpha excitations
     t1a_configs, t1a_signs = _excited_configurations(nelec_a, norb, 1)
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip(t1a_configs, [ref_b] * len(t1a_configs), strict=True)),
-                t1a.ravel() * t1a_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip(t1a_configs, [ref_b] * len(t1a_configs))), t1a.ravel() * t1a_signs))
     )
 
     # beta -> beta excitations
     t1b_configs, t1b_signs = _excited_configurations(nelec_b, norb, 1)
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip([ref_a] * len(t1b_configs), t1b_configs, strict=True)),
-                t1b.ravel() * t1b_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip([ref_a] * len(t1b_configs), t1b_configs)), t1b.ravel() * t1b_signs))
     )
 
     # alpha, alpha -> alpha, alpha excitations
@@ -939,11 +879,7 @@ def _rccsd_state(ccsd_solver, tol=1e-15):
         t2aa = t2aa[ooidx][:, vvidx[0], vvidx[1]]
         fcimatr_dict.update(
             dict(
-                zip(
-                    list(zip(t2aa_configs, [ref_b] * len(t2aa_configs), strict=True)),
-                    t2aa.ravel() * t2aa_signs,
-                    strict=True,
-                )
+                zip(list(zip(t2aa_configs, [ref_b] * len(t2aa_configs))), t2aa.ravel() * t2aa_signs)
             )
         )
 
@@ -955,11 +891,7 @@ def _rccsd_state(ccsd_solver, tol=1e-15):
         t2bb = t2bb[ooidx][:, vvidx[0], vvidx[1]]
         fcimatr_dict.update(
             dict(
-                zip(
-                    list(zip([ref_a] * len(t2bb_configs), t2bb_configs, strict=True)),
-                    t2bb.ravel() * t2bb_signs,
-                    strict=True,
-                )
+                zip(list(zip([ref_a] * len(t2bb_configs), t2bb_configs)), t2bb.ravel() * t2bb_signs)
             )
         )
 
@@ -975,7 +907,6 @@ def _rccsd_state(ccsd_solver, tol=1e-15):
                     t2ab.reshape(nelec_a * nvir_a, -1),
                     optimize=True,
                 ).ravel(),
-                strict=True,
             )
         )
     )
@@ -1069,30 +1000,18 @@ def _uccsd_state(ccsd_solver, tol=1e-15):
     ref_a = int(2**nelec_a - 1)
     ref_b = int(2**nelec_b - 1)
 
-    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b], strict=True)), [1.0], strict=True))
+    fcimatr_dict = dict(zip(list(zip([ref_a], [ref_b])), [1.0]))
 
     # alpha -> alpha excitations
     t1a_configs, t1a_signs = _excited_configurations(nelec_a, norb, 1)
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip(t1a_configs, [ref_b] * len(t1a_configs), strict=True)),
-                t1a.ravel() * t1a_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip(t1a_configs, [ref_b] * len(t1a_configs))), t1a.ravel() * t1a_signs))
     )
 
     # beta -> beta excitations
     t1b_configs, t1b_signs = _excited_configurations(nelec_b, norb, 1)
     fcimatr_dict.update(
-        dict(
-            zip(
-                list(zip([ref_a] * len(t1b_configs), t1b_configs, strict=True)),
-                t1b.ravel() * t1b_signs,
-                strict=True,
-            )
-        )
+        dict(zip(list(zip([ref_a] * len(t1b_configs), t1b_configs)), t1b.ravel() * t1b_signs))
     )
 
     # alpha, alpha -> alpha, alpha excitations
@@ -1104,11 +1023,7 @@ def _uccsd_state(ccsd_solver, tol=1e-15):
         t2aa = t2aa[ooidx][:, vvidx[0], vvidx[1]]
         fcimatr_dict.update(
             dict(
-                zip(
-                    list(zip(t2aa_configs, [ref_b] * len(t2aa_configs), strict=True)),
-                    t2aa.ravel() * t2aa_signs,
-                    strict=True,
-                )
+                zip(list(zip(t2aa_configs, [ref_b] * len(t2aa_configs))), t2aa.ravel() * t2aa_signs)
             )
         )
 
@@ -1121,11 +1036,7 @@ def _uccsd_state(ccsd_solver, tol=1e-15):
         t2bb = t2bb[ooidx][:, vvidx[0], vvidx[1]]
         fcimatr_dict.update(
             dict(
-                zip(
-                    list(zip([ref_a] * len(t2bb_configs), t2bb_configs, strict=True)),
-                    t2bb.ravel() * t2bb_signs,
-                    strict=True,
-                )
+                zip(list(zip([ref_a] * len(t2bb_configs), t2bb_configs)), t2bb.ravel() * t2bb_signs)
             )
         )
 
@@ -1141,7 +1052,6 @@ def _uccsd_state(ccsd_solver, tol=1e-15):
                     t2ab.reshape(nelec_a * nvir_a, -1),
                     optimize=True,
                 ).ravel(),
-                strict=True,
             )
         )
     )
@@ -1209,7 +1119,7 @@ def _dmrg_state(wavefunction, tol=1e-15):
         # interleave spin-up/down operators) is consistent with pennylane
 
     ## create the FCI matrix as a dict
-    fcimatr_dict = dict(zip(list(zip(row, col, strict=True)), coeffs, strict=True))
+    fcimatr_dict = dict(zip(list(zip(row, col)), coeffs))
 
     # filter based on tolerance cutoff
     fcimatr_dict = {key: value for key, value in fcimatr_dict.items() if abs(value) > tol}
@@ -1266,7 +1176,7 @@ def _shci_state(wavefunction, tol=1e-15):
         xb.append(bin_b)
 
     ## create the FCI matrix as a dict
-    fcimatr_dict = dict(zip(list(zip(xa, xb, strict=True)), coeffs, strict=True))
+    fcimatr_dict = dict(zip(list(zip(xa, xb)), coeffs))
 
     # filter based on tolerance cutoff
     fcimatr_dict = {key: value for key, value in fcimatr_dict.items() if abs(value) > tol}

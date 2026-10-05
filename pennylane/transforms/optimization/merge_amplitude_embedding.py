@@ -12,53 +12,73 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Transform for merging AmplitudeEmbedding gates in a quantum circuit."""
+from typing import Sequence, Callable
 
+from pennylane.transforms import transform
+from pennylane.tape import QuantumTape
 from pennylane import AmplitudeEmbedding
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.core.queuing import QueuingManager
-from pennylane.exceptions import DeviceError
+from pennylane._device import DeviceError
 from pennylane.math import flatten, reshape
-from pennylane.transforms.core import transform
-from pennylane.typing import PostprocessingFn
+from pennylane.queuing import QueuingManager
 
 
 @transform
-def merge_amplitude_embedding(tape: QuantumScript) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def merge_amplitude_embedding(tape: QuantumTape) -> (Sequence[QuantumTape], Callable):
     r"""Quantum function transform to combine amplitude embedding templates that act on different qubits.
 
     Args:
-        tape (QNode or QuantumTape or Callable): A quantum circuit (QNode or quantum function).
+        tape (QNode or QuantumTape or Callable): A quantum circuit.
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
 
     **Example**
 
-    You can apply the transform directly on a :class:`QNode`:
+    >>> dev = qml.device('default.qubit', wires=4)
+
+    You can apply the transform directly on :class:`QNode`:
 
     .. code-block:: python
 
-        import pennylane as qp
-
-        dev = qp.device('default.qubit', wires=4)
-
-        @qp.transforms.merge_amplitude_embedding
-        @qp.qnode(device=dev)
+        @qml.transforms.merge_amplitude_embedding
+        @qml.qnode(device=dev)
         def circuit():
-            qp.CNOT(wires = [0,1])
-            qp.AmplitudeEmbedding([0, 1], wires = 2)
-            qp.AmplitudeEmbedding([0, 1], wires = 3)
-            return qp.state()
+            qml.CNOT(wires = [0,1])
+            qml.AmplitudeEmbedding([0,1], wires = 2)
+            qml.AmplitudeEmbedding([0,1], wires = 3)
+            return qml.state()
 
-    >>> print(qp.draw(circuit)())
-    0: ─╭●───┤ ╭State
-    1: ─╰X───┤ ├State
-    2: ─╭|Ψ⟩─┤ ├State
-    3: ─╰|Ψ⟩─┤ ╰State
     >>> circuit()
-    array([0.+0.j, 0.+0.j, 0.+0.j, 1.+0.j, 0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j,
-           0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j, 0.+0.j])
+    [1.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j 0.+0.j]
+
+    .. details::
+        :title: Usage Details
+
+        You can also apply it on quantum function.
+
+        .. code-block:: python
+
+            def qfunc():
+                qml.CNOT(wires = [0,1])
+                qml.AmplitudeEmbedding([0,1], wires = 2)
+                qml.AmplitudeEmbedding([0,1], wires = 3)
+                return qml.state()
+
+        The circuit before compilation will not work because of using two amplitude embedding.
+
+        Using the transformation we can join the different amplitude embedding into a single one:
+
+        >>> optimized_qfunc = qml.transforms.merge_amplitude_embedding(qfunc)
+        >>> optimized_qnode = qml.QNode(optimized_qfunc, dev)
+        >>> print(qml.draw(optimized_qnode)())
+        0: ─╭●──────────────────────┤  State
+        1: ─╰X──────────────────────┤  State
+        2: ─╭AmplitudeEmbedding(M0)─┤  State
+        3: ─╰AmplitudeEmbedding(M0)─┤  State
+        M0 =
+        [0.+0.j 0.+0.j 0.+0.j 1.+0.j]
+
     """
     new_operations = []
     visited_wires = set()
@@ -88,7 +108,7 @@ def merge_amplitude_embedding(tape: QuantumScript) -> tuple[QuantumScriptBatch, 
         final_batch_size = input_batch_size[0]
 
         # Merge all parameters and qubits into a single one.
-        for w, v, b in zip(input_wires[1:], input_vectors[1:], input_batch_size[1:], strict=True):
+        for w, v, b in zip(input_wires[1:], input_vectors[1:], input_batch_size[1:]):
             final_vector = final_vector[..., :, None] * v[..., None, :]
             final_batch_size = final_batch_size or b
             final_wires = final_wires + w
@@ -101,10 +121,10 @@ def merge_amplitude_embedding(tape: QuantumScript) -> tuple[QuantumScriptBatch, 
         with QueuingManager.stop_recording():
             new_operations.insert(0, AmplitudeEmbedding(final_vector, wires=final_wires))
 
-    new_tape = tape.copy(operations=new_operations)
+    new_tape = type(tape)(new_operations, tape.measurements, shots=tape.shots)
 
     def null_postprocessing(results):
-        """A postprocessing function returned by a transform that only converts the batch of results
+        """A postprocesing function returned by a transform that only converts the batch of results
         into a result for a single ``QuantumTape``.
         """
         return results[0]

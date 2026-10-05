@@ -15,44 +15,28 @@
 This submodule contains the discrete-variable quantum operations that do
 not depend on any parameters.
 """
-
-# pylint: disable=arguments-differ,unused-argument
-
+# pylint:disable=abstract-method,arguments-differ,protected-access,invalid-overridden-method, no-member
 import cmath
 from copy import copy
-from functools import lru_cache, reduce
-from typing import Literal, override
-from warnings import warn
+from functools import lru_cache
 
 import numpy as np
+
 from scipy import sparse
 
-import pennylane as qp
-from pennylane import math
-from pennylane.core.operator import Operator2
-from pennylane.decomposition import add_decomps, register_condition, register_resources
-from pennylane.decomposition.symbolic_decomposition import self_adjoint
-from pennylane.exceptions import PennyLaneDeprecationWarning
-from pennylane.ops.mid_measure.pauli_measure import PauliMeasure, pauli_measure
-from pennylane.ops.op_math.adjoint2 import _adjoint_abstract
-from pennylane.ops.op_math.controlled import _is_empty_or_all_true, custom_ctrl_dispatch
-from pennylane.ops.op_math.controlled2 import _ctrl_abstract
-from pennylane.ops.op_math.controlled2 import flip_zero_control as flip_zero_control2
-from pennylane.ops.op_math.pow2 import make_pow_decomp_with_period as make_pow_decomp_with_period2
-from pennylane.ops.op_math.pow2 import pow_involutory as pow_involutory2
-from pennylane.typing import AbstractWires, Float, TensorLike, Wire
-from pennylane.wires import Wires, WiresLike, concatenate_wires
+import pennylane as qml
+from pennylane.operation import Observable, Operation
+from pennylane.utils import pauli_eigs
+from pennylane.wires import Wires
 
-INV_SQRT2 = 1 / qp.math.sqrt(2)
+INV_SQRT2 = 1 / qml.math.sqrt(2)
 
 
-class Hadamard(Operator2):
+class Hadamard(Observable, Operation):
     r"""Hadamard(wires)
     The Hadamard operator
 
     .. math:: H = \frac{1}{\sqrt{2}}\begin{bmatrix} 1 & 1\\ 1 & -1\end{bmatrix}.
-
-    .. seealso:: The equivalent short-form alias :class:`~H`
 
     **Details:**
 
@@ -63,39 +47,20 @@ class Hadamard(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    is_verified_hermitian = True
-
-    wire_sizes = (1,)
-
-    arg_specs = {"wires": Wire[1]}
-
     num_wires = 1
     """int: Number of wires that the operator acts on."""
 
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
+    _queue_category = "_ops"
 
-    def __repr__(self) -> str:
-        # Hadamard.name is still "Hadamard" but we want the repr to be just "H(0)"
-        if isinstance(self.wires, Wires):
-            return f"H({self.wires[0]!r})"
-        return f"H(wires={self.wires})"
-
-    @override
-    def label(
-        self,
-        decimals: int | None = None,
-        base_label: str | None = None,
-        cache: dict | None = None,
-    ) -> str:
+    def label(self, decimals=None, base_label=None, cache=None):
         return base_label or "H"
 
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -108,22 +73,19 @@ class Hadamard(Operator2):
 
         **Example**
 
-        >>> print(qp.Hadamard.compute_matrix())
+        >>> print(qml.Hadamard.compute_matrix())
         [[ 0.70710678  0.70710678]
          [ 0.70710678 -0.70710678]]
         """
         return np.array([[INV_SQRT2, INV_SQRT2], [INV_SQRT2, -INV_SQRT2]])
 
     @staticmethod
-    @override
-    def compute_sparse_matrix(wires: WiresLike = None, format="csr") -> sparse.spmatrix:
-        return sparse.csr_matrix([[INV_SQRT2, INV_SQRT2], [INV_SQRT2, -INV_SQRT2]]).asformat(
-            format=format
-        )
+    @lru_cache()
+    def compute_sparse_matrix():  # pylint: disable=arguments-differ
+        return sparse.csr_matrix([[INV_SQRT2, INV_SQRT2], [INV_SQRT2, -INV_SQRT2]])
 
     @staticmethod
-    @override
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -142,14 +104,13 @@ class Hadamard(Operator2):
 
         **Example**
 
-        >>> print(qp.Hadamard.compute_eigvals())
-        [ 1. -1.]
+        >>> print(qml.Hadamard.compute_eigvals())
+        [ 1 -1]
         """
-        return qp.pauli.pauli_eigs(1)
+        return pauli_eigs(1)
 
     @staticmethod
-    @override
-    def compute_diagonalizing_gates(wires: WiresLike) -> list[qp.operation.Operator]:
+    def compute_diagonalizing_gates(wires):
         r"""Sequence of gates that diagonalize the operator in the computational basis (static method).
 
         Given the eigendecomposition :math:`O = U \Sigma U^{\dagger}` where
@@ -168,134 +129,54 @@ class Hadamard(Operator2):
 
         **Example**
 
-        >>> print(qp.Hadamard.compute_diagonalizing_gates(wires=[0]))
+        >>> print(qml.Hadamard.compute_diagonalizing_gates(wires=[0]))
         [RY(-0.7853981633974483, wires=[0])]
         """
-        return [qp.RY(-np.pi / 4, wires=wires)]
+        return [qml.RY(-np.pi / 4, wires=wires)]
 
-    @override
-    def adjoint(self) -> "Hadamard":
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+        .. seealso:: :meth:`~.Hadamard.decomposition`.
+
+        Args:
+            wires (Any, Wires): Wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition of the operator
+
+        **Example:**
+
+        >>> print(qml.Hadamard.compute_decomposition(0))
+        [PhaseShift(1.5707963267948966, wires=[0]),
+        RX(1.5707963267948966, wires=[0]),
+        PhaseShift(1.5707963267948966, wires=[0])]
+
+        """
+        return [
+            qml.PhaseShift(np.pi / 2, wires=wires),
+            qml.RX(np.pi / 2, wires=wires),
+            qml.PhaseShift(np.pi / 2, wires=wires),
+        ]
+
+    def _controlled(self, wire):
+        return qml.CH(wires=Wires(wire) + self.wires)
+
+    def adjoint(self):
         return Hadamard(wires=self.wires)
 
-    @override
-    def pow(self, z: int | float):
+    def single_qubit_rot_angles(self):
+        # H = RZ(\pi) RY(\pi/2) RZ(0)
+        return [np.pi, np.pi / 2, 0.0]
+
+    def pow(self, z):
         return super().pow(z % 2)
 
 
-@custom_ctrl_dispatch.register
-def _ctrl_h(base: Hadamard, control, control_values, *_):
-    if len(control) == 1 and _is_empty_or_all_true(control_values):
-        return qp.CH(control + base.wires)
-    return NotImplemented
-
-
-H = Hadamard
-r"""H(wires)
-The Hadamard operator
-
-.. math:: H = \frac{1}{\sqrt{2}}\begin{bmatrix} 1 & 1\\ 1 & -1\end{bmatrix}.
-
-.. seealso:: The equivalent long-form alias :class:`~Hadamard`
-
-**Details:**
-
-* Number of wires: 1
-* Number of parameters: 0
-
-Args:
-    wires (Sequence[int] or int): the wire the operation acts on
-"""
-
-
-def _hadamard_rz_rx_resources(wires: WiresLike):
-    return {qp.RZ: 2, qp.RX: 1, qp.GlobalPhase: 1}
-
-
-@register_resources(_hadamard_rz_rx_resources)
-def _hadamard_to_rz_rx(wires: WiresLike, **__):
-    qp.RZ(np.pi / 2, wires=wires)
-    qp.RX(np.pi / 2, wires=wires)
-    qp.RZ(np.pi / 2, wires=wires)
-    qp.GlobalPhase(-np.pi / 2)
-
-
-def _hadamard_rz_ry_resources(wires: WiresLike):
-    return {qp.RZ: 1, qp.RY: 1, qp.GlobalPhase: 1}
-
-
-@register_resources(_hadamard_rz_ry_resources)
-def _hadamard_to_rz_ry(wires: WiresLike, **__):
-    qp.RZ(np.pi, wires=wires)
-    qp.RY(np.pi / 2, wires=wires)
-    qp.GlobalPhase(-np.pi / 2)
-
-
-def _hadamard_ppm_resources(wires: WiresLike):
-    return {
-        PauliMeasure("YY", wires=Wire[2]): 1,
-        PauliMeasure("X", wires=Wire[1]): 1,
-        qp.Y: 1,
-        qp.Z: 2,
-        qp.GlobalPhase: 1,
-    }
-
-
-@qp.register_resources(_hadamard_ppm_resources, work_wires={"burnable": 1})
-def _hadamard_ppm(wires, **__):
-    with qp.allocate(1, state="zero", restored=False) as work_wires:
-        qp.Z(wires)
-        m0 = pauli_measure("YY", [wires[0], work_wires[0]])
-        m1 = pauli_measure("X", work_wires)
-        qp.cond(m0 == m1, qp.Y)(wires)
-        qp.cond(m0 == m1, qp.GlobalPhase)(np.pi / 2)
-        qp.cond(m1, qp.Z)(work_wires[0])  # Reset work wire to |+>
-
-
-add_decomps(Hadamard, _hadamard_to_rz_rx, _hadamard_to_rz_ry, _hadamard_ppm)
-add_decomps("Adjoint(Hadamard)", self_adjoint)
-add_decomps("Pow(Hadamard)", pow_involutory2)
-
-
-# pylint: disable-next=unused-argument
-def _controlled_h_resources(base, control_wires, control_values, work_wires, work_wire_type):
-    if len(control_wires) == 1:
-        return {qp.CH: 1}
-    return {
-        qp.H: 2,
-        qp.RY: 2,
-        _ctrl_abstract(
-            qp.X,
-            Wire[len(control_wires)],
-            Wire[len(work_wires)],
-            work_wire_type,
-        ): 1,
-    }
-
-
-@register_resources(_controlled_h_resources)
-# pylint: disable-next=unused-argument
-def _controlled_hadamard(base, control_wires, control_values, work_wires, work_wire_type):
-    wires = concatenate_wires(control_wires, base.wires)
-    if len(control_wires) == 1:
-        qp.CH(wires)
-        return
-
-    qp.RY(-np.pi / 4, wires=wires[-1])
-    qp.H(wires=wires[-1])
-    qp.ctrl(
-        qp.X(wires[-1]),
-        control=wires[:-1],
-        work_wires=work_wires,
-        work_wire_type=work_wire_type,
-    )
-    qp.H(wires=wires[-1])
-    qp.RY(np.pi / 4, wires=wires[-1])
-
-
-add_decomps("C(Hadamard)", flip_zero_control2(_controlled_hadamard))
-
-
-class PauliX(Operator2):
+class PauliX(Observable, Operation):
     r"""
     The Pauli X operator
 
@@ -312,60 +193,39 @@ class PauliX(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    wire_sizes = (1,)
-
-    arg_specs = {"wires": Wire[1]}
-
     num_wires = 1
     """int: Number of wires that the operator acts on."""
 
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:  # pylint: disable=missing-function-docstring
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "X"
+    basis = "X"
 
     batch_size = None
 
-    is_verified_hermitian = True
+    _queue_category = "_ops"
 
-    @property
-    @override
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {qp.pauli.PauliWord({self.wires[0]: "X"}): 1.0}
-            )
-        return self._pauli_rep
+    def __init__(self, *params, wires=None, id=None):
+        super().__init__(*params, wires=wires, id=id)
+        self._pauli_rep = qml.pauli.PauliSentence({qml.pauli.PauliWord({self.wires[0]: "X"}): 1.0})
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @override
-    def label(
-        self,
-        decimals: int | None = None,
-        base_label: str | None = None,
-        cache: dict | None = None,
-    ) -> str:
-        """A string label for the operator."""
+    def label(self, decimals=None, base_label=None, cache=None):
         return base_label or "X"
 
-    def __repr__(self) -> str:
-        # PauliX.name is still "PauliX" but we want the repr to be just "X"
-        if isinstance(self.wires, Wires):
-            return f"X({self.wires[0]!r})"
-        return f"X(wires={self.wires})"
+    def __repr__(self):
+        """String representation."""
+        wire = self.wires[0]
+        if isinstance(wire, str):
+            return f"X('{wire}')"
+        return f"X({wire})"
+
+    @property
+    def name(self):
+        return "PauliX"
 
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike | None = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -379,20 +239,19 @@ class PauliX(Operator2):
 
         **Example**
 
-        >>> print(qp.X.compute_matrix())
+        >>> print(qml.X.compute_matrix())
         [[0 1]
          [1 0]]
         """
         return np.array([[0, 1], [1, 0]])
 
     @staticmethod
-    @override
-    def compute_sparse_matrix(wires: WiresLike | None = None, format="csr") -> sparse.spmatrix:
-        return sparse.csr_matrix([[0, 1], [1, 0]]).asformat(format=format)
+    @lru_cache()
+    def compute_sparse_matrix():  # pylint: disable=arguments-differ
+        return sparse.csr_matrix([[0, 1], [1, 0]])
 
     @staticmethod
-    @override
-    def compute_eigvals(wires: WiresLike | None = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -411,14 +270,13 @@ class PauliX(Operator2):
 
         **Example**
 
-        >>> print(qp.X.compute_eigvals())
-        [ 1. -1.]
+        >>> print(qml.X.compute_eigvals())
+        [ 1 -1]
         """
-        return qp.pauli.pauli_eigs(1)
+        return pauli_eigs(1)
 
     @staticmethod
-    @override
-    def compute_diagonalizing_gates(wires: WiresLike) -> list[qp.operation.Operator]:
+    def compute_diagonalizing_gates(wires):
         r"""Sequence of gates that diagonalize the operator in the computational basis (static method).
 
         Given the eigendecomposition :math:`O = U \Sigma U^{\dagger}` where
@@ -437,33 +295,55 @@ class PauliX(Operator2):
 
         **Example**
 
-        >>> print(qp.X.compute_diagonalizing_gates(wires=[0]))
-        [H(0)]
+        >>> print(qml.X.compute_diagonalizing_gates(wires=[0]))
+        [Hadamard(wires=[0])]
         """
         return [Hadamard(wires=wires)]
 
-    @override
-    def adjoint(self) -> "PauliX":
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+
+        .. seealso:: :meth:`~.X.decomposition`.
+
+        Args:
+            wires (Any, Wires): Wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.X.compute_decomposition(0))
+        [PhaseShift(1.5707963267948966, wires=[0]),
+        RX(3.141592653589793, wires=[0]),
+        PhaseShift(1.5707963267948966, wires=[0])]
+
+        """
+        return [
+            qml.PhaseShift(np.pi / 2, wires=wires),
+            qml.RX(np.pi, wires=wires),
+            qml.PhaseShift(np.pi / 2, wires=wires),
+        ]
+
+    def adjoint(self):
         return X(wires=self.wires)
 
-    @override
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    def pow(self, z):
         z_mod2 = z % 2
         if abs(z_mod2 - 0.5) < 1e-6:
             return [SX(wires=self.wires)]
         return super().pow(z_mod2)
 
+    def _controlled(self, wire):
+        return qml.CNOT(wires=Wires(wire) + self.wires)
 
-@custom_ctrl_dispatch.register
-def _ctrl_x(base: PauliX, control, control_values, work_wires, work_wire_type):
-    wires = control + base.wires
-    if not _is_empty_or_all_true(control_values):
-        return qp.MultiControlledX(wires, control_values, work_wires, work_wire_type)
-    if len(control) == 1:
-        return qp.CNOT(wires)
-    if len(control) == 2 and not work_wires:
-        return qp.Toffoli(wires)
-    return qp.MultiControlledX(wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    def single_qubit_rot_angles(self):
+        # X = RZ(-\pi/2) RY(\pi) RZ(\pi/2)
+        return [np.pi / 2, np.pi, -np.pi / 2]
 
 
 X = PauliX
@@ -483,60 +363,7 @@ Args:
 """
 
 
-def _paulix_to_rx_resources(wires: AbstractWires):
-    return {qp.GlobalPhase: 1, qp.RX: 1}
-
-
-@register_resources(_paulix_to_rx_resources)
-def _paulix_to_rx(wires: WiresLike):
-    qp.RX(np.pi, wires=wires)
-    qp.GlobalPhase(-np.pi / 2)
-
-
-# pylint: disable-next=unused-argument
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 2, 0.5))
-@register_resources(lambda *_, **__: {qp.SX: 1})
-def _pow_x_to_sx(base, z):  # pylint: disable=unused-argument
-    qp.SX(wires=base.wires)
-
-
-@register_resources(lambda *_, **__: {qp.RX: 1, qp.GlobalPhase: 1})
-def _pow_x_to_rx(base, z):
-    z_mod2 = qp.math.array(z) % 2
-    qp.RX(np.pi * z_mod2, wires=base.wires)
-    qp.GlobalPhase(-np.pi / 2 * z_mod2)
-
-
-add_decomps(PauliX, _paulix_to_rx)
-add_decomps("Adjoint(PauliX)", self_adjoint)
-add_decomps("Pow(PauliX)", pow_involutory2, _pow_x_to_rx, _pow_x_to_sx)
-
-
-def _ctrl_x_resource(base, control_wires, control_values, work_wires, work_wire_type):
-    return {
-        qp.MultiControlledX(
-            Wire[len(control_wires) + 1],
-            control_values=control_values,
-            work_wires=work_wires,
-            work_wire_type=work_wire_type,
-        ): 1
-    }
-
-
-@qp.register_resources(_ctrl_x_resource)
-def _ctrl_x_to_mcx(base, control_wires, control_values, work_wires, work_wire_type):
-    qp.MultiControlledX(
-        concatenate_wires(control_wires, base.wires),
-        control_values=control_values,
-        work_wires=work_wires,
-        work_wire_type=work_wire_type,
-    )
-
-
-add_decomps("C(PauliX)", _ctrl_x_to_mcx)
-
-
-class PauliY(Operator2):
+class PauliY(Observable, Operation):
     r"""
     The Pauli Y operator
 
@@ -553,57 +380,39 @@ class PauliY(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    arg_specs = {"wires": Wire[1]}
-
-    is_verified_hermitian = True
-
     num_wires = 1
     """int: Number of wires that the operator acts on."""
 
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:
-        """Basis of the operator."""
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "Y"
+    basis = "Y"
 
     batch_size = None
 
-    @property
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {qp.pauli.PauliWord({self.wires[0]: "Y"}): 1.0}
-            )
-        return self._pauli_rep
+    _queue_category = "_ops"
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
+    def __init__(self, *params, wires=None, id=None):
+        super().__init__(*params, wires=wires, id=id)
+        self._pauli_rep = qml.pauli.PauliSentence({qml.pauli.PauliWord({self.wires[0]: "Y"}): 1.0})
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         """String representation."""
-        # PauliY.name is still "PauliY" but we want the repr to be just "Y"
-        if isinstance(self.wires, Wires):
-            return f"Y({self.wires[0]!r})"
-        return f"Y(wires={self.wires})"
+        wire = self.wires[0]
+        if isinstance(wire, str):
+            return f"Y('{wire}')"
+        return f"Y({wire})"
 
-    def label(
-        self,
-        decimals: int | None = None,
-        base_label: str | None = None,
-        cache: dict | None = None,
-    ) -> str:
-        """A string label for the operator."""
+    def label(self, decimals=None, base_label=None, cache=None):
         return base_label or "Y"
 
+    @property
+    def name(self):
+        return "PauliY"
+
     @staticmethod
-    def compute_matrix(wires: WiresLike | None = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -616,18 +425,19 @@ class PauliY(Operator2):
 
         **Example**
 
-        >>> print(qp.Y.compute_matrix())
+        >>> print(qml.Y.compute_matrix())
         [[ 0.+0.j -0.-1.j]
          [ 0.+1.j  0.+0.j]]
         """
         return np.array([[0, -1j], [1j, 0]])
 
     @staticmethod
-    def compute_sparse_matrix(wires: WiresLike | None = None, format="csr") -> sparse.spmatrix:
-        return sparse.csr_matrix([[0, -1j], [1j, 0]]).asformat(format=format)
+    @lru_cache()
+    def compute_sparse_matrix():  # pylint: disable=arguments-differ
+        return sparse.csr_matrix([[0, -1j], [1j, 0]])
 
     @staticmethod
-    def compute_eigvals(wires: WiresLike | None = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -646,13 +456,13 @@ class PauliY(Operator2):
 
         **Example**
 
-        >>> print(qp.Y.compute_eigvals())
-        [ 1. -1.]
+        >>> print(qml.Y.compute_eigvals())
+        [ 1 -1]
         """
-        return qp.pauli.pauli_eigs(1)
+        return pauli_eigs(1)
 
     @staticmethod
-    def compute_diagonalizing_gates(wires: WiresLike) -> list[qp.operation.Operator]:
+    def compute_diagonalizing_gates(wires):
         r"""Sequence of gates that diagonalize the operator in the computational basis (static method).
 
         Given the eigendecomposition :math:`O = U \Sigma U^{\dagger}` where
@@ -671,8 +481,8 @@ class PauliY(Operator2):
 
         **Example**
 
-        >>> print(qp.Y.compute_diagonalizing_gates(wires=[0]))
-        [Z(0), S(0), H(0)]
+        >>> print(qml.Y.compute_diagonalizing_gates(wires=[0]))
+        [Z(0), S(wires=[0]), Hadamard(wires=[0])]
         """
         return [
             Z(wires=wires),
@@ -680,18 +490,46 @@ class PauliY(Operator2):
             Hadamard(wires=wires),
         ]
 
-    def adjoint(self) -> "PauliY":
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+        .. seealso:: :meth:`~.Y.decomposition`.
+
+        Args:
+            wires (Any, Wires): Single wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.Y.compute_decomposition(0))
+        [PhaseShift(1.5707963267948966, wires=[0]),
+        RY(3.141592653589793, wires=[0]),
+        PhaseShift(1.5707963267948966, wires=[0])]
+
+        """
+        return [
+            qml.PhaseShift(np.pi / 2, wires=wires),
+            qml.RY(np.pi, wires=wires),
+            qml.PhaseShift(np.pi / 2, wires=wires),
+        ]
+
+    def adjoint(self):
         return Y(wires=self.wires)
 
-    def pow(self, z: float | int) -> list[qp.operation.Operator]:
+    def pow(self, z):
         return super().pow(z % 2)
 
+    def _controlled(self, wire):
+        return qml.CY(wires=Wires(wire) + self.wires)
 
-@custom_ctrl_dispatch.register
-def _ctrl_y(base: PauliY, control, control_values, *_):
-    if len(control) == 1 and _is_empty_or_all_true(control_values):
-        return qp.CY(control + base.wires)
-    return NotImplemented
+    def single_qubit_rot_angles(self):
+        # Y = RZ(0) RY(\pi) RZ(0)
+        return [0.0, np.pi, 0.0]
 
 
 Y = PauliY
@@ -711,62 +549,7 @@ Args:
 """
 
 
-def _pauliy_to_ry_gp_resources(wires: AbstractWires):
-    return {qp.GlobalPhase: 1, qp.RY: 1}
-
-
-@register_resources(_pauliy_to_ry_gp_resources)
-def _pauliy_to_ry_gp(wires: WiresLike):
-    qp.RY(np.pi, wires=wires)
-    qp.GlobalPhase(-np.pi / 2)
-
-
-@register_resources(lambda *_, **__: {qp.RY: 1, qp.GlobalPhase: 1})
-def _pow_y(base, z):
-    z_mod2 = qp.math.array(z) % 2
-    qp.RY(np.pi * z_mod2, wires=base.wires)
-    qp.GlobalPhase(-np.pi / 2 * z_mod2)
-
-
-add_decomps(PauliY, _pauliy_to_ry_gp)
-add_decomps("Adjoint(PauliY)", self_adjoint)
-add_decomps("Pow(PauliY)", pow_involutory2, _pow_y)
-
-
-def _controlled_y_resource(base, control_wires, control_values, work_wires, work_wire_type):
-    if len(control_wires) == 1:
-        return {qp.CY: 1}
-    return {
-        qp.S: 1,
-        _adjoint_abstract(qp.S): 1,
-        _ctrl_abstract(
-            qp.X,
-            Wire[len(control_wires)],
-            Wire[len(work_wires)],
-            work_wire_type,
-        ): 1,
-    }
-
-
-@register_resources(_controlled_y_resource)
-def _controlled_y_decomp(base, control_wires, control_values, work_wires, work_wire_type):
-    wires = concatenate_wires(control_wires, base.wires)
-
-    if len(control_wires) == 1:
-        qp.CY(wires=wires)
-        return
-
-    qp.adjoint(qp.S(wires[-1]))
-    qp.ctrl(
-        qp.X(wires[-1]), control=wires[:-1], work_wires=work_wires, work_wire_type=work_wire_type
-    )
-    qp.S(wires=wires[-1])
-
-
-add_decomps("C(PauliY)", flip_zero_control2(_controlled_y_decomp))
-
-
-class PauliZ(Operator2):
+class PauliZ(Observable, Operation):
     r"""
     The Pauli Z operator
 
@@ -783,55 +566,37 @@ class PauliZ(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    arg_specs = {"wires": Wire[1]}
-
-    is_verified_hermitian = True
     num_wires = 1
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:
-        """Basis of the operator."""
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "Z"
+    basis = "Z"
 
     batch_size = None
 
-    @property
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {qp.pauli.PauliWord({self.wires[0]: "Z"}): 1.0}
-            )
-        return self._pauli_rep
+    _queue_category = "_ops"
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
+    def __init__(self, *params, wires=None, id=None):
+        super().__init__(*params, wires=wires, id=id)
+        self._pauli_rep = qml.pauli.PauliSentence({qml.pauli.PauliWord({self.wires[0]: "Z"}): 1.0})
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         """String representation."""
-        # PauliZ.name is still "PauliZ" but we want the repr to be just "Z"
-        if isinstance(self.wires, Wires):
-            return f"Z({self.wires[0]!r})"
-        return f"Z(wires={self.wires})"
+        wire = self.wires[0]
+        if isinstance(wire, str):
+            return f"Z('{wire}')"
+        return f"Z({wire})"
 
-    def label(
-        self,
-        decimals: int | None = None,
-        base_label: str | None = None,
-        cache: dict | None = None,
-    ) -> str:
-        """A string label for the operator."""
+    def label(self, decimals=None, base_label=None, cache=None):
         return base_label or "Z"
 
+    @property
+    def name(self):
+        return "PauliZ"
+
     @staticmethod
-    # pylint: disable=arguments-differ,unused-argument
-    def compute_matrix(wires: WiresLike | None = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -844,21 +609,19 @@ class PauliZ(Operator2):
 
         **Example**
 
-        >>> print(qp.Z.compute_matrix())
+        >>> print(qml.Z.compute_matrix())
         [[ 1  0]
          [ 0 -1]]
         """
         return np.array([[1, 0], [0, -1]])
 
     @staticmethod
-    @lru_cache
-    # pylint: disable=unused-argument,arguments-differ
-    def compute_sparse_matrix(wires: WiresLike | None = None, format="csr") -> sparse.spmatrix:
-        return sparse.csr_matrix([[1, 0], [0, -1]]).asformat(format=format)
+    @lru_cache()
+    def compute_sparse_matrix():  # pylint: disable=arguments-differ
+        return sparse.csr_matrix([[1, 0], [0, -1]])
 
     @staticmethod
-    # pylint: disable=arguments-differ,unused-argument
-    def compute_eigvals(wires: WiresLike | None = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -877,16 +640,13 @@ class PauliZ(Operator2):
 
         **Example**
 
-        >>> print(qp.Z.compute_eigvals())
-        [ 1. -1.]
+        >>> print(qml.Z.compute_eigvals())
+        [ 1 -1]
         """
-        return qp.pauli.pauli_eigs(1)
+        return pauli_eigs(1)
 
     @staticmethod
-    # pylint: disable=unused-argument
-    def compute_diagonalizing_gates(
-        wires: WiresLike,
-    ) -> list[qp.operation.Operator]:
+    def compute_diagonalizing_gates(wires):  # pylint: disable=unused-argument
         r"""Sequence of gates that diagonalize the operator in the computational basis (static method).
 
         Given the eigendecomposition :math:`O = U \Sigma U^{\dagger}` where
@@ -906,15 +666,37 @@ class PauliZ(Operator2):
 
         **Example**
 
-        >>> print(qp.Z.compute_diagonalizing_gates(wires=[0]))
+        >>> print(qml.Z.compute_diagonalizing_gates(wires=[0]))
         []
         """
         return []
 
-    def adjoint(self) -> "PauliZ":
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+        .. seealso:: :meth:`~.Z.decomposition`.
+
+        Args:
+            wires (Any, Wires): Single wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.Z.compute_decomposition(0))
+        [PhaseShift(3.141592653589793, wires=[0])]
+
+        """
+        return [qml.PhaseShift(np.pi, wires=wires)]
+
+    def adjoint(self):
         return Z(wires=self.wires)
 
-    def pow(self, z: float) -> list[qp.operation.Operator]:
+    def pow(self, z):
         z_mod2 = z % 2
         if z_mod2 == 0:
             return []
@@ -926,19 +708,14 @@ class PauliZ(Operator2):
         if abs(z_mod2 - 0.25) < 1e-6:
             return [T(wires=self.wires)]
 
-        return [qp.PhaseShift(np.pi * z_mod2, wires=self.wires)]
+        return [qml.PhaseShift(np.pi * z_mod2, wires=self.wires)]
 
+    def _controlled(self, wire):
+        return qml.CZ(wires=wire + self.wires)
 
-@custom_ctrl_dispatch.register
-def _ctrl_z(base: PauliZ, control, control_values, work_wires, work_wire_type):
-    if not _is_empty_or_all_true(control_values):
-        return NotImplemented
-    is_abstract = isinstance(control, AbstractWires) or isinstance(base.wires, AbstractWires)
-    if len(control) == 1:
-        return qp.CZ(Wire[2]) if is_abstract else qp.CZ(control + base.wires)
-    if len(control) == 2:
-        return qp.CCZ(Wire[3]) if is_abstract else qp.CCZ(control + base.wires)
-    return NotImplemented
+    def single_qubit_rot_angles(self):
+        # Z = RZ(\pi) RY(0) RZ(0)
+        return [np.pi, 0.0, 0.0]
 
 
 Z = PauliZ
@@ -958,78 +735,7 @@ Args:
 """
 
 
-def _pauliz_to_ps_resources(wires: AbstractWires):  # pylint: disable=unused-argument
-    return {qp.PhaseShift: 1}
-
-
-@register_resources(_pauliz_to_ps_resources)
-def _pauliz_to_ps(wires: WiresLike):
-    qp.PhaseShift(np.pi, wires=wires)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 2, 0.5))
-@register_resources(lambda *_, **__: {qp.S: 1})
-def _pow_z_to_s(base, z):  # pylint: disable=unused-argument
-    qp.S(wires=base.wires)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 2, 0.25))
-@register_resources(lambda *_, **__: {qp.T: 1})
-def _pow_z_to_t(base, z):  # pylint: disable=unused-argument
-    qp.T(wires=base.wires)
-
-
-@register_resources(lambda *_, **__: {qp.PhaseShift: 1})
-def _pow_z(base, z):
-    z_mod2 = qp.math.array(z) % 2
-    qp.PhaseShift(np.pi * z_mod2, wires=base.wires)
-
-
-add_decomps(PauliZ, _pauliz_to_ps)
-add_decomps("Adjoint(PauliZ)", self_adjoint)
-add_decomps("Pow(PauliZ)", pow_involutory2, _pow_z, _pow_z_to_s, _pow_z_to_t)
-
-
-def _controlled_z_resources(  # pylint: disable=unused-argument
-    base, control_wires, control_values, work_wires, work_wire_type
-):
-    if len(control_wires) == 1:
-        return {qp.CZ: 1}
-    if len(control_wires) == 2:
-        return {qp.CCZ: 1}
-    return {
-        qp.H: 2,
-        qp.MultiControlledX(
-            Wire[len(control_wires) + 1],
-            work_wires=Wire[len(work_wires)],
-            work_wire_type=work_wire_type,
-        ): 1,
-    }
-
-
-@register_resources(_controlled_z_resources)
-def _controlled_z_decomp(  # pylint: disable=unused-argument
-    base, control_wires, control_values, work_wires, work_wire_type
-):
-    wires = concatenate_wires(control_wires, base.wires)
-
-    if len(control_wires) == 1:
-        qp.CZ(wires=wires)
-        return
-
-    if len(control_wires) == 2:
-        qp.CCZ(wires=wires)
-        return
-
-    qp.H(wires=wires[-1])
-    qp.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
-    qp.H(wires=wires[-1])
-
-
-add_decomps("C(PauliZ)", flip_zero_control2(_controlled_z_decomp))
-
-
-class S(Operator2):
+class S(Operation):
     r"""S(wires)
     The single-qubit phase gate
 
@@ -1047,42 +753,17 @@ class S(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    wire_sizes = (1,)
-    arg_specs = {"wires": Wire[1]}
-
     num_wires = 1
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:  # pylint: disable=missing-function-docstring
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "Z"
+    basis = "Z"
 
     batch_size = None
 
-    resource_keys = set()
-
-    @property
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({self.wires[0]: "I"}): 0.5 + 0.5j,
-                    qp.pauli.PauliWord({self.wires[0]: "Z"}): 0.5 - 0.5j,
-                }
-            )
-        return self._pauli_rep
-
     @staticmethod
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1095,14 +776,14 @@ class S(Operator2):
 
         **Example**
 
-        >>> print(qp.S.compute_matrix())
+        >>> print(qml.S.compute_matrix())
         [[1.+0.j 0.+0.j]
          [0.+0.j 0.+1.j]]
         """
         return np.array([[1, 0], [0, 1j]])
 
     @staticmethod
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -1121,12 +802,35 @@ class S(Operator2):
 
         **Example**
 
-        >>> print(qp.S.compute_eigvals())
+        >>> print(qml.S.compute_eigvals())
         [1.+0.j 0.+1.j]
         """
         return np.array([1, 1j])
 
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+
+        .. seealso:: :meth:`~.S.decomposition`.
+
+        Args:
+            wires (Any, Wires): Single wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.S.compute_decomposition(0))
+        [PhaseShift(1.5707963267948966, wires=[0])]
+
+        """
+        return [qml.PhaseShift(np.pi / 2, wires=wires)]
+
+    def pow(self, z):
         z_mod4 = z % 4
         pow_map = {
             0: lambda op: [],
@@ -1134,45 +838,16 @@ class S(Operator2):
             1: lambda op: [copy(op)],
             2: lambda op: [Z(wires=op.wires)],
         }
-        return pow_map.get(z_mod4, lambda op: [qp.PhaseShift(np.pi * z_mod4 / 2, wires=op.wires)])(
+        return pow_map.get(z_mod4, lambda op: [qml.PhaseShift(np.pi * z_mod4 / 2, wires=op.wires)])(
             self
         )
 
-
-def _s_phaseshift_resources(wires: WiresLike = None):
-    return {qp.PhaseShift: 1}
-
-
-@register_resources(_s_phaseshift_resources)
-def _s_phaseshift(wires: WiresLike | None = None):
-    qp.PhaseShift(np.pi / 2, wires=wires)
+    def single_qubit_rot_angles(self):
+        # S = RZ(\pi/2) RY(0) RZ(0)
+        return [np.pi / 2, 0.0, 0.0]
 
 
-add_decomps(S, _s_phaseshift)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 4, 0.5))
-@register_resources(lambda *_, **__: {qp.T: 1})
-def _pow_s_to_t(base, z):
-    qp.T(wires=base.wires)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 4, 2))
-@register_resources(lambda *_, **__: {qp.Z: 1})
-def _pow_s_to_z(base, z):
-    qp.Z(wires=base.wires)
-
-
-@register_resources(lambda *_, **__: {qp.PhaseShift: 1})
-def _pow_s(base, z):
-    z_mod4 = qp.math.array(z) % 4
-    qp.PhaseShift(np.pi * z_mod4 / 2, wires=base.wires)
-
-
-add_decomps("Pow(S)", make_pow_decomp_with_period2(4), _pow_s, _pow_s_to_t, _pow_s_to_z)
-
-
-class T(Operator2):
+class T(Operation):
     r"""T(wires)
     The single-qubit T gate
 
@@ -1187,42 +862,20 @@ class T(Operator2):
     * Number of parameters: 0
 
     Args:
-        wires (WiresLike): the wire the operation acts on
+        wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    wire_sizes = (1,)
     num_wires = 1
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    arg_specs = {"wires": Wire[1]}
+    basis = "Z"
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:
-        """Defines the basis of the operator."""
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "Z"
-
-    @property
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({self.wires[0]: "I"}): (0.5 + INV_SQRT2 * (0.5 + 0.5j)),
-                    qp.pauli.PauliWord({self.wires[0]: "Z"}): (0.5 - INV_SQRT2 * (0.5 + 0.5j)),
-                }
-            )
-        return self._pauli_rep
+    batch_size = None
 
     @staticmethod
-    def compute_matrix(wires=None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1235,14 +888,14 @@ class T(Operator2):
 
         **Example**
 
-        >>> print(qp.T.compute_matrix())
-        [[1.        +0.j         0.        +0.j        ]
-        [0.        +0.j         0.70710678+0.70710678j]]
+        >>> print(qml.T.compute_matrix())
+        [[1.+0.j         0.        +0.j        ]
+         [0.+0.j         0.70710678+0.70710678j]]
         """
         return np.array([[1, 0], [0, cmath.exp(1j * np.pi / 4)]])
 
     @staticmethod
-    def compute_eigvals(wires=None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -1261,12 +914,35 @@ class T(Operator2):
 
         **Example**
 
-        >>> print(qp.T.compute_eigvals())
-        [1.        +0.j         0.70710678+0.70710678j]
+        >>> print(qml.T.compute_eigvals())
+        [1.+0.j 0.70710678+0.70710678j]
         """
         return np.array([1, cmath.exp(1j * np.pi / 4)])
 
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+
+        .. seealso:: :meth:`~.T.decomposition`.
+
+        Args:
+            wires (Any, Wires): Single wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.T.compute_decomposition(0))
+        [PhaseShift(0.7853981633974483, wires=[0])]
+
+        """
+        return [qml.PhaseShift(np.pi / 4, wires=wires)]
+
+    def pow(self, z):
         z_mod8 = z % 8
         pow_map = {
             0: lambda op: [],
@@ -1274,31 +950,16 @@ class T(Operator2):
             2: lambda op: [S(wires=op.wires)],
             4: lambda op: [Z(wires=op.wires)],
         }
-        return pow_map.get(z_mod8, lambda op: [qp.PhaseShift(np.pi * z_mod8 / 4, wires=op.wires)])(
+        return pow_map.get(z_mod8, lambda op: [qml.PhaseShift(np.pi * z_mod8 / 4, wires=op.wires)])(
             self
         )
 
-
-def _t_phaseshift_resources(wires=None):
-    return {qp.PhaseShift: 1}
-
-
-@register_resources(_t_phaseshift_resources)
-def _t_phaseshift(wires=None):
-    qp.PhaseShift(np.pi / 4, wires=wires)
+    def single_qubit_rot_angles(self):
+        # T = RZ(\pi/4) RY(0) RZ(0)
+        return [np.pi / 4, 0.0, 0.0]
 
 
-@register_resources(lambda *_, **__: {qp.PhaseShift: 1})
-def _pow_t(base, z):
-    z_mod8 = qp.math.array(z) % 8
-    qp.PhaseShift(np.pi * z_mod8 / 4, wires=base.wires)
-
-
-add_decomps(T, _t_phaseshift)
-add_decomps("Pow(T)", make_pow_decomp_with_period2(8), _pow_t)
-
-
-class SX(Operator2):
+class SX(Operation):
     r"""SX(wires)
     The single-qubit Square-Root X operator.
 
@@ -1316,40 +977,15 @@ class SX(Operator2):
         wires (Sequence[int] or int): the wire the operation acts on
     """
 
-    wire_sizes = (1,)
-    arg_specs = {"wires": Wire[1]}
-
     num_wires = 1
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    def basis(self) -> Literal["X", "Y", "Z", None]:  # pylint: disable=missing-function-docstring
-        warn(
-            "Operation.basis is deprecated in v0.46 and will be removed in v0.47. "
-            "qp.is_commuting should be used instead to check commutivity.",
-            PennyLaneDeprecationWarning,
-        )
-        return "X"
-
-    @property
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({self.wires[0]: "I"}): (0.5 + 0.5j),
-                    qp.pauli.PauliWord({self.wires[0]: "X"}): (0.5 - 0.5j),
-                }
-            )
-        return self._pauli_rep
-
-    _matrix = 0.5 * np.array([[1 + 1j, 1 - 1j], [1 - 1j, 1 + 1j]])
+    basis = "X"
 
     @staticmethod
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1362,14 +998,14 @@ class SX(Operator2):
 
         **Example**
 
-        >>> print(qp.SX.compute_matrix())
+        >>> print(qml.SX.compute_matrix())
         [[0.5+0.5j 0.5-0.5j]
          [0.5-0.5j 0.5+0.5j]]
         """
-        return SX._matrix
+        return 0.5 * np.array([[1 + 1j, 1 - 1j], [1 - 1j, 1 + 1j]])
 
     @staticmethod
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -1389,48 +1025,54 @@ class SX(Operator2):
 
         **Example**
 
-        >>> print(qp.SX.compute_eigvals())
+        >>> print(qml.SX.compute_eigvals())
         [1.+0.j 0.+1.j]
         """
         return np.array([1, 1j])
 
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+
+        .. seealso:: :meth:`~.SX.decomposition`.
+
+        Args:
+            wires (Any, Wires): Single wire that the operator acts on.
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.SX.compute_decomposition(0))
+        [RZ(1.5707963267948966, wires=[0]),
+        RY(1.5707963267948966, wires=[0]),
+        RZ(-3.141592653589793, wires=[0]),
+        PhaseShift(1.5707963267948966, wires=[0])]
+
+        """
+        return [
+            qml.RZ(np.pi / 2, wires=wires),
+            qml.RY(np.pi / 2, wires=wires),
+            qml.RZ(-np.pi, wires=wires),
+            qml.PhaseShift(np.pi / 2, wires=wires),
+        ]
+
+    def pow(self, z):
         z_mod4 = z % 4
         if z_mod4 == 2:
             return [X(wires=self.wires)]
         return super().pow(z_mod4)
 
-
-def _sx_to_rx_resources(wires: WiresLike = None):
-    return {qp.RX: 1, qp.GlobalPhase: 1}
-
-
-@register_resources(_sx_to_rx_resources)
-def _sx_to_rx(wires: WiresLike | None = None):
-    qp.RX(np.pi / 2, wires=wires)
-    qp.GlobalPhase(-np.pi / 4)
+    def single_qubit_rot_angles(self):
+        # SX = RZ(-\pi/2) RY(\pi/2) RZ(\pi/2)
+        return [np.pi / 2, np.pi / 2, -np.pi / 2]
 
 
-add_decomps(SX, _sx_to_rx)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and z % 4 == 2)
-@register_resources(lambda *_, **__: {qp.X: 1})
-def _pow_sx_to_x(base, z):
-    qp.X(base.wires)
-
-
-@register_resources(lambda *_, **__: {qp.RX: 1, qp.GlobalPhase: 1})
-def _pow_sx(base, z):
-    z_mod4 = qp.math.array(z) % 4
-    qp.RX(np.pi / 2 * z_mod4, wires=base.wires)
-    qp.GlobalPhase(-np.pi / 4 * z_mod4)
-
-
-add_decomps("Pow(SX)", make_pow_decomp_with_period2(4), _pow_sx_to_x, _pow_sx)
-
-
-class SWAP(Operator2):
+class SWAP(Operation):
     r"""SWAP(wires)
     The swap operator
 
@@ -1450,39 +1092,15 @@ class SWAP(Operator2):
         wires (Sequence[int]): the wires the operation acts on
     """
 
-    wire_sizes = (2,)
-
-    arg_specs = {"wires": Wire[2]}
-
-    is_verified_hermitian = True
-
     num_wires = 2
-
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
     batch_size = None
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    @override
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({}): 0.5,
-                    qp.pauli.PauliWord({self.wires[0]: "X", self.wires[1]: "X"}): 0.5,
-                    qp.pauli.PauliWord({self.wires[0]: "Y", self.wires[1]: "Y"}): 0.5,
-                    qp.pauli.PauliWord({self.wires[0]: "Z", self.wires[1]: "Z"}): 0.5,
-                }
-            )
-        return self._pauli_rep
-
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1495,7 +1113,7 @@ class SWAP(Operator2):
 
         **Example**
 
-        >>> print(qp.SWAP.compute_matrix())
+        >>> print(qml.SWAP.compute_matrix())
         [[1 0 0 0]
          [0 0 1 0]
          [0 1 0 0]
@@ -1504,126 +1122,52 @@ class SWAP(Operator2):
         return np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
 
     @staticmethod
-    @override
-    def compute_sparse_matrix(wires: WiresLike = None, format="csr") -> sparse.spmatrix:
-        r"""Sparse Representation of the operator as a canonical matrix in the computational basis (static method).
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
 
-        The canonical matrix is the textbook matrix representation that does not consider wires.
-        Implicitly, this assumes that the wires of the operator correspond to the global wire order.
+        .. math:: O = O_1 O_2 \dots O_n.
 
-        .. seealso:: :meth:`~.SWAP.sparse_matrix`
+
+        .. seealso:: :meth:`~.SWAP.decomposition`.
+
+        Args:
+            wires (Iterable, Wires): wires that the operator acts on
 
         Returns:
-            csr_matrix: matrix
+            list[Operator]: decomposition into lower level operations
 
-        **Example**
+        **Example:**
 
-        >>> print(qp.SWAP.compute_sparse_matrix())
-        <Compressed Sparse Row sparse matrix of dtype 'int64'
-                with 4 stored elements and shape (4, 4)>
-          Coords        Values
-          (0, 0)        1
-          (1, 2)        1
-          (2, 1)        1
-          (3, 3)        1
+        >>> print(qml.SWAP.compute_decomposition((0,1)))
+        [CNOT(wires=[0, 1]), CNOT(wires=[1, 0]), CNOT(wires=[0, 1])]
+
         """
-        # The same as
-        # [[1 0 0 0]
-        #  [0 0 1 0]
-        #  [0 1 0 0]
-        #  [0 0 0 1]]
-        data, indices, indptr = [1, 1, 1, 1], [0, 2, 1, 3], [0, 1, 2, 3, 4]
-        return sparse.csr_matrix((data, indices, indptr)).asformat(format=format)
+        return [
+            qml.CNOT(wires=[wires[0], wires[1]]),
+            qml.CNOT(wires=[wires[1], wires[0]]),
+            qml.CNOT(wires=[wires[0], wires[1]]),
+        ]
 
-    @override
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    def pow(self, z):
         return super().pow(z % 2)
 
-    @override
-    def adjoint(self) -> "SWAP":
+    def adjoint(self):
         return SWAP(wires=self.wires)
 
+    def _controlled(self, wire):
+        return qml.CSWAP(wires=wire + self.wires)
 
-@custom_ctrl_dispatch.register
-def _ctrl_swap(base: SWAP, control, control_values, *_):
-    if len(control) == 1 and _is_empty_or_all_true(control_values):
-        return qp.CSWAP(control + base.wires)
-    return NotImplemented
-
-
-def _swap_to_cnot_resources(wires: WiresLike):
-    return {qp.CNOT: 3}
+    @property
+    def is_hermitian(self):
+        return True
 
 
-@register_resources(_swap_to_cnot_resources)
-def _swap_to_cnot(wires, **_):
-    qp.CNOT(wires=[wires[0], wires[1]])
-    qp.CNOT(wires=[wires[1], wires[0]])
-    qp.CNOT(wires=[wires[0], wires[1]])
-
-
-def _swap_to_ppr_resource(wires: WiresLike):
-    return {
-        qp.PPR(4, pauli_word="XX", wires=Wire[2]): 1,
-        qp.PPR(4, pauli_word="YY", wires=Wire[2]): 1,
-        qp.PPR(4, pauli_word="ZZ", wires=Wire[2]): 1,
-        qp.GlobalPhase: 1,
-    }
-
-
-@register_resources(_swap_to_ppr_resource)
-def _swap_to_ppr(wires, **_):
-    qp.PPR(4, "YY", wires=wires)
-    qp.PPR(4, "XX", wires=wires)
-    qp.PPR(4, "ZZ", wires=wires)
-    qp.GlobalPhase(-np.pi / 4)
-
-
-add_decomps(SWAP, _swap_to_cnot, _swap_to_ppr)
-add_decomps("Adjoint(SWAP)", self_adjoint)
-add_decomps("Pow(SWAP)", pow_involutory2)
-
-
-# pylint: disable-next=unused-argument
-def _controlled_swap_resources(base, control_wires, control_values, work_wires, work_wire_type):
-    if len(control_wires) == 1:
-        return {qp.CSWAP: 1}
-    return {
-        qp.CNOT: 2,
-        qp.MultiControlledX(
-            Wire[len(control_wires) + 2],
-            work_wires=Wire[len(work_wires)],
-            work_wire_type=work_wire_type,
-        ): 1,
-    }
-
-
-@register_resources(_controlled_swap_resources)
-# pylint: disable-next=unused-argument
-def _controlled_swap_decomp(base, control_wires, control_values, work_wires, work_wire_type):
-    wires = concatenate_wires(control_wires, base.wires)
-    if len(control_wires) == 1:
-        qp.CSWAP(wires=wires)
-        return
-
-    qp.CNOT(wires=[wires[-2], wires[-1]])
-    qp.MultiControlledX(
-        wires=concatenate_wires(wires[:-2], [wires[-1], wires[-2]]),
-        work_wires=work_wires,
-        work_wire_type=work_wire_type,
-    )
-    qp.CNOT(wires=[wires[-2], wires[-1]])
-
-
-add_decomps("C(SWAP)", flip_zero_control2(_controlled_swap_decomp))
-
-
-class ECR(Operator2):
+class ECR(Operation):
     r""" ECR(wires)
 
-    An echoed RZX(:math:`\pi/2`) gate.
+    An echoed RZX(pi/2) gate.
 
-    .. math:: ECR = {\frac{1}{\sqrt{2}}} \begin{bmatrix}
+    .. math:: ECR = {1/\sqrt{2}} \begin{bmatrix}
             0 & 0 & 1 & i \\
             0 & 0 & i & 1 \\
             1 & -i & 0 & 0 \\
@@ -1637,36 +1181,16 @@ class ECR(Operator2):
 
     Args:
         wires (int): the subsystem the gate acts on
+        id (str or None): String representing the operation (optional)
     """
 
-    wire_sizes = (2,)
-
-    arg_specs = {"wires": Wire[2]}
-
     num_wires = 2
-
     num_params = 0
 
     batch_size = None
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    @override
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({self.wires[0]: "X"}): INV_SQRT2,
-                    qp.pauli.PauliWord({self.wires[0]: "Y", self.wires[1]: "X"}): -INV_SQRT2,
-                }
-            )
-        return self._pauli_rep
-
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1679,16 +1203,11 @@ class ECR(Operator2):
 
         **Example**
 
-        >>> from pprint import pprint
-        >>> pprint(qp.ECR.compute_matrix())
-        array([[ 0.        +0.j        ,  0.        +0.j        ,
-                 0.70710678+0.j        ,  0.        +0.70710678j],
-               [ 0.        +0.j        ,  0.        +0.j        ,
-                 0.        +0.70710678j,  0.70710678+0.j        ],
-               [ 0.70710678+0.j        , -0.        -0.70710678j,
-                 0.        +0.j        ,  0.        +0.j        ],
-               [-0.        -0.70710678j,  0.70710678+0.j        ,
-                 0.        +0.j        ,  0.        +0.j        ]])
+        >>> print(qml.ECR.compute_matrix())
+         [[0+0.j 0.+0.j 1/sqrt(2)+0.j 0.+1j/sqrt(2)]
+         [0.+0.j 0.+0.j 0.+1.j/sqrt(2) 1/sqrt(2)+0.j]
+         [1/sqrt(2)+0.j 0.-1.j/sqrt(2) 0.+0.j 0.+0.j]
+         [0.-1/sqrt(2)j 1/sqrt(2)+0.j 0.+0.j 0.+0.j]]
         """
 
         return np.array(
@@ -1701,8 +1220,7 @@ class ECR(Operator2):
         )
 
     @staticmethod
-    @override
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -1722,41 +1240,58 @@ class ECR(Operator2):
 
         **Example**
 
-        >>> print(qp.ECR.compute_eigvals())
-        [ 1 -1  1 -1]
+        >>> print(qml.ECR.compute_eigvals())
+        [1, -1, 1, -1]
         """
 
         return np.array([1, -1, 1, -1])
 
-    @override
-    def adjoint(self) -> "ECR":
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+           .. math:: O = O_1 O_2 \dots O_n.
+
+
+           .. seealso:: :meth:`~.ECR.decomposition`.
+
+           Args:
+               wires (Iterable, Wires): wires that the operator acts on
+
+           Returns:
+               list[Operator]: decomposition into lower level operations
+
+           **Example:**
+
+           >>> print(qml.ECR.compute_decomposition((0,1)))
+
+
+        [Z(0),
+         CNOT(wires=[0, 1]),
+         SX(wires=[1]),
+         RX(1.5707963267948966, wires=[0]),
+         RY(1.5707963267948966, wires=[0]),
+         RX(1.5707963267948966, wires=[0])]
+
+        """
+        pi = np.pi
+        return [
+            Z(wires=[wires[0]]),
+            qml.CNOT(wires=[wires[0], wires[1]]),
+            SX(wires=[wires[1]]),
+            qml.RX(pi / 2, wires=[wires[0]]),
+            qml.RY(pi / 2, wires=[wires[0]]),
+            qml.RX(pi / 2, wires=[wires[0]]),
+        ]
+
+    def adjoint(self):
         return ECR(wires=self.wires)
 
-    @override
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
+    def pow(self, z):
         return super().pow(z % 2)
 
 
-def _ecr_decomp_resources(wires: WiresLike):
-    return {Z: 1, qp.CNOT: 1, SX: 1, qp.RX: 2, qp.RY: 1}
-
-
-@register_resources(_ecr_decomp_resources)
-def _ecr_decomp(wires, **_):
-    Z(wires=[wires[0]])
-    qp.CNOT(wires=[wires[0], wires[1]])
-    SX(wires=[wires[1]])
-    qp.RX(np.pi / 2, wires=[wires[0]])
-    qp.RY(np.pi / 2, wires=[wires[0]])
-    qp.RX(np.pi / 2, wires=[wires[0]])
-
-
-add_decomps(ECR, _ecr_decomp)
-add_decomps("Adjoint(ECR)", self_adjoint)
-add_decomps("Pow(ECR)", pow_involutory2)
-
-
-class ISWAP(Operator2):
+class ISWAP(Operation):
     r"""ISWAP(wires)
     The i-swap operator
 
@@ -1776,37 +1311,15 @@ class ISWAP(Operator2):
         wires (Sequence[int]): the wires the operation acts on
     """
 
-    wire_sizes = (2,)
-
-    arg_specs = {"wires": Wire[2]}
-
     num_wires = 2
-
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
     batch_size = None
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    @override
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({}): 0.5,
-                    qp.pauli.PauliWord({self.wires[0]: "X", self.wires[1]: "X"}): 0.5j,
-                    qp.pauli.PauliWord({self.wires[0]: "Y", self.wires[1]: "Y"}): 0.5j,
-                    qp.pauli.PauliWord({self.wires[0]: "Z", self.wires[1]: "Z"}): 0.5,
-                }
-            )
-        return self._pauli_rep
-
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1819,7 +1332,7 @@ class ISWAP(Operator2):
 
         **Example**
 
-        >>> print(qp.ISWAP.compute_matrix())
+        >>> print(qml.ISWAP.compute_matrix())
         [[1.+0.j 0.+0.j 0.+0.j 0.+0.j]
          [0.+0.j 0.+0.j 0.+1.j 0.+0.j]
          [0.+0.j 0.+1.j 0.+0.j 0.+0.j]
@@ -1828,8 +1341,7 @@ class ISWAP(Operator2):
         return np.array([[1, 0, 0, 0], [0, 0, 1j, 0], [0, 1j, 0, 0], [0, 0, 0, 1]])
 
     @staticmethod
-    @override
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -1849,70 +1361,56 @@ class ISWAP(Operator2):
 
         **Example**
 
-        >>> print(qp.ISWAP.compute_eigvals())
-        [ 0.+1.j -0.-1.j  1.+0.j  1.+0.j]
+        >>> print(qml.ISWAP.compute_eigvals())
+        [1j, -1j, 1, 1]
         """
         return np.array([1j, -1j, 1, 1])
 
-    @override
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
-        z_mod4 = z % 4
-        if abs(z_mod4 - 0.5) < 1e-6:
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
+
+
+        .. seealso:: :meth:`~.ISWAP.decomposition`.
+
+        Args:
+            wires (Iterable, Wires): wires that the operator acts on
+
+        Returns:
+            list[Operator]: decomposition into lower level operations
+
+        **Example:**
+
+        >>> print(qml.ISWAP.compute_decomposition((0,1)))
+        [S(wires=[0]),
+        S(wires=[1]),
+        Hadamard(wires=[0]),
+        CNOT(wires=[0, 1]),
+        CNOT(wires=[1, 0]),
+        Hadamard(wires=[1])]
+
+        """
+        return [
+            S(wires=wires[0]),
+            S(wires=wires[1]),
+            Hadamard(wires=wires[0]),
+            qml.CNOT(wires=[wires[0], wires[1]]),
+            qml.CNOT(wires=[wires[1], wires[0]]),
+            Hadamard(wires=wires[1]),
+        ]
+
+    def pow(self, z):
+        z_mod2 = z % 2
+        if abs(z_mod2 - 0.5) < 1e-6:
             return [SISWAP(wires=self.wires)]
-        if abs(z_mod4 - 2) < 1e-6:
-            return [qp.Z(wires=self.wires[0]), qp.Z(wires=self.wires[1])]
-        return super().pow(z_mod4)
+        return super().pow(z_mod2)
 
 
-def _iswap_decomp_resources(wires: WiresLike):
-    return {qp.S: 2, qp.Hadamard: 2, qp.CNOT: 2}
-
-
-@register_resources(_iswap_decomp_resources)
-def _iswap_decomp(wires):
-    S(wires=wires[0])
-    S(wires=wires[1])
-    Hadamard(wires=wires[0])
-    qp.CNOT(wires=[wires[0], wires[1]])
-    qp.CNOT(wires=[wires[1], wires[0]])
-    Hadamard(wires=wires[1])
-
-
-def _iswap_to_ppr_resource(wires: WiresLike):
-    return {
-        qp.PPR(-4, pauli_word="XX", wires=Wire[2]): 1,
-        qp.PPR(-4, pauli_word="YY", wires=Wire[2]): 1,
-    }
-
-
-@register_resources(_iswap_to_ppr_resource)
-def _iswap_to_ppr(wires):
-    qp.PPR(-4, "YY", wires=wires)
-    qp.PPR(-4, "XX", wires=wires)
-
-
-add_decomps(ISWAP, _iswap_decomp, _iswap_to_ppr)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 4, 0.5))
-@register_resources(lambda *_, **__: {qp.SISWAP: 1})
-def _pow_iswap_to_siswap(base, z):
-    qp.SISWAP(wires=base.wires)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 4, 2))
-@register_resources(lambda *_, **__: {qp.Z: 2})
-def _pow_iswap_to_zz(base, z):
-    qp.Z(wires=base.wires[0])
-    qp.Z(wires=base.wires[1])
-
-
-add_decomps("Pow(ISWAP)", make_pow_decomp_with_period2(4), _pow_iswap_to_zz, _pow_iswap_to_siswap)
-
-
-class SISWAP(Operator2):
+class SISWAP(Operation):
     r"""SISWAP(wires)
-    The square root of i-swap operator. Can also be accessed as ``qp.SQISW``
+    The square root of i-swap operator. Can also be accessed as ``qml.SQISW``
 
     .. math:: SISWAP = \begin{bmatrix}
             1 & 0 & 0 & 0 \\
@@ -1930,39 +1428,15 @@ class SISWAP(Operator2):
         wires (Sequence[int]): the wires the operation acts on
     """
 
-    wire_sizes = (2,)
-
-    arg_specs = {"wires": Wire[2]}
-
     num_wires = 2
-
     num_params = 0
     """int: Number of trainable parameters that the operator depends on."""
 
     batch_size = None
 
-    def __init__(self, wires: WiresLike):
-        super().__init__(wires=wires)
-
-    @property
-    @override
-    def pauli_rep(self):
-        if self._pauli_rep is None:
-            self._pauli_rep = qp.pauli.PauliSentence(
-                {
-                    qp.pauli.PauliWord({self.wires[0]: "I", self.wires[1]: "I"}): 0.5
-                    + 0.5 * INV_SQRT2,
-                    qp.pauli.PauliWord({self.wires[0]: "X", self.wires[1]: "X"}): 0.5j * INV_SQRT2,
-                    qp.pauli.PauliWord({self.wires[0]: "Y", self.wires[1]: "Y"}): 0.5j * INV_SQRT2,
-                    qp.pauli.PauliWord({self.wires[0]: "Z", self.wires[1]: "Z"}): 0.5
-                    - 0.5 * INV_SQRT2,
-                }
-            )
-        return self._pauli_rep
-
     @staticmethod
-    @override
-    def compute_matrix(wires: WiresLike = None) -> np.ndarray:
+    @lru_cache()
+    def compute_matrix():  # pylint: disable=arguments-differ
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1976,16 +1450,11 @@ class SISWAP(Operator2):
 
         **Example**
 
-        >>> from pprint import pprint
-        >>> pprint(qp.SISWAP.compute_matrix())
-        array([[1.        +0.j        , 0.        +0.j        ,
-                0.        +0.j        , 0.        +0.j        ],
-            [0.        +0.j        , 0.70710678+0.j        ,
-                0.        +0.70710678j, 0.        +0.j        ],
-            [0.        +0.j        , 0.        +0.70710678j,
-                0.70710678+0.j        , 0.        +0.j        ],
-            [0.        +0.j        , 0.        +0.j        ,
-                0.        +0.j        , 1.        +0.j        ]])
+        >>> print(qml.SISWAP.compute_matrix())
+        [[1.+0.j          0.+0.j          0.+0.j  0.+0.j]
+         [0.+0.j  0.70710678+0.j  0.+0.70710678j  0.+0.j]
+         [0.+0.j  0.+0.70710678j  0.70710678+0.j  0.+0.j]
+         [0.+0.j          0.+0.j          0.+0.j  1.+0.j]]
         """
         return np.array(
             [
@@ -1997,8 +1466,7 @@ class SISWAP(Operator2):
         )
 
     @staticmethod
-    @override
-    def compute_eigvals(wires: WiresLike = None) -> np.ndarray:
+    def compute_eigvals():  # pylint: disable=arguments-differ
         r"""Eigenvalues of the operator in the computational basis (static method).
 
         If :attr:`diagonalizing_gates` are specified and implement a unitary :math:`U^{\dagger}`,
@@ -2018,257 +1486,61 @@ class SISWAP(Operator2):
 
         **Example**
 
-        >>> print(qp.SISWAP.compute_eigvals())
-        [0.70710678+0.70710678j 0.70710678-0.70710678j 1.        +0.j 1.        +0.j        ]
+        >>> print(qml.SISWAP.compute_eigvals())
+        [0.70710678+0.70710678j 0.70710678-0.70710678j 1.+0.j 1.+0.j]
         """
         return np.array([INV_SQRT2 * (1 + 1j), INV_SQRT2 * (1 - 1j), 1, 1])
 
-    @override
-    def pow(self, z: int | float) -> list[qp.operation.Operator]:
-        z_mod8 = z % 8
-        if abs(z_mod8 - 2) < 1e-6:
-            return [ISWAP(wires=self.wires)]
-        if abs(z_mod8 - 4) < 1e-6:
-            return [qp.Z(wires=self.wires[0]), qp.Z(wires=self.wires[1])]
-        return super().pow(z_mod8)
+    @staticmethod
+    def compute_decomposition(wires):
+        r"""Representation of the operator as a product of other operators (static method).
+
+        .. math:: O = O_1 O_2 \dots O_n.
 
 
-def _siswap_decomp_resources(wires: WiresLike):
-    return {SX: 6, qp.RZ: 4, qp.CNOT: 2}
-
-
-@register_resources(_siswap_decomp_resources)
-def _siswap_decomp(wires):
-    SX(wires=wires[0])
-    qp.RZ(np.pi / 2, wires=wires[0])
-    qp.CNOT(wires=[wires[0], wires[1]])
-    SX(wires=wires[0])
-    qp.RZ(7 * np.pi / 4, wires=wires[0])
-    SX(wires=wires[0])
-    qp.RZ(np.pi / 2, wires=wires[0])
-    SX(wires=wires[1])
-    qp.RZ(7 * np.pi / 4, wires=wires[1])
-    qp.CNOT(wires=[wires[0], wires[1]])
-    SX(wires=wires[0])
-    SX(wires=wires[1])
-
-
-def _siswap_to_ppr_resource(wires: WiresLike):
-    return {
-        qp.PPR(-8, pauli_word="XX", wires=Wire[2]): 1,
-        qp.PPR(-8, pauli_word="YY", wires=Wire[2]): 1,
-    }
-
-
-@register_resources(_siswap_to_ppr_resource)
-def _siswap_to_ppr(wires, **_):
-    qp.PPR(-8, "YY", wires=wires)
-    qp.PPR(-8, "XX", wires=wires)
-
-
-add_decomps(SISWAP, _siswap_decomp, _siswap_to_ppr)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 8, 2))
-@register_resources(lambda *_, **__: {qp.ISWAP: 1})
-def _pow_siswap_to_iswap(base, z):
-    qp.ISWAP(base.wires)
-
-
-@register_condition(lambda base, z: math.shape(z) == () and math.allclose(z % 8, 4))
-@register_resources(lambda *_, **__: {qp.Z: 2})
-def _pow_siswap_to_zz(base, z):
-    qp.Z(wires=base.wires[0])
-    qp.Z(wires=base.wires[1])
-
-
-add_decomps("Pow(SISWAP)", make_pow_decomp_with_period2(8), _pow_siswap_to_zz, _pow_siswap_to_iswap)
-
-
-SQISW = SISWAP
-
-
-class PPR(Operator2):
-    r"""PPR(angle_denominator, pauli_word, wires)
-    A Pauli product rotation (PPR) with a fixed angle.
-
-    .. math::
-
-        \text{PPR}(k, P) = \exp\left(-i \frac{\pi}{k} P\right),
-
-    where :math:`P` is a Pauli word and we call :math:`\varphi = \pi / k` the rotation angle,
-    following the literature convention (e.g.
-    `:math:`\mathrm{PPR}(-4, \mathrm{X})=\exp(-i\pi / (-4) X)=\exp(i\tfrac{\pi}{4} X)`).
-    The denominator :math:`k` is restricted to :math:`\pm 2`, :math:`\pm 4` and :math:`\pm 8`,
-    so that ``PPR`` covers exactly those Pauli product rotations that occur in Clifford+T circuits:
-
-    * ``angle_denominator=±2``: a :math:`\pm\pi/2` PPR (signed Pauli),
-    * ``angle_denominator=±4``: a :math:`\pm\pi/4` PPR (Clifford),
-    * ``angle_denominator=±8``: a :math:`\pm\pi/8` PPR (non-Clifford).
-
-    The Pauli-based computation literature commonly writes a PPR with this angle convention,
-    whereas :class:`~.PauliRot` follows the convention
-    :math:`\mathrm{PauliRot}(\theta, P)=\exp(-i \theta / 2 P)`, i.e., :math:`\varphi = \theta / 2`.
-
-    .. note:: ``PPR`` corresponds to the respective operators in the Pauli-based computation
-        (``pbc``) dialect of Catalyst, and follows the same angle convention.
-
-    .. seealso:: :class:`~.PauliRot` for a Pauli product rotation with an arbitrary angle, and
-        :func:`~.pauli_measure` for PPM, the measurement counterpart of a PPR.
-        For more information on Pauli-based computation (PBC), check out the
-        `Quantum Compilation hub <https://pennylane.ai/compilation/pauli-based-computation>`_.
-
-    Args:
-        angle_denominator (int): the denominator :math:`k` of the rotation angle
-            :math:`\varphi = \pi / k`. Must be one of ``±2``, ``±4``, or ``±8``.
-        pauli_word (str): the Pauli word defining the rotation, consisting of the characters
-            ``"X"``, ``"Y"``, ``"Z"``, and ``"I"``. Its length must match the length of ``wires``.
-        wires (Sequence[int] or int): the wires the operation acts on. The length must match
-            length of ``pauli_word``.
-
-    Raises:
-        ValueError: if ``angle_denominator`` is not an allowed integer denominator
-        ValueError: if the Pauli word contains characters other than ``X``, ``Y``, ``Z``, and ``I``
-        ValueError: if no wires are provided
-        ValueError: if the number of wires does not match the length of the Pauli word
-
-    **Example**
-
-    A :math:`\pi/8` PPR on the Pauli word :math:`X \otimes Y` is created by requesting the
-    corresponding angle :math:`\varphi=\pi/8`:
-
-    >>> op = qp.PPR(8, "XY", wires=[0, 1])
-    >>> op
-    PPR(8, 'XY', wires=[0, 1])
-
-    Negative denominators denote the inverse rotations:
-
-    >>> qp.PPR(-8, "XY", wires=[0, 1])
-    PPR(-8, 'XY', wires=[0, 1])
-
-    When compiling further to Pauli product measurements (PPM), ``PPR`` should first be lowered
-    using PBC passes :func:`~.to_ppr`, :func:`~.ppr_to_ppm`, or :func:`~.ppm_compilation`.
-
-    """
-
-    compilable_argnames = ("angle_denominator", "pauli_word")
-    arg_specs = {"wires": Wire[-1]}
-
-    _ALLOWED_DENOMINATORS = (-8, -4, -2, 2, 4, 8)
-
-    def __init__(self, angle_denominator: int, pauli_word: str, wires: WiresLike):
-        if angle_denominator not in self._ALLOWED_DENOMINATORS:
-            raise ValueError(
-                "The angle denominator must be an integer in "
-                f"{self._ALLOWED_DENOMINATORS}, denoting the rotation angle "
-                f"pi / angle_denominator, but got {angle_denominator}."
-            )
-
-        if not set(pauli_word).issubset({"X", "Y", "Z", "I"}):
-            raise ValueError(
-                f'The given Pauli word "{pauli_word}" contains characters that are not allowed. '
-                "Allowed characters are X, Y, Z and I."
-            )
-
-        super().__init__(angle_denominator, pauli_word, wires=wires)
-
-        if not self.wires:
-            raise ValueError("At least one wire has to be provided.")
-
-        if len(pauli_word) != len(self.wires):
-            raise ValueError(
-                "The number of wires must be equal to the length of the Pauli word. The Pauli "
-                f"word {pauli_word} has length {len(pauli_word)} but {len(self.wires)} wires "
-                f"were given: {self.wires}."
-            )
-
-    @override
-    def label(self, decimals=None, base_label=None, cache=None) -> str:
-        r"""A customizable string representation of the operator.
+        .. seealso:: :meth:`~.SISWAP.decomposition`.
 
         Args:
-            decimals=None (int): unused, as ``PPR`` has no trainable parameters
-            base_label=None (str): overwrite the non-parameter component of the label
-            cache=None (dict): dictionary that carries information between label calls
-                in the same drawing
+            wires (Iterable, Wires): wires that the operator acts on
 
         Returns:
-            str: label to use in drawings
+            list[Operator]: decomposition into lower level operations
 
         **Example:**
 
-        >>> op = qp.PPR(8, "XY", wires=[0, 1])
-        >>> op.label()
-        'PPR(π/8, XY)'
-        >>> op.label(base_label="PPR")
-        'PPR'
-        """
-        denominator = self.angle_denominator
-        sign = "-" if denominator < 0 else ""
-        angle_label = f"{sign}π/{abs(denominator)}"
-        return base_label or f"PPR({angle_label}, {self.pauli_word})"
-
-    @override
-    def __repr__(self) -> str:
-        return f"PPR({self.angle_denominator}, '{self.pauli_word}', wires={self.wires})"
-
-    @staticmethod
-    def compute_matrix(  # pylint: disable=unused-argument
-        angle_denominator: int, pauli_word: str, wires=None
-    ) -> TensorLike:
-        r"""Representation of the operator as a canonical matrix in the computational basis (static method).
-
-        The canonical matrix is the textbook matrix representation that does not consider wires.
-        Implicitly, this assumes that the wires of the operator correspond to the global wire order.
-
-        .. seealso:: :meth:`~.PPR.matrix`
-
-
-        Args:
-            angle_denominator (TensorLike): rotation angle
-            pauli_word (str): string representation of Pauli word
-
-        Returns:
-            TensorLike: canonical matrix
-
-        **Example**
-
-        >>> mat = qp.PPR.compute_matrix(-4, 'X')
-        >>> expected = ((qp.I(0) + 1j * qp.X(0))/np.sqrt(2)).matrix()
-        >>> np.allclose(mat, expected)
-        True
+        >>> print(qml.SISWAP.compute_decomposition((0,1)))
+        [SX(wires=[0]),
+        RZ(1.5707963267948966, wires=[0]),
+        CNOT(wires=[0, 1]),
+        SX(wires=[0]),
+        RZ(5.497787143782138, wires=[0]),
+        SX(wires=[0]),
+        RZ(1.5707963267948966, wires=[0]),
+        SX(wires=[1]),
+        RZ(5.497787143782138, wires=[1]),
+        CNOT(wires=[0, 1]),
+        SX(wires=[0]),
+        SX(wires=[1])]
 
         """
-        theta = np.pi / angle_denominator * 2
-        multi_Z_rot_matrix = qp.MultiRZ.compute_matrix(theta, list(range(len(pauli_word))))
+        return [
+            SX(wires=wires[0]),
+            qml.RZ(np.pi / 2, wires=wires[0]),
+            qml.CNOT(wires=[wires[0], wires[1]]),
+            SX(wires=wires[0]),
+            qml.RZ(7 * np.pi / 4, wires=wires[0]),
+            SX(wires=wires[0]),
+            qml.RZ(np.pi / 2, wires=wires[0]),
+            SX(wires=wires[1]),
+            qml.RZ(7 * np.pi / 4, wires=wires[1]),
+            qml.CNOT(wires=[wires[0], wires[1]]),
+            SX(wires=wires[0]),
+            SX(wires=wires[1]),
+        ]
 
-        # conjugate with Hadamard and RX to create the Pauli string
-        # pylint: disable-next=protected-access
-        conjugation_factors = (qp.PauliRot._PAULI_CONJUGATION_MATRICES[gate] for gate in pauli_word)
-        conjugation_matrix = reduce(math.kron, conjugation_factors)
-        return math.conj(conjugation_matrix) @ multi_Z_rot_matrix @ conjugation_matrix
-
-
-def _ppr_to_paulirot_resources(pauli_word, **_):
-    return {qp.PauliRot(Float, pauli_word=pauli_word, wires=Wire[len(pauli_word)]): 1}
-
-
-@register_resources(_ppr_to_paulirot_resources)
-def _ppr_to_paulirot(angle_denominator, pauli_word, wires):
-    qp.PauliRot(np.pi / angle_denominator * 2, pauli_word, wires=wires)
-
-
-add_decomps(PPR, _ppr_to_paulirot)
+    def pow(self, z):
+        z_mod4 = z % 4
+        return [ISWAP(wires=self.wires)] if z_mod4 == 2 else super().pow(z_mod4)
 
 
-def _adjoint_ppr_to_ppr_resources(base):
-    num_wires = len(base.wires)
-    return {PPR(-base.angle_denominator, pauli_word=base.pauli_word, wires=Wire[num_wires]): 1}
-
-
-@register_resources(_adjoint_ppr_to_ppr_resources)
-def _adjoint_ppr_to_ppr(base):
-    PPR(-base.angle_denominator, pauli_word=base.pauli_word, wires=base.wires)
-
-
-add_decomps("Adjoint(PPR)", _adjoint_ppr_to_ppr)
+SQISW = SISWAP

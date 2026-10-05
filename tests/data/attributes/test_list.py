@@ -15,9 +15,9 @@
 Tests for the ``DatasetList`` attribute type.
 """
 
+
 from itertools import combinations
 
-import numpy as np
 import pytest
 
 from pennylane.data import DatasetList
@@ -56,9 +56,8 @@ class TestList:
 
         lst = DatasetList(input_type(value))
         assert lst == value
+        assert repr(lst) == repr(value)
         assert len(lst) == len(value)
-        with np.printoptions(legacy="1.21"):
-            assert repr(lst) == repr(value)
 
     @pytest.mark.parametrize("input_type", (list, tuple))
     @pytest.mark.parametrize("value", [[], [1], [1, 2, 3], ["a", "b", "c"], [{"a": 1}]])
@@ -69,7 +68,7 @@ class TestList:
         bind = DatasetList(input_type(value)).bind
         assert DatasetList(bind=bind) == value
 
-    @pytest.mark.parametrize("slc", list(_generate_slices(3)))
+    @pytest.mark.parametrize("slc", _generate_slices(3))
     def test_slice(self, slc):
         """Test that slicing a DatasetList works exactly like slicing
         a built-in list."""
@@ -149,14 +148,12 @@ class TestList:
     @pytest.mark.parametrize("value", [[], [1], [1, 2, 3], ["a", "b", "c"], [{"a": 1}]])
     def test_copy(self, input_type, value):
         """Test that a `DatasetList` can be copied."""
-
         ds = DatasetList(input_type(value))
         ds_copy = ds.copy()
 
         assert ds_copy == value
+        assert repr(ds_copy) == repr(value)
         assert len(ds_copy) == len(value)
-        with np.printoptions(legacy="1.21"):
-            assert repr(ds_copy) == repr(value)
 
     @pytest.mark.parametrize("input_type", (list, tuple))
     @pytest.mark.parametrize("value", [[], [1], [1, 2, 3], ["a", "b", "c"], [{"a": 1}]])
@@ -172,10 +169,8 @@ class TestList:
     @pytest.mark.parametrize("value", [[], [1], [1, 2, 3], ["a", "b", "c"], [{"a": 1}]])
     def test_string_conversion(self, value):
         """Test that a `DatasetList` is converted to a string correctly."""
-
         dset_dict = DatasetList(value)
-        with np.printoptions(legacy="1.21"):
-            assert str(dset_dict) == str(value)
+        assert str(dset_dict) == str(value)
 
     @pytest.mark.parametrize("value", [[1], [1, 2, 3], ["a", "b", "c"], [{"a": 1}]])
     def test_deleting_elements(self, value):

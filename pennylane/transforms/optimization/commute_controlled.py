@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Transforms for pushing commuting gates through targets/control qubits."""
+from typing import Sequence, Callable
 
-import pennylane as qp  # is_commuting circular import problems
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.ops.op_math import Controlled
+from pennylane.tape import QuantumTape
 from pennylane.transforms import transform
-from pennylane.typing import PostprocessingFn
+from pennylane.wires import Wires
 
 from .optimization_utils import find_next_gate
 
@@ -40,7 +39,10 @@ def _commute_controlled_right(op_list):
     while current_location >= 0:
         current_gate = op_list[current_location]
 
-        if len(current_gate.wires) != 1:
+        # We are looking only at the gates that can be pushed through
+        # controls/targets; these are single-qubit gates with the basis
+        # property specified.
+        if current_gate.basis is None or len(current_gate.wires) != 1:
             current_location -= 1
             continue
 
@@ -53,12 +55,32 @@ def _commute_controlled_right(op_list):
         while next_gate_idx is not None:
             next_gate = op_list[new_location + next_gate_idx + 1]
 
-            if not isinstance(next_gate, Controlled) or not qp.is_commuting(
-                current_gate, next_gate
-            ):
+            # Only go ahead if information is available
+            if next_gate.basis is None:
                 break
 
-            new_location += next_gate_idx + 1
+            # If the next gate does not have control_wires defined, it is not
+            # controlled so we can't push through.
+            if len(next_gate.control_wires) == 0:
+                break
+            shared_controls = Wires.shared_wires(
+                [Wires(current_gate.wires), next_gate.control_wires]
+            )
+
+            # Case 1: overlap is on the control wires. Only Z-type gates go through
+            if len(shared_controls) > 0:
+                if current_gate.basis == "Z":
+                    new_location += next_gate_idx + 1
+                else:
+                    break
+
+            # Case 2: since we know the gates overlap somewhere, and it's a
+            # single-qubit gate, if it wasn't on a control it's the target.
+            else:
+                if current_gate.basis == next_gate.basis:
+                    new_location += next_gate_idx + 1
+                else:
+                    break
 
             next_gate_idx = find_next_gate(current_gate.wires, op_list[new_location + 1 :])
 
@@ -88,7 +110,7 @@ def _commute_controlled_left(op_list):
     while current_location < len(op_list):
         current_gate = op_list[current_location]
 
-        if len(current_gate.wires) != 1:
+        if current_gate.basis is None or len(current_gate.wires) != 1:
             current_location += 1
             continue
 
@@ -100,12 +122,26 @@ def _commute_controlled_left(op_list):
         while prev_gate_idx is not None:
             prev_gate = op_list[new_location - prev_gate_idx - 1]
 
-            if not isinstance(prev_gate, Controlled) or not qp.is_commuting(
-                current_gate, prev_gate
-            ):
+            if prev_gate.basis is None:
                 break
 
-            new_location -= prev_gate_idx + 1
+            if len(prev_gate.control_wires) == 0:
+                break
+            shared_controls = Wires.shared_wires(
+                [Wires(current_gate.wires), prev_gate.control_wires]
+            )
+
+            if len(shared_controls) > 0:
+                if current_gate.basis == "Z":
+                    new_location = new_location - prev_gate_idx - 1
+                else:
+                    break
+
+            else:
+                if current_gate.basis == prev_gate.basis:
+                    new_location = new_location - prev_gate_idx - 1
+                else:
+                    break
 
             prev_gate_idx = find_next_gate(current_gate.wires, op_list[:new_location][::-1])
 
@@ -117,9 +153,7 @@ def _commute_controlled_left(op_list):
 
 
 @transform
-def commute_controlled(
-    tape: QuantumScript, direction="right"
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+def commute_controlled(tape: QuantumTape, direction="right") -> (Sequence[QuantumTape], Callable):
     """Quantum transform to move commuting gates past control and target qubits of controlled operations.
 
     Args:
@@ -130,69 +164,65 @@ def commute_controlled(
             specified direction.
 
     Returns:
-        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
+        qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
 
     **Example**
+
+    >>> dev = qml.device('default.qubit', wires=3)
 
     You can apply the transform directly on :class:`QNode`:
 
     .. code-block:: python
 
-        import pennylane as qp
-
-        dev = qp.device('default.qubit')
-
-        @qp.transforms.commute_controlled(direction="right")
-        @qp.qnode(device=dev)
+        @partial(commute_controlled, direction="right")
+        @qml.qnode(device=dev)
         def circuit(theta):
-            qp.CZ(wires=[0, 2])
-            qp.X(2)
-            qp.S(wires=0)
+            qml.CZ(wires=[0, 2])
+            qml.X(2)
+            qml.S(wires=0)
 
-            qp.CNOT(wires=[0, 1])
+            qml.CNOT(wires=[0, 1])
 
-            qp.Y(1)
-            qp.CRY(theta, wires=[0, 1])
-            qp.PhaseShift(theta/2, wires=0)
+            qml.Y(1)
+            qml.CRY(theta, wires=[0, 1])
+            qml.PhaseShift(theta/2, wires=0)
 
-            qp.Toffoli(wires=[0, 1, 2])
-            qp.T(wires=0)
-            qp.RZ(theta/2, wires=1)
+            qml.Toffoli(wires=[0, 1, 2])
+            qml.T(wires=0)
+            qml.RZ(theta/2, wires=1)
 
-            return qp.expval(qp.Z(0))
+            return qml.expval(qml.Z(0))
 
-    >>> print(qp.draw(circuit)(0.5))
-    0: ─╭●─╭●─╭●───────────╭●──S─────────Rϕ(0.25)──T─┤  <Z>
-    1: ─│──╰X─╰RY(0.50)──Y─├●──RZ(0.25)──────────────┤
-    2: ─╰Z─────────────────╰X──X─────────────────────┤
+    >>> circuit(0.5)
+    0.9999999999999999
 
     .. details::
         :title: Usage Details
 
-        You can also apply this transform to quantum functions.
+        You can also apply it on quantum function.
 
         .. code-block:: python
 
             def qfunc(theta):
-                qp.CZ(wires=[0, 2])
-                qp.X(2)
-                qp.S(wires=0)
+                qml.CZ(wires=[0, 2])
+                qml.X(2)
+                qml.S(wires=0)
 
-                qp.CNOT(wires=[0, 1])
+                qml.CNOT(wires=[0, 1])
 
-                qp.Y(1)
-                qp.CRY(theta, wires=[0, 1])
-                qp.PhaseShift(theta/2, wires=0)
+                qml.Y(1)
+                qml.CRY(theta, wires=[0, 1])
+                qml.PhaseShift(theta/2, wires=0)
 
-                qp.Toffoli(wires=[0, 1, 2])
-                qp.T(wires=0)
-                qp.RZ(theta/2, wires=1)
+                qml.Toffoli(wires=[0, 1, 2])
+                qml.T(wires=0)
+                qml.RZ(theta/2, wires=1)
 
-                return qp.expval(qp.Z(0))
+                return qml.expval(qml.Z(0))
 
-        >>> qnode = qp.QNode(qfunc, dev)
-        >>> print(qp.draw(qnode)(0.5))
+        >>> qnode = qml.QNode(qfunc, dev)
+        >>> print(qml.draw(qnode)(0.5))
         0: ─╭●──S─╭●────╭●─────────Rϕ(0.25)─╭●──T────────┤  <Z>
         1: ─│─────╰X──Y─╰RY(0.50)───────────├●──RZ(0.25)─┤
         2: ─╰Z──X───────────────────────────╰X───────────┤
@@ -205,8 +235,8 @@ def commute_controlled(
         far as possible through the controlled operations:
 
         >>> optimized_qfunc = commute_controlled(qfunc, direction="right")
-        >>> optimized_qnode = qp.QNode(optimized_qfunc, dev)
-        >>> print(qp.draw(optimized_qnode)(0.5))
+        >>> optimized_qnode = qml.QNode(optimized_qfunc, dev)
+        >>> print(qml.draw(optimized_qnode)(0.5))
         0: ─╭●─╭●─╭●───────────╭●──S─────────Rϕ(0.25)──T─┤  <Z>
         1: ─│──╰X─╰RY(0.50)──Y─├●──RZ(0.25)──────────────┤
         2: ─╰Z─────────────────╰X──X─────────────────────┤
@@ -220,10 +250,10 @@ def commute_controlled(
     else:
         op_list = _commute_controlled_left(tape.operations)
 
-    new_tape = tape.copy(operations=op_list)
+    new_tape = type(tape)(op_list, tape.measurements, shots=tape.shots)
 
     def null_postprocessing(results):
-        """A postprocessing function returned by a transform that only converts the batch of results
+        """A postprocesing function returned by a transform that only converts the batch of results
         into a result for a single ``QuantumTape``.
         """
         return results[0]

@@ -14,19 +14,13 @@
 r"""
 Contains the ArbitraryStatePreparation template.
 """
-
+# pylint: disable=trailing-comma-tuple
 import functools
-from collections import Counter
-
-import pennylane as qp
-from pennylane import register_resources
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps
-from pennylane.typing import Float, Wire
+import pennylane as qml
+from pennylane.operation import Operation, AnyWires
 
 
-@functools.lru_cache
+@functools.lru_cache()
 def _state_preparation_pauli_words(num_wires):
     """Pauli words necessary for a state preparation.
 
@@ -69,40 +63,33 @@ class ArbitraryStatePreparation(Operation):
 
     .. code-block:: python
 
-        dev = qp.device("default.qubit", wires=4)
+        dev = qml.device("default.qubit", wires=4)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def vqe(weights):
-            qp.ArbitraryStatePreparation(weights, wires=[0, 1, 2, 3])
+            qml.ArbitraryStatePreparation(weights, wires=[0, 1, 2, 3])
 
-            return qp.expval(qp.Hermitian(H, wires=[0, 1, 2, 3]))
+            return qml.expval(qml.Hermitian(H, wires=[0, 1, 2, 3]))
 
     The shape of the weights parameter can be computed as follows:
 
     .. code-block:: python
 
-        shape = qp.ArbitraryStatePreparation.shape(n_wires=4)
+        shape = qml.ArbitraryStatePreparation.shape(n_wires=4)
 
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"num_wires"}
-
-    def __init__(self, weights, wires):
-        shape = qp.math.shape(weights)
+    def __init__(self, weights, wires, id=None):
+        shape = qml.math.shape(weights)
         if shape != (2 ** (len(wires) + 1) - 2,):
             raise ValueError(
                 f"Weights tensor must be of shape {(2 ** (len(wires) + 1) - 2,)}; got {shape}."
             )
 
-        super().__init__(weights, wires=wires)
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "num_wires": len(self.wires),
-        }
+        super().__init__(weights, wires=wires, id=id)
 
     @property
     def num_params(self):
@@ -129,20 +116,17 @@ class ArbitraryStatePreparation(Operation):
         **Example**
 
         >>> weights = torch.tensor([1., 2., 3., 4., 5., 6.])
-        >>> ops = qp.ArbitraryStatePreparation.compute_decomposition(weights, wires=["a", "b"])
-        >>> from pprint import pprint
-        >>> pprint(ops)
-        [PauliRot(theta=1.0, pauli_word=XI, wires=['a', 'b']),
-         PauliRot(theta=2.0, pauli_word=YI, wires=['a', 'b']),
-         PauliRot(theta=3.0, pauli_word=IX, wires=['a', 'b']),
-         PauliRot(theta=4.0, pauli_word=IY, wires=['a', 'b']),
-         PauliRot(theta=5.0, pauli_word=XX, wires=['a', 'b']),
-         PauliRot(theta=6.0, pauli_word=XY, wires=['a', 'b'])]
-
+        >>> qml.ArbitraryStatePreparation.compute_decomposition(weights, wires=["a", "b"])
+        [PauliRot(tensor(1.), 'XI', wires=['a', 'b']),
+         PauliRot(tensor(2.), 'YI', wires=['a', 'b']),
+         PauliRot(tensor(3.), 'IX', wires=['a', 'b']),
+         PauliRot(tensor(4.), 'IY', wires=['a', 'b']),
+         PauliRot(tensor(5.), 'XX', wires=['a', 'b']),
+         PauliRot(tensor(6.), 'XY', wires=['a', 'b'])]
         """
         op_list = []
         for i, pauli_word in enumerate(_state_preparation_pauli_words(len(wires))):
-            op_list.append(qp.PauliRot(weights[i], pauli_word, wires=wires))
+            op_list.append(qml.PauliRot(weights[i], pauli_word, wires=wires))
 
         return op_list
 
@@ -157,27 +141,3 @@ class ArbitraryStatePreparation(Operation):
             tuple[int]: shape
         """
         return (2 ** (n_wires + 1) - 2,)
-
-
-def _arbitrary_state_preparation_resources(num_wires):
-    return dict(
-        Counter(
-            qp.PauliRot(Float, pauli_word=pauli_word, wires=Wire[len(pauli_word)])
-            for pauli_word in _state_preparation_pauli_words(num_wires)
-        )
-    )
-
-
-@register_resources(_arbitrary_state_preparation_resources)
-def _arbitrary_state_preparation_decomposition(weights, wires, **_):
-    pauli_words = _state_preparation_pauli_words(len(wires))
-
-    @for_loop(len(pauli_words))
-    def pauli_loop(i):
-        pauli_word = pauli_words[i]
-        qp.PauliRot(weights[i], pauli_word, wires=wires)
-
-    pauli_loop()  # pylint: disable=no-value-for-parameter
-
-
-add_decomps(ArbitraryStatePreparation, _arbitrary_state_preparation_decomposition)

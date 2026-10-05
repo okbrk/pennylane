@@ -14,16 +14,15 @@
 """
 Unit tests for the comm function
 """
-
 # pylint: disable=too-many-arguments, unused-variable
 import pytest
 
-import pennylane as qp
-from pennylane.core.operator import Operator
-from pennylane.ops import SProd
-from pennylane.pauli import PauliSentence, PauliWord
+import pennylane as qml
+from pennylane.ops import SProd, Sum
+from pennylane.operation import Operator
+from pennylane.pauli import PauliWord, PauliSentence
 
-X, Y, Z, Id = qp.PauliX, qp.PauliY, qp.PauliZ, qp.Identity
+X, Y, Z, Id = qml.PauliX, qml.PauliY, qml.PauliZ, qml.Identity
 
 X0 = PauliWord({0: "X"})
 Y0 = PauliWord({0: "Y"})
@@ -47,70 +46,88 @@ def _id(p):
     return p
 
 
+class TestLegacySupport:
+    """Test support for legacy operator classes like Tensor and Hamiltonian"""
+
+    def test_Hamiltonian_single(self):
+        """Test that Hamiltonians get transformed to new operator classes and return the correct result"""
+        H1 = qml.Hamiltonian([1.0], [qml.PauliX(0)])
+        H2 = qml.Hamiltonian([1.0], [qml.PauliY(0)])
+        res = qml.commutator(H1, H2)
+        true_res = qml.s_prod(2j, qml.PauliZ(0))
+        assert isinstance(res, SProd)
+        assert true_res == res
+
+    def test_Hamiltonian_sum(self):
+        """Test that Hamiltonians with Tensors and sums get transformed to new operator classes and return the correct result"""
+        H1 = qml.Hamiltonian([1.0], [qml.PauliX(0) @ qml.PauliX(1)])
+        H2 = qml.Hamiltonian([1.0], [qml.PauliY(0) + qml.PauliY(1)])
+        true_res = qml.sum(
+            qml.s_prod(2j, qml.PauliZ(0) @ qml.PauliX(1)),
+            qml.s_prod(2j, qml.PauliX(0) @ qml.PauliZ(1)),
+        )
+        res = qml.commutator(H1, H2).simplify()
+        assert isinstance(res, Sum)
+        assert qml.equal(
+            true_res, res
+        )  # issue https://github.com/PennyLaneAI/pennylane/issues/5060 as well as potential fix https://github.com/PennyLaneAI/pennylane/pull/5037
+
+
 def test_alias():
-    """Test that the alias qp.comm() works as expected"""
-    res1 = qp.comm(X0, Y0)
-    res1_true = qp.commutator(X0, Y0)
+    """Test that the alias qml.comm() works as expected"""
+    res1 = qml.comm(X0, Y0)
+    res1_true = qml.commutator(X0, Y0)
     assert res1 == res1_true
-    res2 = qp.comm(X0, Y0, pauli=True)
-    res2_true = qp.commutator(X0, Y0, pauli=True)
+    res2 = qml.comm(X0, Y0, pauli=True)
+    res2_true = qml.commutator(X0, Y0, pauli=True)
     assert res2 == res2_true
 
 
-def test_no_queuing_in_context():
-    """Test that commutator is not queued"""
-    with qp.queuing.AnnotatedQueue() as q1:
-        a = qp.PauliX(0)  # gets queued
-        b = qp.PauliY(0)  # gets queued
-        comm = qp.commutator(a, b)
+def test_no_recording_in_context():
+    """Test that commutator is not recorded"""
+    with qml.tape.QuantumTape() as tape:
+        a = qml.PauliX(0)  # gets recorded
+        b = qml.PauliY(0)  # gets recorded
+        comm = qml.commutator(a, b)
 
-    with qp.queuing.AnnotatedQueue() as q2:
-        qp.PauliX(0)
-        qp.PauliY(0)
+    with qml.tape.QuantumTape() as tape2:
+        qml.PauliX(0)
+        qml.PauliY(0)
 
-    expected = [qp.X(0), qp.Y(0)]
-    for op1, op2, exp_op in zip(q1.queue, q2.queue, expected, strict=True):
-        qp.assert_equal(op1, exp_op)
-        qp.assert_equal(op2, exp_op)
+    assert qml.equal(tape, tape2)
 
 
-def test_no_queuing_in_context_with_pauli():
-    """Test that commutator is not queued while one of the ops is a Pauli"""
-    with qp.queuing.AnnotatedQueue() as q1:
-        a = qp.PauliX(0)  # gets queued
-        b = PauliWord({0: "Y"})  # does not get queued
-        comm = qp.commutator(a, b)
+def test_no_recording_in_context_with_pauli():
+    """Test that commutator is not recorded while one of the ops is a Pauli"""
+    with qml.tape.QuantumTape() as tape:
+        a = qml.PauliX(0)  # gets recorded
+        b = PauliWord({0: "Y"})  # does not get recorded
+        comm = qml.commutator(a, b)
 
-    with qp.queuing.AnnotatedQueue() as q2:
-        qp.PauliX(0)
+    with qml.tape.QuantumTape() as tape2:
+        qml.PauliX(0)
 
-    expected = [qp.X(0)]
-    for op1, op2, exp_op in zip(q1.queue, q2.queue, expected, strict=True):
-        qp.assert_equal(op1, exp_op)
-        qp.assert_equal(op2, exp_op)
+    assert qml.equal(tape, tape2)
 
 
-def test_queuing_wanted():
-    """Test that commutator can be correctly queued with qp.apply still"""
-    with qp.queuing.AnnotatedQueue() as q1:
-        a = qp.PauliX(0)
-        b = qp.PauliY(0)
-        comm = qp.commutator(a, b)
-        qp.apply(comm)
+def test_recording_wanted():
+    """Test that commutator can be correctly recorded with qml.apply still"""
+    with qml.tape.QuantumTape() as tape:
+        a = qml.PauliX(0)
+        b = qml.PauliY(0)
+        comm = qml.commutator(a, b)
+        qml.apply(comm)
 
-    with qp.queuing.AnnotatedQueue() as q2:
-        qp.PauliX(0)
-        qp.PauliY(0)
-        qp.s_prod(2j, qp.PauliZ(0))
+    with qml.tape.QuantumTape() as tape2:
+        qml.PauliX(0)
+        qml.PauliY(0)
+        qml.s_prod(2j, qml.PauliZ(0))
 
-    expected = [qp.X(0), qp.Y(0), 2j * qp.Z(0)]
-    for op1, op2, exp_op in zip(q1.queue, q2.queue, expected, strict=True):
-        qp.assert_equal(op1, exp_op)
-        qp.assert_equal(op2, exp_op)
+    assert qml.equal(tape, tape2)
 
 
 class TestcommPauli:
-    """Test qp.comm for pauli=True"""
+    """Test qml.comm for pauli=True"""
 
     data_pauli_relations = (
         # word and word
@@ -130,7 +147,7 @@ class TestcommPauli:
     @pytest.mark.parametrize("op1, op2, true_res", data_pauli_relations)
     def test_basic_comm_relations(self, op1, op2, true_res, transform_type1, transform_type2):
         """Test basic comm relations between Paulis for PauliWord, PauliSentence and Operator instances"""
-        res = qp.commutator(transform_type1(op1), transform_type2(op2), pauli=True)
+        res = qml.commutator(transform_type1(op1), transform_type2(op2), pauli=True)
         assert res == true_res
         assert isinstance(res, PauliSentence)
 
@@ -154,15 +171,15 @@ class TestcommPauli:
         self, op1, op2, true_res, transform_type1, transform_type2
     ):
         """Test more comm relations between Paulis"""
-        res = qp.commutator(transform_type1(op1), transform_type2(op2), pauli=True)
+        res = qml.commutator(transform_type1(op1), transform_type2(op2), pauli=True)
         assert res == true_res
         assert isinstance(res, PauliSentence)
 
     def test_consistency_with_native_pauli_comms(self):
-        """Test consistent behavior between native comms in PauliWord and PauliSentence and qp.commutor"""
-        op1 = qp.PauliX(0) @ qp.PauliX(1)
-        op2 = qp.PauliY(0) + qp.PauliY(1)
-        res1 = qp.commutator(op1, op2, pauli=True)
+        """Test consistent behavior between native comms in PauliWord and PauliSentence and qml.commutor"""
+        op1 = qml.PauliX(0) @ qml.PauliX(1)
+        op2 = qml.PauliY(0) + qml.PauliY(1)
+        res1 = qml.commutator(op1, op2, pauli=True)
         res2 = PauliWord({0: "X", 1: "X"}).commutator(PauliWord({0: "Y"}) + PauliWord({1: "Y"}))
         assert isinstance(res1, PauliSentence)
         assert isinstance(res2, PauliSentence)
@@ -170,19 +187,19 @@ class TestcommPauli:
 
 
 class TestcommPauliFalse:
-    """Test qp.comm for pauli=False (default behavior)"""
+    """Test qml.comm for pauli=False (default behavior)"""
 
     data_pauli_relations_ops = (
         # word and word
-        (X0, X0, qp.s_prod(0.0, Id(0))),
-        (Y0, Y0, qp.s_prod(0.0, Id(0))),
-        (Z0, Z0, qp.s_prod(0.0, Id(0))),
-        (X0, Y0, qp.s_prod(2j, Z(0))),
-        (Y0, Z0, qp.s_prod(2j, X(0))),
-        (Z0, X0, qp.s_prod(2j, Y(0))),
-        (Y0, X0, qp.s_prod(-2j, Z(0))),
-        (Z0, Y0, qp.s_prod(-2j, X(0))),
-        (X0, Z0, qp.s_prod(-2j, Y(0))),
+        (X0, X0, qml.s_prod(0.0, Id(0))),
+        (Y0, Y0, qml.s_prod(0.0, Id(0))),
+        (Z0, Z0, qml.s_prod(0.0, Id(0))),
+        (X0, Y0, qml.s_prod(2j, Z(0))),
+        (Y0, Z0, qml.s_prod(2j, X(0))),
+        (Z0, X0, qml.s_prod(2j, Y(0))),
+        (Y0, X0, qml.s_prod(-2j, Z(0))),
+        (Z0, Y0, qml.s_prod(-2j, X(0))),
+        (X0, Z0, qml.s_prod(-2j, Y(0))),
     )
 
     @pytest.mark.parametrize("transform_type1", [_id, _pauli_to_op, _pw_to_ps])
@@ -190,7 +207,7 @@ class TestcommPauliFalse:
     @pytest.mark.parametrize("op1, op2, true_res", data_pauli_relations_ops)
     def test_basic_comm_relations(self, op1, op2, true_res, transform_type1, transform_type2):
         """Test basic comm relations between Paulis for PauliWord, PauliSentence and Operator instances"""
-        res = qp.commutator(transform_type1(op1), transform_type2(op2), pauli=False)
+        res = qml.commutator(transform_type1(op1), transform_type2(op2), pauli=False)
         assert res == true_res
         assert isinstance(res, Operator)
         assert isinstance(res, SProd)
@@ -199,12 +216,12 @@ class TestcommPauliFalse:
         (
             PauliWord({0: "X", 1: "X"}),
             PauliWord({0: "Y", 1: "Y"}),
-            qp.s_prod(0.0, Id([0, 1])),
+            qml.s_prod(0.0, Id([0, 1])),
         ),
         (
             PauliWord({0: "X", 1: "X"}),
             PauliWord({"a": "X", "b": "Y"}),
-            qp.s_prod(0.0, Id([0, 1, "a", "b"])),
+            qml.s_prod(0.0, Id([0, 1, "a", "b"])),
         ),
     )
 
@@ -213,7 +230,7 @@ class TestcommPauliFalse:
     @pytest.mark.parametrize("op1, op2, true_res", data_more_comm_relations_op)
     def test_comm_relations_pauli_words(self, op1, op2, true_res, transform_type1, transform_type2):
         """Test more comm relations between Paulis"""
-        res = qp.commutator(transform_type1(op1), transform_type2(op2), pauli=False)
+        res = qml.commutator(transform_type1(op1), transform_type2(op2), pauli=False)
         assert res == true_res
         assert isinstance(res, Operator)
         assert isinstance(res, SProd)
@@ -221,9 +238,9 @@ class TestcommPauliFalse:
     def test_paulis_used_when_ever_possible(self, mocker):
         """Test that pauli_rep is used whenever possible even when ``pauli=False``"""
         spy = mocker.spy(PauliSentence, "operation")
-        op1 = qp.PauliX(0) @ qp.PauliX(1)
-        op2 = qp.PauliY(0) + qp.PauliY(1)
-        res = qp.commutator(op1, op2, pauli=False)
+        op1 = qml.PauliX(0) @ qml.PauliX(1)
+        op2 = qml.PauliY(0) + qml.PauliY(1)
+        res = qml.commutator(op1, op2, pauli=False)
         spy.assert_called()
 
         assert isinstance(res, Operator)

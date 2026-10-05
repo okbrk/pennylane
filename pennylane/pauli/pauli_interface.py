@@ -14,12 +14,14 @@
 """
 Utility functions to interact with and extract information from Pauli words and Pauli sentences.
 """
-
+from typing import Union
 from functools import singledispatch
 
-from pennylane.ops import Identity, LinearCombination, PauliX, PauliY, PauliZ, Prod, SProd
+from pennylane.ops import Hamiltonian, Identity, PauliX, PauliY, PauliZ, Prod, SProd
+from pennylane.operation import Tensor
 
 from .utils import is_pauli_word
+from .conversion import pauli_sentence
 
 
 def pauli_word_prefactor(observable):
@@ -37,11 +39,11 @@ def pauli_word_prefactor(observable):
 
     **Example**
 
-    >>> pauli_word_prefactor(qp.Identity(0))
+    >>> pauli_word_prefactor(qml.Identity(0))
     1
-    >>> pauli_word_prefactor(qp.X(0) @ qp.Y(1))
-    1.0
-    >>> pauli_word_prefactor(qp.X(0) @ qp.Y(0))
+    >>> pauli_word_prefactor(qml.X(0) @ qml.Y(1))
+    1
+    >>> pauli_word_prefactor(qml.X(0) @ qml.Y(0))
     1j
     """
     return _pauli_word_prefactor(observable)
@@ -58,13 +60,20 @@ def _pauli_word_prefactor(observable):
 @_pauli_word_prefactor.register(PauliZ)
 @_pauli_word_prefactor.register(Identity)
 def _pw_prefactor_pauli(
-    observable: PauliX | PauliY | PauliZ | Identity,
-):
+    observable: Union[PauliX, PauliY, PauliZ, Identity]
+):  # pylint:disable=unused-argument
     return 1
 
 
-@_pauli_word_prefactor.register(LinearCombination)
-def _pw_prefactor_ham(observable: LinearCombination):
+@_pauli_word_prefactor.register
+def _pw_prefactor_tensor(observable: Tensor):
+    if is_pauli_word(observable):
+        return list(pauli_sentence(observable).values())[0]  # only one term,
+    raise ValueError(f"Expected a valid Pauli word, got {observable}")
+
+
+@_pauli_word_prefactor.register
+def _pw_prefactor_ham(observable: Hamiltonian):
     if is_pauli_word(observable):
         return observable.coeffs[0]
     raise ValueError(f"Expected a valid Pauli word, got {observable}")
@@ -72,7 +81,7 @@ def _pw_prefactor_ham(observable: LinearCombination):
 
 @_pauli_word_prefactor.register(Prod)
 @_pauli_word_prefactor.register(SProd)
-def _pw_prefactor_prod_sprod(observable: Prod | SProd):
+def _pw_prefactor_prod_sprod(observable: Union[Prod, SProd]):
     ps = observable.pauli_rep
     if ps is not None and len(ps) == 1:
         return list(ps.values())[0]

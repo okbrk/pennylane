@@ -14,11 +14,8 @@
 r"""
 Contains the ``layer`` template constructor.
 """
-
-import warnings
-
-from pennylane import math
-from pennylane.exceptions import PennyLaneDeprecationWarning
+# pylint: disable-msg=too-many-branches,too-many-arguments,protected-access
+from pennylane.math import shape
 
 
 def _preprocess(args, depth):
@@ -33,7 +30,7 @@ def _preprocess(args, depth):
 
     for arg in args:
         # some TF objects don't have len
-        arg_depth = len(arg) if hasattr(arg, "__len__") else math.shape(arg)[0]
+        arg_depth = len(arg) if hasattr(arg, "__len__") else shape(arg)[0]
         if arg_depth != depth:
             raise ValueError(
                 f"Each positional argument must have length matching 'depth'; expected {depth} got {arg_depth}"
@@ -42,37 +39,6 @@ def _preprocess(args, depth):
 
 def layer(template, depth, *args, **kwargs):
     r"""Repeatedly applies a unitary a given number of times.
-
-    .. warning::
-        This function is deprecated and will be removed in v0.47.
-        Please use a for loop instead i.e. instead of:
-
-        .. code-block:: python
-
-            dev = qp.device("default.qubit")
-
-            def ansatz(params):
-                qp.RX(params[0], wires=[0])
-                qp.MultiRZ(params[1], wires=[0, 1])
-                qp.RY(params[2], wires=[1])
-
-            params = np.array([[0.5, 0.5, 0.5], [0.4, 0.4, 0.4]])
-
-            @qp.qnode(dev)
-            def circuit(params):
-                qp.layer(ansatz, 2, params)
-                return [qp.expval(qp.Z(0)), qp.expval(qp.Z(1))]
-
-        We would do:
-
-        .. code-block:: python
-
-            @qp.qnode(dev)
-            def circuit(params):
-                for i in range(params):
-                    ansatz(params[i])
-
-                return [qp.expval(qp.Z(0)), qp.expval(qp.Z(1))]
 
     Args:
         template (callable): The sequence of quantum gates that is being repeated.
@@ -98,61 +64,61 @@ def layer(template, depth, *args, **kwargs):
 
         For example, we can define the following subroutine:
 
-        .. code-block:: python
+        .. code-block:: python3
 
-            import pennylane as qp
+            import pennylane as qml
             import numpy as np
 
             def subroutine():
-                qp.Hadamard(wires=[0])
-                qp.CNOT(wires=[0, 1])
-                qp.X(1)
+                qml.Hadamard(wires=[0])
+                qml.CNOT(wires=[0, 1])
+                qml.X(1)
 
-        and then pass it into the ``qp.layer`` function. In this instance, we repeat ``subroutine`` three times:
+        and then pass it into the ``qml.layer`` function. In this instance, we repeat ``subroutine`` three times:
 
-        .. code-block:: python
+        .. code-block:: python3
 
-            dev = qp.device('default.qubit', wires=3)
+            dev = qml.device('default.qubit', wires=3)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit():
-                qp.layer(subroutine, 3)
-                return [qp.expval(qp.Z(0)), qp.expval(qp.Z(1))]
+                qml.layer(subroutine, 3)
+                return [qml.expval(qml.Z(0)), qml.expval(qml.Z(1))]
 
 
         This creates the following circuit:
 
-        >>> print(qp.draw(circuit)())  # doctest: +SKIP
+        >>> print(qml.draw(circuit)())
         0: ──H─╭●──H─╭●──H─╭●────┤  <Z>
         1: ────╰X──X─╰X──X─╰X──X─┤  <Z>
 
         **Static Arguments**
 
         Static arguments are arguments passed into ``template`` that don't change with each
-        repetition. Static parameters are always passed as keyword arguments into ``qp.layer``.
+        repetition. Static parameters are always passed as keyword arguments into ``qml.layer``.
         For example, consider the following subroutine:
 
-        .. code-block:: python
+        .. code-block:: python3
 
             def subroutine(wires):
-                qp.Hadamard(wires=wires[0])
-                qp.CNOT(wires=wires)
-                qp.X(wires[1])
+                qml.Hadamard(wires=wires[0])
+                qml.CNOT(wires=wires)
+                qml.X(wires[1])
 
         We wish to repeat this gate sequence three times on wires ``1`` and ``2``. Since the wires on which the subroutine acts
         don't change with each repetition, the ``wires`` parameter is passed as a keyword argument.
         Therefore, we define a circuit as:
 
-        .. code-block:: python
+        .. code-block:: python3
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit():
-                qp.layer(subroutine, 3, wires=[1, 2])
-                return [qp.expval(qp.Z(1)), qp.expval(qp.Z(2))]
+                qml.layer(subroutine, 3, wires=[1, 2])
+                return [qml.expval(qml.Z(1)), qml.expval(qml.Z(2))]
 
         which yields the following circuit:
 
-        >>> print(qp.draw(circuit)())  # doctest: +SKIP
+        >>> print(qml.draw(circuit)())
         1: ──H─╭●──H─╭●──H─╭●────┤  <Z>
         2: ────╰X──X─╰X──X─╰X──X─┤  <Z>
 
@@ -160,92 +126,85 @@ def layer(template, depth, *args, **kwargs):
 
         In addition to passing static arguments to ``template``, we can also pass dynamic arguments.
         These are arguments that change with each repetition of the unitary. They are passed
-        as non-keyword arguments to ``qp.layer``, after ``template`` and ``depth``. Each dynamic parameter must
+        as non-keyword arguments to ``qml.layer``, after ``template`` and ``depth``. Each dynamic parameter must
         be a list of length equal to ``depth``. The :math:`j`-th element of the list represents the value of the
         argument used for the :math:`j`-th repetition.
 
         For example, let us define the following variational ansatz:
 
-        .. code-block:: python
+        .. code-block:: python3
 
             def ansatz(params):
-                qp.RX(params[0], wires=[0])
-                qp.MultiRZ(params[1], wires=[0, 1])
-                qp.RY(params[2], wires=[1])
+                qml.RX(params[0], wires=[0])
+                qml.MultiRZ(params[1], wires=[0, 1])
+                qml.RY(params[2], wires=[1])
 
         We wish to repeat this ansatz two times, with each layer having different ``params``:
 
-        .. code-block:: python
+        .. code-block:: python3
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(params):
-                qp.layer(ansatz, 2, params)
-                return [qp.expval(qp.Z(0)), qp.expval(qp.Z(1))]
+                qml.layer(ansatz, 2, params)
+                return [qml.expval(qml.Z(0)), qml.expval(qml.Z(1))]
 
         Since we only have one dynamic argument, ``params``, we pass an array of first-dimension two,
         for the two layers of the repeated ansatz. We can also see that the ``params`` argument
         supplies three different parameters to three different gates. We therefore supply an array of size
-        (2, 3) as an argument to ``qp.layer``:
+        (2, 3) as an argument to ``qml.layer``:
 
-        .. code-block:: python
+        .. code-block:: python3
 
             params = np.array([[0.5, 0.5, 0.5], [0.4, 0.4, 0.4]])
 
         which yields the following circuit:
 
-        >>> print(qp.draw(circuit)(params))  # doctest: +SKIP
+        >>> print(qml.draw(circuit)(params))
         0: ──RX(0.50)─╭MultiRZ(0.50)──RX(0.40)─╭MultiRZ(0.40)───────────┤  <Z>
         1: ───────────╰MultiRZ(0.50)──RY(0.50)─╰MultiRZ(0.40)──RY(0.40)─┤  <Z>
 
         **Passing Multiple Static and Dynamic Arguments**
 
         It is also possible to pass multiple static and dynamic arguments into the same unitary. Dynamic
-        arguments must be ordered in ``qp.layer`` in the same order in which they are passed into the
+        arguments must be ordered in ``qml.layer`` in the same order in which they are passed into the
         ``template``.
 
         Consider the following ansatz:
 
-        .. code-block:: python
+        .. code-block:: python3
 
             def ansatz(param1, param2, wires, var):
-                qp.RX(param1, wires=wires[0])
-                qp.MultiRZ(param2, wires=wires)
+                qml.RX(param1, wires=wires[0])
+                qml.MultiRZ(param2, wires=wires)
 
                 if var:
-                    qp.Hadamard(wires=wires[1])
+                    qml.Hadamard(wires=wires[1])
 
         This circuit can be repeated as:
 
-        .. code-block:: python
+        .. code-block:: python3
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(param1, param2):
-                qp.layer(ansatz, 2, param1, param2, wires=[1, 2], var=True)
-                return [qp.expval(qp.Z(1)), qp.expval(qp.Z(2))]
+                qml.layer(ansatz, 2, param1, param2, wires=[1, 2], var=True)
+                return [qml.expval(qml.Z(1)), qml.expval(qml.Z(2))]
 
         We can then run the circuit with a given set of parameters (note that the parameters are
         of size (2, 1), as the circuit is repeated twice, and for each repetition, both ``param1`` and
         ``param2`` are simply real numbers):
 
-        .. code-block:: python
+        .. code-block:: python3
 
             param1 = np.array([0.1, 0.2])
             param2 = np.array([0.3, 0.4])
 
         This gives us the following circuit:
 
-        >>> print(qp.draw(circuit)(param1, param2))  # doctest: +SKIP
+        >>> print(qml.draw(circuit)(param1, param2))
         1: ──RX(0.10)─╭MultiRZ(0.30)──RX(0.20)─╭MultiRZ(0.40)────┤  <Z>
         2: ───────────╰MultiRZ(0.30)──H────────╰MultiRZ(0.40)──H─┤  <Z>
 
     """
-
-    warnings.warn(
-        "Using qp.templates.layer is deprecated "
-        "and will be removed in v0.47. Instead, please apply "
-        "your unitary in a for loop. ",
-        PennyLaneDeprecationWarning,
-    )
 
     _preprocess(args, depth)
 

@@ -21,19 +21,22 @@ An exception is raised if this configuration is used:
 .. code-block:: python
 
     def print_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, diff_method='device')
+        @qml.qnode(dev, diff_method='device')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.expval(qp.Z(wires=0))
+            qml.RX(x[0], wires=0)
+            return qml.expval(qml.Z(wires=0))
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(circuit)(x))
+        print(qml.grad(circuit)(x))
 
 >>> print_grad()
-QuantumFunctionError: Device <default.qubit device (wires=1) at 0x11ad22bf0> does not support device with requested circuit.
+Traceback (most recent call last):
+  ...
+  File "C:\pennylane\pennylane\qnode.py", line 448, in _validate_device_method
+    raise qml.QuantumFunctionError(
+pennylane.QuantumFunctionError: The default.qubit device does not provide a native method for computing the jacobian.
 
 .. _Analytic backpropagation:
 
@@ -51,40 +54,42 @@ Currently an exception is raised if this invalid configuration is used:
 .. code-block:: python
 
     def print_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=100)
 
-        @qp.set_shots(shots=100)
-        @qp.qnode(dev, diff_method='backprop')
+        @qml.qnode(dev, diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.expval(qp.Z(wires=0))
+            qml.RX(x[0], wires=0)
+            return qml.expval(qml.Z(wires=0))
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(circuit)(x))
+        print(qml.grad(circuit)(x))
 
 >>> print_grad()
-QuantumFunctionError: Device <default.qubit device (wires=1, shots=100) at 0x119d6e8c0> does not support backprop with requested circuit.
+Traceback (most recent call last):
+  ...
+  File "C:\pennylane\pennylane\qnode.py", line 375, in _validate_backprop_method
+    raise qml.QuantumFunctionError("Backpropagation is only supported when shots=None.")
+pennylane.QuantumFunctionError: Backpropagation is only supported when shots=None.
 
 Changing to ``shots=None`` allows computing the analytic gradient:
 
 .. code-block:: python
 
     def print_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, diff_method='backprop')
+        @qml.qnode(dev, diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.expval(qp.Z(wires=0))
+            qml.RX(x[0], wires=0)
+            return qml.expval(qml.Z(wires=0))
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(circuit)(x))
+        print(qml.grad(circuit)(x))
 
 >>> print_grad()
 [-0.09983342]
 
-.. _Adjoint differentiation:
+.. _Adjoint differentation:
 
 Adjoint differentiation
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -98,16 +103,15 @@ In particular, the following code works as expected:
 .. code-block:: python
 
     def print_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, diff_method='adjoint')
+        @qml.qnode(dev, diff_method='adjoint')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.expval(qp.Z(wires=0))
+            qml.RX(x[0], wires=0)
+            return qml.expval(qml.Z(wires=0))
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(circuit)(x))
+        print(qml.grad(circuit)(x))
 
 >>> print_grad()
 [-0.09983342]
@@ -121,17 +125,17 @@ best when the final cost function only has a scalar value.
 
 .. code-block:: python 
 
-    @qp.qnode(qp.device('default.qubit'), diff_method="adjoint", device_vjp=True)
+    @qml.qnode(qml.device('default.qubit'), diff_method="adjoint", device_vjp=True)
     def circuit(x):
-        qp.IsingXX(x, wires=(0,1))
-        return qp.probs(wires=(0,1))
+        qml.IsingXX(x, wires=(0,1))
+        return qml.probs(wires=(0,1))
 
     def cost(x):
         probs = circuit(x)
         target = np.array([0, 0, 0, 1])
-        return qp.math.norm(probs-target)
+        return qml.math.norm(probs-target)
 
->>> qp.grad(cost)(qp.numpy.array(0.1))
+>>> qml.grad(cost)(qml.numpy.array(0.1))
 -0.07059288589999416
 
 Furthermore, the adjoint differentiation algorithm is analytic by nature. If the an execution
@@ -140,16 +144,15 @@ has ``shots>0``, an error is raised:
 .. code-block:: python
 
     def print_grad_ok():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=100)
 
-        @qp.set_shots(shots=100)
-        @qp.qnode(dev, diff_method='adjoint')
+        @qml.qnode(dev, diff_method='adjoint')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.expval(qp.Z(wires=0))
+            qml.RX(x[0], wires=0)
+            return qml.expval(qml.Z(wires=0))
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(circuit)(x))
+        print(qml.grad(circuit)(x))
 
 >>> print_grad_ok()
 DeviceError: Finite shots are not supported with adjoint + default.qubit
@@ -163,7 +166,7 @@ In general, the state of a quantum circuit will be complex-valued, so differenti
 the state directly is not possible without the use of
 `complex analysis <https://en.wikipedia.org/wiki/Holomorphic_function>`__. Though complex
 gradients can be implemented for most "simple" functions, this is not supported in Autograd
-but is done in JAX and PyTorch.
+but is done in the other three interfaces.
 
 Instead, in Autograd, real scalar-valued post-processing should be performed on the output state to allow
 the auto-differentiation frameworks to backpropagate through them. For example, the following
@@ -172,20 +175,19 @@ code uses a scalar cost function dependent on the output state:
 .. code-block:: python
 
     def state_scalar_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, diff_method='backprop')
+        @qml.qnode(dev, diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.state()
+            qml.RX(x[0], wires=0)
+            return qml.state()
 
         def cost_fn(x):
             out = circuit(x)
             return np.abs(out[0])
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.grad(cost_fn)(x))
+        print(qml.grad(cost_fn)(x))
 
 >>> state_scalar_grad()
 [-0.02498958]
@@ -196,16 +198,15 @@ directly will fail with an error:
 .. code-block:: python
 
     def state_vector_grad():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, diff_method='backprop')
+        @qml.qnode(dev, diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.state()
+            qml.RX(x[0], wires=0)
+            return qml.state()
 
         x = np.array([0.1], requires_grad=True)
-        print(qp.jacobian(circuit)(x))
+        print(qml.jacobian(circuit)(x))
 
 >>> state_vector_grad()
 Traceback (most recent call last):
@@ -219,25 +220,37 @@ Using a different interface that supports complex differentiation will fix this 
 .. code-block:: python
 
     def state_vector_grad_jax():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, interface='jax', diff_method='backprop')
+        @qml.qnode(dev, interface='jax', diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.state()
+            qml.RX(x[0], wires=0)
+            return qml.state()
 
         x = jnp.array([0.1], dtype=np.complex64)
         print(jax.jacrev(circuit, holomorphic=True)(x))
 
-    def state_vector_grad_torch():
-        dev = qp.device('default.qubit', wires=1)
+    def state_vector_grad_tf():
+        dev = qml.device('default.qubit', wires=1, shots=None)
 
-        @qp.set_shots(shots=None)
-        @qp.qnode(dev, interface='torch', diff_method='backprop')
+        @qml.qnode(dev, interface='tf', diff_method='backprop')
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.state()
+            qml.RX(x[0], wires=0)
+            return qml.state()
+
+        x = tf.Variable([0.1], trainable=True, dtype=np.complex64)
+        with tf.GradientTape() as tape:
+            out = circuit(x)
+
+        print(tape.jacobian(out, [x]))
+
+    def state_vector_grad_torch():
+        dev = qml.device('default.qubit', wires=1, shots=None)
+
+        @qml.qnode(dev, interface='torch', diff_method='backprop')
+        def circuit(x):
+            qml.RX(x[0], wires=0)
+            return qml.state()
 
         x = torch.tensor([0.1], requires_grad=True, dtype=torch.complex64)
         print(torch.autograd.functional.jacobian(circuit, (x,)))
@@ -245,6 +258,10 @@ Using a different interface that supports complex differentiation will fix this 
 >>> state_vector_grad_jax()
 [[-0.02498958+0.j        ]
  [ 0.        -0.49937513j]]
+>>> state_vector_grad_tf()
+[<tf.Tensor: shape=(2, 1), dtype=complex64, numpy=
+array([[-0.02498958+0.j        ],
+       [-0.        +0.49937513j]], dtype=complex64)>]
 >>> state_vector_grad_torch()
 (tensor([[-0.0250+0.0000j],
         [ 0.0000+0.4994j]]),)
@@ -264,62 +281,52 @@ error, but the results will be incorrect:
 .. code-block:: python
 
     def sample_backward():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=20)
 
-        @qp.set_shots(shots=5)
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.sample(wires=0)
+            qml.RX(x[0], wires=0)
+            return qml.sample(wires=0)
 
         x = np.array([np.pi / 2])
-        print(qp.jacobian(circuit)(x))
+        print(qml.jacobian(circuit)(x))
 
 >>> sample_backward()
-[[[0.5]]
-<BLANKLINE>
- [[0.5]]
-<BLANKLINE>
- [[0.5]]
-<BLANKLINE>
- [[0.5]]
-<BLANKLINE>
- [[0.5]]]
+[[0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]
+ [0.5]]
 
 The forward pass is supported and will work as expected:
 
 .. code-block:: python
 
     def sample_forward():
-        dev = qp.device('default.qubit', wires=1)
+        dev = qml.device('default.qubit', wires=1, shots=20)
 
-        @qp.set_shots(shots=20)
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x):
-            qp.RX(x[0], wires=0)
-            return qp.sample(wires=0)
+            qml.RX(x[0], wires=0)
+            return qml.sample(wires=0)
 
         x = np.array([np.pi / 2])
         print(circuit(x))
 
 >>> sample_forward()
-[[0]
- [0]
- [0]
- [0]
- [1]
- [1]
- [0]
- [0]
- [1]
- [1]
- [1]
- [1]
- [0]
- [1]
- [1]
- [0]
- [1]
- [0]
- [0]
- [1]]
+[0 1 0 0 0 1 1 0 0 1 1 1 0 0 0 1 1 0 0 0]

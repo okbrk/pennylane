@@ -25,15 +25,15 @@ install:
 ifndef PYTHON3
 	@echo "To install PennyLane you need to have Python 3 installed"
 endif
-	uv pip install .
+	$(PYTHON) setup.py install
 
 .PHONY: wheel
 wheel:
-	uv build --wheel
+	$(PYTHON) setup.py bdist_wheel
 
 .PHONY: dist
 dist:
-	uv build --sdist 
+	$(PYTHON) setup.py sdist
 
 .PHONY : clean
 clean:
@@ -60,25 +60,25 @@ clean-docs:
 
 test:
 	$(PYTHON) $(TESTRUNNER)
+	$(PYTHON) $(PLUGIN_TESTRUNNER) --device=default.qubit.autograd
 
 coverage:
 	@echo "Generating coverage report..."
 	$(PYTHON) $(TESTRUNNER) $(COVERAGE)
+	$(PYTHON) $(PLUGIN_TESTRUNNER) --device=default.qubit.autograd $(COVERAGE) --cov-append
 
 .PHONY:format
 format:
 ifdef check
-	$(PYTHON) -m isort --py 312 --profile black -l 100 -o autoray -p ./pennylane --skip __init__.py --filter-files ./pennylane ./tests --check
-	$(PYTHON) -m black -t py312 -t py313 -t py314 -l 100 ./pennylane ./tests --check
+	black -l 100 ./pennylane ./tests --check
 else
-	$(PYTHON) -m isort --py 312 --profile black -l 100 -o autoray -p ./pennylane --skip __init__.py --filter-files ./pennylane ./tests
-	$(PYTHON) -m black -t py312 -t py313 -t py314 -l 100 ./pennylane ./tests
+	black -l 100 ./pennylane ./tests
 endif
 
 .PHONY: lint
 lint:
-	$(PYTHON) -m pylint pennylane --rcfile .pylintrc
+	pylint pennylane --rcfile .pylintrc
 
 .PHONY: lint-test
 lint-test:
-	$(PYTHON) -m pylint tests pennylane/devices/tests --rcfile tests/.pylintrc
+	pylint tests pennylane/devices/tests --rcfile tests/.pylintrc

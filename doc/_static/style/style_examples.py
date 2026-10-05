@@ -20,7 +20,7 @@ undergoing cosmetic changes.
 import pathlib
 import matplotlib.pyplot as plt
 
-import pennylane as qp
+import pennylane as qml
 from pennylane.drawer.style import _styles_map
 import matplotlib.pyplot as plt
 
@@ -28,29 +28,29 @@ folder = pathlib.Path(__file__).parent
 
 
 def make_imag(circuit, style):
-    qp.drawer.use_style(style)
+    qml.drawer.use_style(style)
 
-    fig, _ = qp.draw_mpl(circuit)(1.2345, 1.2345)
+    fig, _ = qml.draw_mpl(circuit)(1.2345, 1.2345)
     _styles_map[style]()
     fig.suptitle(style, fontsize="xx-large")
 
     plt.savefig(folder / (style + "_style.png"), transparent=False)
     plt.close()
-    qp.drawer.use_style("black_white")
+    qml.drawer.use_style("black_white")
 
 
 if __name__ == "__main__":
 
-    dev = qp.device("lightning.qubit", wires=(0, 1, 2, 3))
+    dev = qml.device("lightning.qubit", wires=(0, 1, 2, 3))
 
-    @qp.qnode(dev)
+    @qml.qnode(dev)
     def circuit(x, z):
-        qp.QFT(wires=(0, 1, 2, 3))
-        qp.Toffoli(wires=(0, 1, 2))
-        qp.CSWAP(wires=(0, 2, 3))
-        qp.RX(x, wires=0)
-        qp.CRZ(z, wires=(3, 0))
-        return qp.expval(qp.PauliZ(0))
+        qml.QFT(wires=(0, 1, 2, 3))
+        qml.Toffoli(wires=(0, 1, 2))
+        qml.CSWAP(wires=(0, 2, 3))
+        qml.RX(x, wires=0)
+        qml.CRZ(z, wires=(3, 0))
+        return qml.expval(qml.PauliZ(0))
 
-    for style in qp.drawer.available_styles():
+    for style in qml.drawer.available_styles():
         make_imag(circuit, style)

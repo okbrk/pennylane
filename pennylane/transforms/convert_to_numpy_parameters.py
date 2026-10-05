@@ -15,24 +15,23 @@
 This file contains preprocessings steps that may be called internally
 during execution.
 """
-
-import pennylane as qp
+import pennylane as qml
 from pennylane import math
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch
-from pennylane.transforms import transform
-from pennylane.typing import PostprocessingFn
+from pennylane.tape import QuantumScript
 
 
-def _convert_op_to_numpy_data(op: qp.operation.Operator) -> qp.operation.Operator:
+# pylint: disable=no-member
+def _convert_op_to_numpy_data(op: qml.operation.Operator) -> qml.operation.Operator:
     if math.get_interface(*op.data) == "numpy":
         return op
     # Use operator method to change parameters when it become available
-    return qp.ops.functions.bind_new_parameters(op, math.unwrap(op.data))
+    return qml.ops.functions.bind_new_parameters(op, math.unwrap(op.data))
 
 
+# pylint: disable=no-member
 def _convert_measurement_to_numpy_data(
-    m: qp.measurements.MeasurementProcess,
-) -> qp.measurements.MeasurementProcess:
+    m: qml.measurements.MeasurementProcess,
+) -> qml.measurements.MeasurementProcess:
     if m.obs is None:
         if m.eigvals() is None or math.get_interface(m.eigvals()) == "numpy":
             return m
@@ -40,28 +39,31 @@ def _convert_measurement_to_numpy_data(
 
     if math.get_interface(*m.obs.data) == "numpy":
         return m
-    new_obs = qp.ops.functions.bind_new_parameters(m.obs, math.unwrap(m.obs.data))
+    new_obs = qml.ops.functions.bind_new_parameters(m.obs, math.unwrap(m.obs.data))
     return type(m)(obs=new_obs)
 
 
-@transform
-def convert_to_numpy_parameters(tape: QuantumScript) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+# pylint: disable=protected-access
+def convert_to_numpy_parameters(circuit: QuantumScript) -> QuantumScript:
     """Transforms a circuit to one with purely numpy parameters.
 
     Args:
-        tape (QuantumScript): a circuit with parameters of any interface
+        circuit (QuantumScript): a circuit with parameters of any interface
 
     Returns:
-        tuple[List[QuantumScript], function]: The transformed circuits along with a dummy post-processing function.
+        QuantumScript: A circuit with purely numpy parameters
 
-    **Examples:**
+    .. seealso::
 
-    >>> ops = [qp.S(0), qp.RX(torch.tensor(0.1234), 0)]
-    >>> measurements = [qp.state(), qp.expval(qp.Hermitian(torch.eye(2), 0))]
-    >>> circuit = qp.tape.QuantumScript(ops, measurements)
-    >>> [new_circuit], _ = convert_to_numpy_parameters(circuit)
+        :class:`pennylane.tape.Unwrap` modifies a :class:`~.pennylane.tape.QuantumScript` in place instead of creating
+        a new class. It will also set all parameters on the circuit, not just ones that need to be unwrapped.
+
+    >>> ops = [qml.S(0), qml.RX(torch.tensor(0.1234), 0)]
+    >>> measurements = [qml.state(), qml.expval(qml.Hermitian(torch.eye(2), 0))]
+    >>> circuit = qml.tape.QuantumScript(ops, measurements )
+    >>> new_circuit = convert_to_numpy_parameters(circuit)
     >>> new_circuit.circuit
-    [S(0),
+    [S(wires=[0]),
     RX(0.1234000027179718, wires=[0]),
     state(wires=[]),
     expval(Hermitian(array([[1., 0.],
@@ -79,16 +81,9 @@ def convert_to_numpy_parameters(tape: QuantumScript) -> tuple[QuantumScriptBatch
     False
 
     """
-    new_ops = (_convert_op_to_numpy_data(op) for op in tape.operations)
-    new_measurements = (_convert_measurement_to_numpy_data(m) for m in tape.measurements)
-    new_circuit = tape.__class__(
-        new_ops, new_measurements, shots=tape.shots, trainable_params=tape.trainable_params
+    new_ops = (_convert_op_to_numpy_data(op) for op in circuit.operations)
+    new_measurements = (_convert_measurement_to_numpy_data(m) for m in circuit.measurements)
+    new_circuit = circuit.__class__(
+        new_ops, new_measurements, shots=circuit.shots, trainable_params=circuit.trainable_params
     )
-
-    def null_postprocessing(results):
-        """A postprocessing function returned by a transform that only converts the batch of results
-        into a result for a single ``QuantumTape``.
-        """
-        return results[0]
-
-    return [new_circuit], null_postprocessing
+    return new_circuit

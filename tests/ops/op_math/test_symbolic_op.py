@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Unit tests for the SymbolicOp class of qubit operations"""
-
 from copy import copy
 
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
-from pennylane.core.operator import Operator
-from pennylane.ops.op_math import ScalarSymbolicOp, SymbolicOp
+from pennylane.operation import Operator
+from pennylane.ops.op_math import SymbolicOp, ScalarSymbolicOp
 from pennylane.wires import Wires
 
 
@@ -44,19 +43,22 @@ class TempScalarCopy(ScalarSymbolicOp):  # pylint:disable=too-few-public-methods
         pass
 
 
-def test_initialization():
+def test_intialization():
     """Test initialization for a SymbolicOp"""
     base = Operator("a")
 
-    op = SymbolicOp(base)
+    op = SymbolicOp(base, id="something")
 
     assert op.base is base
     assert op.hyperparameters["base"] is base
+    assert op.id == "something"
+    assert op.queue_idx is None
     assert op.name == "Symbolic"
 
 
 def test_copy():
-    """Test that a copy can be rebound independently of the original."""
+    """Test that a copy of the operator can have its parameters updated independently
+    of the original operator."""
     param1 = 1.234
     base = Operator(param1, "a")
     op = SymbolicOp(base)
@@ -65,20 +67,17 @@ def test_copy():
 
     assert copied_op.__class__ is op.__class__
     assert copied_op.data == (param1,)
-    assert copied_op.base is not op.base
 
-    copied_op = qp.ops.functions.bind_new_parameters(copied_op, (6.54,))
-
-    assert copied_op.data == (6.54,)
+    copied_op.data = (6.54,)
     assert op.data == (param1,)
 
 
 def test_map_wires():
     """Test the map_wires method."""
     base = Operator("a")
-    op = SymbolicOp(base)
+    op = SymbolicOp(base, id="something")
     # pylint:disable=attribute-defined-outside-init,protected-access
-    op._pauli_rep = qp.pauli.PauliSentence({qp.pauli.PauliWord({"a": "X"}): 1})
+    op._pauli_rep = qml.pauli.PauliSentence({qml.pauli.PauliWord({"a": "X"}): 1})
     wire_map = {"a": 5}
     mapped_op = op.map_wires(wire_map=wire_map)
     assert op.wires == Wires("a")
@@ -86,7 +85,7 @@ def test_map_wires():
     assert mapped_op.wires == Wires(5)
     assert mapped_op.base.wires == Wires(5)
     assert mapped_op.pauli_rep is not op.pauli_rep
-    assert mapped_op.pauli_rep == qp.pauli.PauliSentence({qp.pauli.PauliWord({5: "X"}): 1})
+    assert mapped_op.pauli_rep == qml.pauli.PauliSentence({qml.pauli.PauliWord({5: "X"}): 1})
 
 
 class TestProperties:
@@ -95,7 +94,8 @@ class TestProperties:
     # pylint:disable=too-few-public-methods
 
     def test_data(self):
-        """Test that the data property for symbolic ops is read-only."""
+        """Test that the data property for symbolic ops allows for the getting
+        and setting of the base operator's data."""
         x = np.array(1.234)
 
         base = Operator(x, "a")
@@ -103,10 +103,16 @@ class TestProperties:
 
         assert op.data == (x,)
 
-        with pytest.raises(
-            AttributeError, match="property 'data' of 'SymbolicOp' object has no setter"
-        ):
-            setattr(op, "data", (np.array(2.345),))
+        # update parameters through op
+        x_new = np.array(2.345)
+        op.data = (x_new,)
+        assert base.data == (x_new,)
+        assert op.data == (x_new,)
+
+        # update base data updates symbolic data
+        x_new2 = np.array(3.45)
+        base.data = (x_new2,)
+        assert op.data == (x_new2,)
 
     def test_parameters(self):
         """Test parameter property is a list of the base's trainable parameters."""
@@ -136,7 +142,7 @@ class TestProperties:
     def test_has_matrix_hamiltonian(self):
         """Test that it has a matrix if the base is a hamiltonian."""
 
-        H = qp.Hamiltonian([1.0], [qp.PauliX(0)])
+        H = qml.Hamiltonian([1.0], [qml.PauliX(0)])
         op = TempScalar(H, 2)
         assert op.has_matrix
 
@@ -145,15 +151,25 @@ class TestProperties:
         """Test that symbolic op is hermitian if the base is hermitian."""
 
         class DummyOp(Operator):
-            is_verified_hermitian = is_herm
+            is_hermitian = is_herm
 
         base = DummyOp("b")
         op = SymbolicOp(base)
-        assert op.is_verified_hermitian == is_herm
+        assert op.is_hermitian == is_herm
+
+    @pytest.mark.parametrize("queue_cat", ("_ops", None))
+    def test_queuecateory(self, queue_cat):
+        """Test that a symbolic operator inherits the queue_category from its base."""
+
+        class DummyOp(Operator):
+            _queue_category = queue_cat
+
+        op = SymbolicOp(DummyOp("b"))
+        assert op._queue_category == queue_cat  # pylint:disable=protected-access
 
     def test_map_wires(self):
         """Test that base wires can be set through the operator's private `_wires` property."""
-        w = qp.wires.Wires("a")
+        w = qml.wires.Wires("a")
         base = Operator(w)
         op = SymbolicOp(base)
 
@@ -175,22 +191,13 @@ class TestProperties:
         op = SymbolicOp(base)
         assert op.pauli_rep is None
 
-    def test_raise_error_with_mcm_input(self):
-        """Test that symbolic ops of mid-circuit measurements are not supported."""
-        mcm = qp.ops.MidMeasure(0)
-        with pytest.raises(ValueError, match="Symbolic operators of mid-circuit"):
-            _ = SymbolicOp(mcm)
-        ppm = qp.ops.PauliMeasure("XY", wires=[0, 1])
-        with pytest.raises(ValueError, match="Symbolic operators of mid-circuit"):
-            _ = SymbolicOp(ppm)
-
 
 class TestQueuing:
     """Test that Symbolic Operators queue and update base metadata."""
 
     def test_queuing(self):
         """Test symbolic op queues and updates base metadata."""
-        with qp.queuing.AnnotatedQueue() as q:
+        with qml.queuing.AnnotatedQueue() as q:
             base = Operator("a")
             op = SymbolicOp(base)
 
@@ -202,7 +209,7 @@ class TestQueuing:
         """Test symbolic op queues without adding base to the queue if it isn't already in the queue."""
 
         base = Operator("b")
-        with qp.queuing.AnnotatedQueue() as q:
+        with qml.queuing.AnnotatedQueue() as q:
             op = SymbolicOp(base)
 
         assert len(q) == 1
@@ -229,15 +236,22 @@ class TestScalarSymbolicOp:
         assert op.data[1] == 1.1
 
     def test_data(self):
-        """Test that the data property is read-only."""
+        """Tests the data property."""
         op = TempScalar(Operator(1.1, wires=[0]), 2.2)
         assert op.scalar == 2.2
         assert op.data == (2.2, 1.1)
 
-        with pytest.raises(
-            AttributeError, match="property 'data' of 'TempScalar' object has no setter"
-        ):
-            setattr(op, "data", (3.3, 4.4))
+        # check setting through ScalarSymbolicOp
+        op.data = (3.3, 4.4)  # pylint:disable=attribute-defined-outside-init
+        assert op.data == (3.3, 4.4)
+        assert op.scalar == 3.3
+        assert op.base.data == (4.4,)
+
+        # check setting through base
+        op.base.data = (5.5,)
+        assert op.data == (3.3, 5.5)
+        assert op.scalar == 3.3
+        assert op.base.data == (5.5,)
 
     def test_hash(self):
         """Test that a hash correctly identifies ScalarSymbolicOps."""
@@ -246,6 +260,6 @@ class TestScalarSymbolicOp:
         op2 = TempScalar(Operator(1.1, wires=[0]), 0.6)
         op3 = TempScalar(Operator(1.2, wires=[0]), 0.3)
         op4 = TempScalarCopy(Operator(1.1, wires=[0]), 0.3)
-        assert hash(op0) == hash(op1)
+        assert op0.hash == op1.hash
         for second_op in [op2, op3, op4]:
-            assert hash(op0) != hash(second_op)
+            assert op0.hash != second_op.hash

@@ -13,26 +13,24 @@
 # limitations under the License.
 """Autoray registrations"""
 
-# pylint: disable=protected-access,import-outside-toplevel,disable=unnecessary-lambda
+# pylint:disable=protected-access,import-outside-toplevel,wrong-import-position, disable=unnecessary-lambda
 from importlib import import_module
 
-# pylint: disable=wrong-import-order
 import autoray as ar
 import numpy as np
-import scipy as sp
-from jax import numpy as jnp
-from jax.core import concrete_or_error
-from jax.errors import ConcretizationTypeError, TracerArrayConversionError
-from packaging.version import Version
+import semantic_version
 from scipy.linalg import block_diag as _scipy_block_diag
 
-from .interface_utils import get_deep_interface
+from .utils import get_deep_interface
 
 
 def _i(name):
     """Convenience function to import PennyLane
     interfaces via a string pattern"""
-    if name == "qp":
+    if name == "tf":
+        return import_module("tensorflow")
+
+    if name == "qml":
         return import_module("pennylane")
 
     return import_module(name)
@@ -55,94 +53,18 @@ def _builtins_shape(x):
 
 ar.register_function("builtins", "ndim", _builtins_ndim)
 ar.register_function("builtins", "shape", _builtins_shape)
-ar.register_function("builtins", "coerce", lambda x: x)
-ar.register_function("builtins", "logical_xor", lambda x, y: x ^ y)
+
 
 # -------------------------------- SciPy --------------------------------- #
 # the following is required to ensure that SciPy sparse Hamiltonians passed to
-# qp.SparseHamiltonian are not automatically 'unwrapped' to dense NumPy arrays.
+# qml.SparseHamiltonian are not automatically 'unwrapped' to dense NumPy arrays.
 ar.register_function("scipy", "to_numpy", lambda x: x)
-ar.register_function("scipy", "coerce", lambda x: x)
-ar.register_function("scipy", "array", lambda x: x)
+
 ar.register_function("scipy", "shape", np.shape)
-ar.register_function("scipy", "dot", np.dot)
 ar.register_function("scipy", "conj", np.conj)
 ar.register_function("scipy", "transpose", np.transpose)
 ar.register_function("scipy", "ndim", np.ndim)
 
-
-# -------------------------------- SciPy Sparse --------------------------------- #
-# the following is required to ensure that general SciPy sparse matrices are
-# not automatically 'unwrapped' to dense NumPy arrays. Note that we assume
-# that whenever the backend is 'scipy', the input is a SciPy sparse matrix.
-
-
-def sparse_matrix_power(A, n):
-    """Dispatch to the appropriate sparse matrix power function."""
-    try:  # pragma: no cover
-        # pylint: disable=import-outside-toplevel
-        from scipy.sparse.linalg import matrix_power
-
-        # added in scipy 1.12.0
-
-        return matrix_power(A, n)
-    except ImportError:  # pragma: no cover
-        return _sparse_matrix_power_bruteforce(A, n)
-
-
-def _sparse_matrix_power_bruteforce(A, n):
-    """
-    Compute the power of a sparse matrix using brute-force matrix multiplication.
-    Supports only non-negative integer exponents.
-
-    Parameters:
-    A : scipy.sparse matrix
-        The sparse matrix to be exponentiated.
-    n : int
-        The exponent (must be non-negative).
-
-    Returns:
-    scipy.sparse matrix
-        The matrix A raised to the power n.
-    """
-
-    if n < 0:
-        raise ValueError("This function only supports non-negative integer exponents.")
-
-    if n == 0:
-        return sp.sparse.eye(A.shape[0], dtype=A.dtype, format=A.format)  # Identity matrix
-
-    try:
-        matmul_range = range(n - 1)
-    except Exception as e:
-        raise ValueError("exponent must be an integer") from e
-
-    result = A.copy()
-    for _ in matmul_range:
-        result = result @ A  # Native matmul operation
-
-    return result
-
-
-ar.register_function("scipy", "linalg.inv", sp.sparse.linalg.inv)
-ar.register_function("scipy", "linalg.expm", sp.sparse.linalg.expm)
-ar.register_function("scipy", "linalg.matrix_power", sparse_matrix_power)
-ar.register_function("scipy", "linalg.norm", sp.sparse.linalg.norm)
-ar.register_function("scipy", "linalg.spsolve", sp.sparse.linalg.spsolve)
-ar.register_function("scipy", "linalg.eigs", sp.sparse.linalg.eigs)
-ar.register_function("scipy", "linalg.eigsh", sp.sparse.linalg.eigsh)
-ar.register_function("scipy", "linalg.svds", sp.sparse.linalg.svds)
-
-
-ar.register_function("scipy", "trace", lambda x: x.trace())
-ar.register_function("scipy", "reshape", lambda x, new_shape: x.reshape(new_shape))
-ar.register_function("scipy", "real", lambda x: x.real)
-ar.register_function("scipy", "imag", lambda x: x.imag)
-ar.register_function("scipy", "size", lambda x: np.prod(x.shape))
-ar.register_function("scipy", "eye", sp.sparse.eye)
-ar.register_function("scipy", "zeros", sp.sparse.csr_matrix)
-ar.register_function("scipy", "hstack", sp.sparse.hstack)
-ar.register_function("scipy", "vstack", sp.sparse.vstack)
 
 # -------------------------------- NumPy --------------------------------- #
 
@@ -153,14 +75,6 @@ ar.register_function("builtins", "block_diag", lambda x: _scipy_block_diag(*x))
 ar.register_function("numpy", "gather", lambda x, indices: x[np.array(indices)])
 ar.register_function("numpy", "unstack", list)
 
-
-def _delete_numpy(array, obj, axis=None, **kwargs):
-    kwargs.pop("assume_unique_indices", None)  #  ignore JAX-specific kwarg
-    return np.delete(array, obj, axis=axis, **kwargs)
-
-
-ar.register_function("numpy", "delete", _delete_numpy)
-
 ar.register_function("builtins", "unstack", list)
 
 
@@ -170,7 +84,7 @@ def _scatter_numpy(indices, array, shape):
     return new_array
 
 
-def _scatter_element_add_numpy(tensor, index, value, **_):
+def _scatter_element_add_numpy(tensor, index, value):
     """In-place addition of a multidimensional value over various
     indices of a tensor."""
     new_tensor = tensor.copy()
@@ -207,7 +121,7 @@ ar.register_function("builtins", "gamma", lambda x: _i("scipy").special.gamma(x)
 ar.autoray._BACKEND_ALIASES["pennylane"] = "autograd"
 
 # When dispatching to autograd, ensure that autoray will instead call
-# qp.numpy rather than autograd.numpy, to take into account our autograd modification.
+# qml.numpy rather than autograd.numpy, to take into account our autograd modification.
 ar.autoray._MODULE_ALIASES["autograd"] = "pennylane.numpy"
 
 ar.register_function("autograd", "ndim", lambda x: _i("autograd").numpy.ndim(x))
@@ -220,10 +134,6 @@ ar.register_function("autograd", "unstack", list)
 
 def autograd_get_dtype_name(x):
     """A autograd version of get_dtype_name that can handle array boxes."""
-    # abstract array comes from PL so is treated as a autograd array
-    if x.__class__.__name__ == "AbstractArray":
-        # will always be a numpy dtype
-        return x.dtype.name
     # this function seems to only get called with x is an arraybox.
     return ar.get_dtype_name(x._value)
 
@@ -233,7 +143,7 @@ ar.register_function("autograd", "get_dtype_name", autograd_get_dtype_name)
 
 def _block_diag_autograd(tensors):
     """Autograd implementation of scipy.linalg.block_diag"""
-    _np = _i("qp").numpy
+    _np = _i("qml").numpy
     tensors = [t.reshape((1, len(t))) if len(t.shape) == 1 else t for t in tensors]
     rsizes, csizes = _np.array([t.shape for t in tensors]).T
     all_zeros = [[_np.zeros((rsize, csize)) for csize in csizes] for rsize in rsizes]
@@ -273,11 +183,11 @@ def _to_numpy_autograd(x, max_depth=None, _n=0):
 ar.register_function("autograd", "to_numpy", _to_numpy_autograd)
 
 
-def _scatter_element_add_autograd(tensor, index, value, **_):
+def _scatter_element_add_autograd(tensor, index, value):
     """In-place addition of a multidimensional value over various
     indices of a tensor. Since Autograd doesn't support indexing
     assignment, we have to be clever and use ravel_multi_index."""
-    pnp = _i("qp").numpy
+    pnp = _i("qml").numpy
     size = tensor.size
     flat_index = pnp.ravel_multi_index(index, tensor.shape)
     if pnp.isscalar(flat_index):
@@ -285,7 +195,7 @@ def _scatter_element_add_autograd(tensor, index, value, **_):
     if pnp.isscalar(value) or len(pnp.shape(value)) == 0:
         value = [value]
     t = [0] * size
-    for _id, val in zip(flat_index, value, strict=True):
+    for _id, val in zip(flat_index, value):
         t[_id] = val
     return tensor + pnp.array(t).reshape(tensor.shape)
 
@@ -294,7 +204,7 @@ ar.register_function("autograd", "scatter_element_add", _scatter_element_add_aut
 
 
 def _take_autograd(tensor, indices, axis=None):
-    indices = _i("qp").numpy.asarray(indices)
+    indices = _i("qml").numpy.asarray(indices)
 
     if axis is None:
         return tensor.flatten()[indices]
@@ -311,10 +221,272 @@ ar.register_function(
     lambda x: -_i("autograd").numpy.sum(x * _i("autograd").numpy.log(x), axis=-1),
 )
 
-ar.register_function("autograd", "diagonal", lambda x, *args: _i("qp").numpy.diag(x))
+ar.register_function("autograd", "diagonal", lambda x, *args: _i("qml").numpy.diag(x))
 ar.register_function("autograd", "cond", _cond)
 
 ar.register_function("autograd", "gamma", lambda x: _i("autograd.scipy").special.gamma(x))
+
+
+# -------------------------------- TensorFlow --------------------------------- #
+
+
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "angle"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "arcsin"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "arccos"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "arctan"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "arctan2"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "mod"] = "tensorflow.math"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "diag"] = "tensorflow.linalg"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "kron"] = "tensorflow.experimental.numpy"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "moveaxis"] = "tensorflow.experimental.numpy"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "sinc"] = "tensorflow.experimental.numpy"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "isclose"] = "tensorflow.experimental.numpy"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "atleast_1d"] = "tensorflow.experimental.numpy"
+ar.autoray._SUBMODULE_ALIASES["tensorflow", "all"] = "tensorflow.experimental.numpy"
+
+tf_fft_functions = [
+    "fft",
+    "ifft",
+    "fft2",
+    "ifft2",
+]
+
+
+for fn in tf_fft_functions:
+    ar.autoray._SUBMODULE_ALIASES["tensorflow", "fft." + fn] = "tensorflow.signal"
+
+ar.autoray._FUNC_ALIASES["tensorflow", "fft.fft2"] = "fft2d"
+ar.autoray._FUNC_ALIASES["tensorflow", "fft.ifft2"] = "ifft2d"
+
+ar.autoray._FUNC_ALIASES["tensorflow", "arcsin"] = "asin"
+ar.autoray._FUNC_ALIASES["tensorflow", "arccos"] = "acos"
+ar.autoray._FUNC_ALIASES["tensorflow", "arctan"] = "atan"
+ar.autoray._FUNC_ALIASES["tensorflow", "arctan2"] = "atan2"
+ar.autoray._FUNC_ALIASES["tensorflow", "diag"] = "diag"
+
+
+def _tf_convert_to_tensor(x, **kwargs):
+    if isinstance(x, _i("tf").Tensor) and "dtype" in kwargs:
+        return _i("tf").cast(x, **kwargs)
+    return _i("tf").convert_to_tensor(x, **kwargs)
+
+
+ar.register_function("tensorflow", "asarray", _tf_convert_to_tensor)
+ar.register_function(
+    "tensorflow",
+    "hstack",
+    lambda *args, **kwargs: _i("tf").experimental.numpy.hstack(*args),
+)
+
+ar.register_function("tensorflow", "flatten", lambda x: _i("tf").reshape(x, [-1]))
+ar.register_function("tensorflow", "shape", lambda x: tuple(x.shape))
+ar.register_function(
+    "tensorflow",
+    "full",
+    lambda shape, fill_value, **kwargs: _i("tf").fill(
+        shape if isinstance(shape, (tuple, list)) else (shape), fill_value, **kwargs
+    ),
+)
+ar.register_function(
+    "tensorflow",
+    "isnan",
+    lambda tensor, **kwargs: _i("tf").math.is_nan(_i("tf").math.real(tensor), **kwargs)
+    | _i("tf").math.is_nan(_i("tf").math.imag(tensor), **kwargs),
+)
+ar.register_function(
+    "tensorflow", "any", lambda tensor, **kwargs: _i("tf").reduce_any(tensor, **kwargs)
+)
+ar.register_function(
+    "tensorflow",
+    "sqrt",
+    lambda x: _i("tf").math.sqrt(
+        _i("tf").cast(x, "float64") if x.dtype.name in ("int64", "int32") else x
+    ),
+)
+
+
+def _ifft2_tf(a, s=None, axes=(-2, -1), norm=None):
+    if axes != (-2, -1):
+        raise ValueError(
+            "TensorFlow does not support passing axes; the ifft "
+            "will always be performed over the inner-most 2 dimensions."
+        )
+
+    if norm is not None:
+        raise ValueError("TensorFlow does not support the 'norm' keyword argument.")
+    if s is not None:
+        raise ValueError("TensorFlow does not support the 's' keyword argument.")
+
+    # TensorFlow only supports FFT of complex tensors
+    if a.dtype not in [_i("tf").complex64, _i("tf").complex128]:
+        if a.dtype is _i("tf").float64:
+            a = _i("tf").cast(a, dtype=_i("tf").complex128)
+        else:
+            a = _i("tf").cast(a, dtype=_i("tf").complex64)
+
+    return _i("tf").signal.ifft2d(input=a)
+
+
+ar.register_function("tensorflow", "fft.ifft2", _ifft2_tf)
+
+
+def _round_tf(tensor, decimals=0):
+    """Implement a TensorFlow version of np.round"""
+    tf = _i("tf")
+    tol = 10**decimals
+    return tf.round(tensor * tol) / tol
+
+
+ar.register_function("tensorflow", "round", _round_tf)
+
+
+def _ndim_tf(tensor):
+    return len(tensor.shape)
+
+
+ar.register_function("tensorflow", "ndim", _ndim_tf)
+
+
+def _take_tf(tensor, indices, axis=None, **kwargs):
+    tf = _i("tf")
+    return tf.experimental.numpy.take(tensor, indices, axis=axis, **kwargs)
+
+
+ar.register_function("tensorflow", "take", _take_tf)
+
+
+def _coerce_types_tf(tensors):
+    """Coerce the dtypes of a list of tensors so that they
+    all share the same dtype, without any reduction in information."""
+    tf = _i("tf")
+    tensors = [tf.convert_to_tensor(t) for t in tensors]
+    dtypes = {i.dtype for i in tensors}
+
+    if len(dtypes) == 1:
+        return tensors
+
+    complex_priority = [tf.complex64, tf.complex128]
+    float_priority = [tf.float16, tf.float32, tf.float64]
+    int_priority = [tf.int8, tf.int16, tf.int32, tf.int64]
+
+    complex_type = [i for i in complex_priority if i in dtypes]
+    float_type = [i for i in float_priority if i in dtypes]
+    int_type = [i for i in int_priority if i in dtypes]
+
+    cast_type = complex_type or float_type or int_type
+    cast_type = list(cast_type)[-1]
+
+    return [tf.cast(t, cast_type) for t in tensors]
+
+
+ar.register_function("tensorflow", "coerce", _coerce_types_tf)
+
+
+def _block_diag_tf(tensors):
+    """TensorFlow implementation of scipy.linalg.block_diag"""
+    tf = _i("tf")
+    int_dtype = None
+
+    if tensors[0].dtype in (tf.int32, tf.int64):
+        int_dtype = tensors[0].dtype
+        tensors = [tf.cast(t, tf.float32) for t in tensors]
+
+    linop_blocks = [tf.linalg.LinearOperatorFullMatrix(block) for block in tensors]
+    linop_block_diagonal = tf.linalg.LinearOperatorBlockDiag(linop_blocks)
+    res = linop_block_diagonal.to_dense()
+
+    if int_dtype is None:
+        return res
+
+    return tf.cast(res, int_dtype)
+
+
+ar.register_function("tensorflow", "block_diag", _block_diag_tf)
+
+
+def _scatter_tf(indices, array, new_dims):
+    import tensorflow as tf
+
+    indices = np.expand_dims(indices, 1)
+    return tf.scatter_nd(indices, array, new_dims)
+
+
+def _scatter_element_add_tf(tensor, index, value):
+    """In-place addition of a multidimensional value over various
+    indices of a tensor."""
+    import tensorflow as tf
+
+    if not isinstance(index[0], int):
+        index = tuple(zip(*index))
+    indices = tf.expand_dims(index, 0)
+    value = tf.cast(tf.expand_dims(value, 0), tensor.dtype)
+    return tf.tensor_scatter_nd_add(tensor, indices, value)
+
+
+ar.register_function("tensorflow", "scatter", _scatter_tf)
+ar.register_function("tensorflow", "scatter_element_add", _scatter_element_add_tf)
+
+
+def _transpose_tf(a, axes=None):
+    import tensorflow as tf
+
+    return tf.transpose(a, perm=axes)
+
+
+ar.register_function("tensorflow", "transpose", _transpose_tf)
+ar.register_function("tensorflow", "diagonal", lambda x, *args: _i("tf").linalg.diag_part(x))
+ar.register_function("tensorflow", "outer", lambda a, b: _i("tf").tensordot(a, b, axes=0))
+
+# for some reason Autoray modifies the default behaviour, so we change it back here
+ar.register_function("tensorflow", "where", lambda *args, **kwargs: _i("tf").where(*args, **kwargs))
+
+
+def _eigvalsh_tf(density_matrix):
+    evs = _i("tf").linalg.eigvalsh(density_matrix)
+    evs = _i("tf").math.real(evs)
+    return evs
+
+
+ar.register_function("tensorflow", "eigvalsh", _eigvalsh_tf)
+ar.register_function(
+    "tensorflow", "entr", lambda x: -_i("tf").math.reduce_sum(x * _i("tf").math.log(x), axis=-1)
+)
+
+
+def _kron_tf(a, b):
+    import tensorflow as tf
+
+    a_shape = a.shape
+    b_shape = b.shape
+
+    if len(a_shape) == 1:
+        a = a[:, tf.newaxis]
+        b = b[tf.newaxis, :]
+        return tf.reshape(a * b, (a_shape[0] * b_shape[0],))
+
+    a = a[:, tf.newaxis, :, tf.newaxis]
+    b = b[tf.newaxis, :, tf.newaxis, :]
+    return tf.reshape(a * b, (a_shape[0] * b_shape[0], a_shape[1] * b_shape[1]))
+
+
+ar.register_function("tensorflow", "kron", _kron_tf)
+
+
+def _cond_tf(pred, true_fn, false_fn, args):
+    import tensorflow as tf
+
+    return tf.cond(pred, lambda: true_fn(*args), lambda: false_fn(*args))
+
+
+ar.register_function("tensorflow", "cond", _cond_tf)
+
+
+ar.register_function(
+    "tensorflow",
+    "vander",
+    lambda *args, **kwargs: _i("tf").experimental.numpy.vander(*args, **kwargs),
+)
+ar.register_function("tensorflow", "size", lambda x: _i("tf").size(x))
 
 
 # -------------------------------- Torch --------------------------------- #
@@ -333,7 +505,7 @@ def _to_numpy_torch(x):
 ar.register_function("torch", "to_numpy", _to_numpy_torch)
 
 
-def _asarray_torch(x, dtype=None, requires_grad=False, **kwargs):
+def _asarray_torch(x, dtype=None, **kwargs):
     import torch
 
     dtype_map = {
@@ -348,9 +520,9 @@ def _asarray_torch(x, dtype=None, requires_grad=False, **kwargs):
         np.complex128: torch.complex128,
         "float64": torch.float64,
     }
-    dtype = dtype_map.get(dtype, dtype)
-    if requires_grad:
-        return torch.tensor(x, dtype=dtype, **kwargs, requires_grad=True)
+
+    if dtype in dtype_map:
+        return torch.as_tensor(x, dtype=dtype_map[dtype], **kwargs)
 
     return torch.as_tensor(x, dtype=dtype, **kwargs)
 
@@ -427,36 +599,16 @@ def _coerce_types_torch(tensors):
     torch = _i("torch")
 
     # Extract existing set devices, if any
-    device_set = set()
-    dev_indices = set()
-    for t in tensors:
-        if isinstance(t, torch.Tensor):
-            device_set.add(t.device.type)
-            dev_indices.add(t.device.index)
-        else:
-            device_set.add("cpu")
-            dev_indices.add(None)
-
+    device_set = set(t.device for t in tensors if isinstance(t, torch.Tensor))
     if len(device_set) > 1:  # pragma: no cover
-        # If data exists on two separate GPUs, outright fail
-        if len([i for i in dev_indices if i is not None]) > 1:
-            device_names = ", ".join(str(d) for d in device_set)
+        # GPU specific case
+        device_names = ", ".join(str(d) for d in device_set)
+        raise RuntimeError(
+            f"Expected all tensors to be on the same device, but found at least two devices, {device_names}!"
+        )
 
-            raise RuntimeError(
-                f"Expected all tensors to be on the same device, but found at least two devices, {device_names}!"
-            )
-        # Otherwise, automigrate data from CPU to GPU and carry on.
-        dev_indices.remove(None)
-        dev_id = dev_indices.pop()
-        tensors = [
-            torch.as_tensor(t, device=torch.device(f"cuda:{dev_id}"))
-            for t in tensors  # pragma: no cover
-        ]
-    else:
-        device = device_set.pop()
-        dev_id = dev_indices.pop() if dev_indices else None
-        torch_device = torch.device(f"{device}:{dev_id}" if dev_id is not None else device)
-        tensors = [torch.as_tensor(t, device=torch_device) for t in tensors]
+    device = device_set.pop() if len(device_set) == 1 else None
+    tensors = [torch.as_tensor(t, device=device) for t in tensors]
 
     dtypes = {i.dtype for i in tensors}
 
@@ -494,7 +646,7 @@ def _block_diag_torch(tensors):
     # converted the diagonal indices to row and column indices
     ridx, cidx = np.stack([p - sizes, p]).T
 
-    for t, r, c in zip(tensors, ridx, cidx, strict=True):
+    for t, r, c in zip(tensors, ridx, cidx):
         row = np.arange(*r).reshape(-1, 1)
         col = np.arange(*c).reshape(1, -1)
         res[row, col] = t
@@ -513,7 +665,7 @@ def _scatter_torch(indices, tensor, new_dimensions):
     return new_tensor
 
 
-def _scatter_element_add_torch(tensor, index, value, **_):
+def _scatter_element_add_torch(tensor, index, value):
     """In-place addition of a multidimensional value over various
     indices of a tensor. Note that Torch only supports index assignments
     on non-leaf nodes; if the node is a leaf, we must clone it first."""
@@ -538,7 +690,7 @@ ar.register_function("torch", "sort", _sort_torch)
 
 def _tensordot_torch(tensor1, tensor2, axes):
     torch = _i("torch")
-    if Version(torch.__version__) < Version("1.10.0") and axes == 0:
+    if not semantic_version.match(">=1.10.0", torch.__version__) and axes == 0:
         return torch.outer(tensor1, tensor2)
     return torch.tensordot(tensor1, tensor2, axes)
 
@@ -584,11 +736,11 @@ ar.register_function("torch", "cond", _cond)
 
 
 def _to_numpy_jax(x):
+    from jax.errors import TracerArrayConversionError
 
     try:
-        x = concrete_or_error(None, x)
-        return np.array(x)
-    except (ConcretizationTypeError, TracerArrayConversionError) as e:
+        return np.array(getattr(x, "val", x))
+    except TracerArrayConversionError as e:
         raise ValueError(
             "Converting a JAX array to a NumPy array not supported when using the JAX JIT."
         ) from e
@@ -599,7 +751,7 @@ ar.register_function(
     "jax",
     "take",
     lambda x, indices, axis=None, **kwargs: _i("jax").numpy.take(
-        x, _i("jax").numpy.asarray(indices), axis=axis, **kwargs
+        x, np.array(indices), axis=axis, **kwargs
     ),
 )
 ar.register_function("jax", "coerce", lambda x: x)
@@ -608,15 +760,8 @@ ar.register_function("jax", "block_diag", lambda x: _i("jax").scipy.linalg.block
 ar.register_function("jax", "gather", lambda x, indices: x[np.array(indices)])
 
 
-# pylint: disable=unused-argument
-def _asarray_jax(x, dtype=None, requires_grad=False, **kwargs):
-    return _i("jax").numpy.array(x, dtype=dtype, **kwargs)
-
-
-ar.register_function("jax", "asarray", _asarray_jax)
-
-
 def _ndim_jax(x):
+    import jax.numpy as jnp
 
     return jnp.ndim(x)
 
@@ -625,6 +770,7 @@ ar.register_function("jax", "ndim", lambda x: _ndim_jax(x))
 
 
 def _scatter_jax(indices, array, new_dimensions):
+    from jax import numpy as jnp
 
     new_array = jnp.zeros(new_dimensions, dtype=array.dtype.type)
     new_array = new_array.at[indices].set(array)
@@ -635,7 +781,7 @@ ar.register_function("jax", "scatter", _scatter_jax)
 ar.register_function(
     "jax",
     "scatter_element_add",
-    lambda x, index, value, **kwargs: x.at[tuple(index)].add(value, **kwargs),
+    lambda x, index, value: x.at[tuple(index)].add(value),
 )
 ar.register_function("jax", "unstack", list)
 # pylint: disable=unnecessary-lambda

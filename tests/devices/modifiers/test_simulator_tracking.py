@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Tests for qp.devices.modifiers.simulator_tracking.
+Tests for qml.devices.modifiers.simulator_tracking.
 """
-
 # pylint: disable=unused-argument, too-few-public-methods, missing-class-docstring
-import pennylane as qp
+import pennylane as qml
+
 from pennylane.devices.modifiers import simulator_tracking
 
 
@@ -24,9 +24,8 @@ def test_tracking_execute():
     """Test the tracking behavior of execute with no shots."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             results = []
             for c in circuits:
                 if len(c.measurements) == 1:
@@ -37,8 +36,10 @@ def test_tracking_execute():
 
     dev = DummyDev()
 
-    tape1 = qp.tape.QuantumScript([qp.X(0)], [qp.expval(qp.X(0)), qp.expval(qp.Y(0))])
-    tape2 = qp.tape.QuantumScript([qp.S(0), qp.T(1)], [qp.expval(qp.X(0) + qp.Y(0))], shots=50)
+    tape1 = qml.tape.QuantumScript([qml.X(0)], [qml.expval(qml.X(0)), qml.expval(qml.Y(0))])
+    tape2 = qml.tape.QuantumScript(
+        [qml.S(0), qml.T(1)], [qml.expval(qml.X(0) + qml.Y(0))], shots=50
+    )
     with dev.tracker:
         out = dev.execute((tape1, tape2))
 
@@ -56,19 +57,18 @@ def test_tracking_compute_derivatives():
     """Test the compute_derivatives tracking behavior."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def compute_derivatives(
-            self, circuits, execution_config: qp.devices.ExecutionConfig | None = None
+            self, circuits, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0
 
     dev = DummyDev()
 
-    t = qp.tape.QuantumScript()
+    t = qml.tape.QuantumScript()
     with dev.tracker:
         out = dev.compute_derivatives((t, t, t))
 
@@ -81,17 +81,18 @@ def test_tracking_execute_and_compute_derivatives():
     """Test tracking the execute_and_compute_derivatives method."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def execute_and_compute_derivatives(
-            self, circuits, execution_config: qp.devices.ExecutionConfig | None = None
+            self, circuits, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0, 0.0
 
-    t = qp.tape.QuantumScript([qp.RX(1.2, wires=0)], [qp.expval(qp.X(0)), qp.probs(wires=(0, 1))])
+    t = qml.tape.QuantumScript(
+        [qml.RX(1.2, wires=0)], [qml.expval(qml.X(0)), qml.probs(wires=(0, 1))]
+    )
     dev = DummyDev()
     with dev.tracker:
         out = dev.execute_and_compute_derivatives((t, t, t))
@@ -108,19 +109,18 @@ def test_tracking_compute_jvp():
     """Test the compute_jvp tracking behavior."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def compute_jvp(
-            self, circuits, tangents, execution_config: qp.devices.ExecutionConfig | None = None
+            self, circuits, tangents, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0
 
     dev = DummyDev()
 
-    t = qp.tape.QuantumScript()
+    t = qml.tape.QuantumScript()
     with dev.tracker:
         out = dev.compute_jvp((t, t, t), (0.0, 0.0, 0.0))
 
@@ -133,17 +133,18 @@ def test_tracking_execute_and_compute_jvp():
     """Test tracking the execute_and_compute_jvp method."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def execute_and_compute_jvp(
-            self, circuits, tangents, execution_config: qp.devices.ExecutionConfig | None = None
+            self, circuits, tangents, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0, 0.0
 
-    t = qp.tape.QuantumScript([qp.RX(1.2, wires=0)], [qp.expval(qp.X(0)), qp.probs(wires=(0, 1))])
+    t = qml.tape.QuantumScript(
+        [qml.RX(1.2, wires=0)], [qml.expval(qml.X(0)), qml.probs(wires=(0, 1))]
+    )
     dev = DummyDev()
     with dev.tracker:
         out = dev.execute_and_compute_jvp((t, t, t), (1, 1, 1))
@@ -161,22 +162,18 @@ def test_tracking_compute_vjp():
     """Test the compute_vjp tracking behavior."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def compute_vjp(
-            self,
-            circuits,
-            cotangents,
-            execution_config: qp.devices.ExecutionConfig | None = None,
+            self, circuits, cotangents, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0
 
     dev = DummyDev()
 
-    t = qp.tape.QuantumScript()
+    t = qml.tape.QuantumScript()
     with dev.tracker:
         out = dev.compute_vjp((t, t, t), (0.0, 0.0, 0.0))
 
@@ -189,21 +186,17 @@ def test_tracking_execute_and_compute_vjp():
     """Test tracking the execute_and_compute_derivatives method."""
 
     @simulator_tracking
-    class DummyDev(qp.devices.Device):
-
-        def execute(self, circuits, execution_config: qp.devices.ExecutionConfig | None = None):
+    class DummyDev(qml.devices.Device):
+        def execute(self, circuits, execution_config=qml.devices.DefaultExecutionConfig):
             return 0.0
 
         def execute_and_compute_vjp(
-            self,
-            circuits,
-            cotangents,
-            execution_config: qp.devices.ExecutionConfig | None = None,
+            self, circuits, cotangents, execution_config=qml.devices.DefaultExecutionConfig
         ):
             return 0.0, 0.0
 
-    t = qp.tape.QuantumScript(
-        [qp.Rot(1.2, 2.3, 3.4, wires=0)], [qp.expval(qp.X(0)), qp.probs(wires=(0, 1))]
+    t = qml.tape.QuantumScript(
+        [qml.Rot(1.2, 2.3, 3.4, wires=0)], [qml.expval(qml.X(0)), qml.probs(wires=(0, 1))]
     )
     dev = DummyDev()
     with dev.tracker:

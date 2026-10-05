@@ -3,7 +3,11 @@
 PyTorch interface
 ==================
 
-.. important::
+In order to use PennyLane in combination with PyTorch, we have to generate PyTorch-compatible
+quantum nodes. Such a QNode can be created explicitly using the ``interface='torch'`` keyword in
+the QNode decorator or QNode class constructor.
+
+.. note::
 
     To use the PyTorch interface in PennyLane, you must first
     `install PyTorch <https://pytorch.org/get-started/locally/#start-locally>`_
@@ -11,12 +15,12 @@ PyTorch interface
 
     .. code::
 
-        import pennylane as qp
+        import pennylane as qml
         import torch
 
-In order to use PennyLane in combination with PyTorch, we have to generate PyTorch-compatible
-quantum nodes. Such a QNode can be created explicitly using the ``interface="torch"`` keyword in
-the QNode decorator or QNode class constructor.
+Using the PyTorch interface is easy in PennyLane --- let's consider a few ways
+it can be done.
+
 
 .. _torch_interf_keyword:
 
@@ -29,15 +33,15 @@ QNode is to specify the ``interface='torch'`` keyword argument:
 
 .. code-block:: python
 
-    dev = qp.device('default.qubit', wires=2)
+    dev = qml.device('default.qubit', wires=2)
 
-    @qp.qnode(dev, interface='torch')
+    @qml.qnode(dev, interface='torch')
     def circuit(phi, theta):
-        qp.RX(phi[0], wires=0)
-        qp.RY(phi[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        qp.PhaseShift(theta, wires=0)
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.Hadamard(1))
+        qml.RX(phi[0], wires=0)
+        qml.RY(phi[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.PhaseShift(theta, wires=0)
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.Hadamard(1))
 
 The QNode ``circuit()`` is now a PyTorch-capable QNode, accepting ``torch.tensor`` objects as
 input, and returning ``torch.tensor`` objects. Subclassing from ``torch.autograd.Function``,
@@ -56,18 +60,18 @@ PyTorch-capable QNodes can also be created using the
 
 .. code-block:: python
 
-    dev1 = qp.device('default.qubit', wires=2)
-    dev2 = qp.device('default.mixed', wires=2)
+    dev1 = qml.device('default.qubit', wires=2)
+    dev2 = qml.device('default.mixed', wires=2)
 
     def circuit1(phi, theta):
-        qp.RX(phi[0], wires=0)
-        qp.RY(phi[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        qp.PhaseShift(theta, wires=0)
-        return qp.expval(qp.PauliZ(0)), qp.expval(qp.Hadamard(1))
+        qml.RX(phi[0], wires=0)
+        qml.RY(phi[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.PhaseShift(theta, wires=0)
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.Hadamard(1))
 
-    qnode1 = qp.QNode(circuit1, dev1)
-    qnode2 = qp.QNode(circuit1, dev2, interface='torch')
+    qnode1 = qml.QNode(circuit1, dev1)
+    qnode2 = qml.QNode(circuit1, dev2, interface='torch')
 
 ``qnode1()`` detects the interface from the parameters of each call, while ``qnode2()`` is a strictly a PyTorch-capable
 QNode:
@@ -89,15 +93,15 @@ For example:
 
 .. code-block:: python
 
-    dev = qp.device('default.qubit', wires=2)
+    dev = qml.device('default.qubit', wires=2)
 
-    @qp.qnode(dev, interface='torch')
+    @qml.qnode(dev, interface='torch')
     def circuit3(phi, theta):
-        qp.RX(phi[0], wires=0)
-        qp.RY(phi[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        qp.PhaseShift(theta, wires=0)
-        return qp.expval(qp.PauliZ(0))
+        qml.RX(phi[0], wires=0)
+        qml.RY(phi[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.PhaseShift(theta, wires=0)
+        return qml.expval(qml.PauliZ(0))
 
     phi = torch.tensor([0.5, 0.1], requires_grad=True)
     theta = torch.tensor(0.2, requires_grad=True)
@@ -115,14 +119,14 @@ To include non-differentiable data arguments, simply set ``requires_grad=False``
 
 .. code-block:: python
 
-    @qp.qnode(dev, interface='torch')
+    @qml.qnode(dev, interface='torch')
     def circuit3(weights, data):
-        qp.AmplitudeEmbedding(data, normalize=True, wires=[0, 1])
-        qp.RX(weights[0], wires=0)
-        qp.RY(weights[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        qp.PhaseShift(weights[2], wires=0)
-        return qp.expval(qp.PauliZ(0))
+        qml.AmplitudeEmbedding(data, normalize=True, wires=[0, 1])
+        qml.RX(weights[0], wires=0)
+        qml.RY(weights[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.PhaseShift(weights[2], wires=0)
+        return qml.expval(qml.PauliZ(0))
 
 Here, ``data`` is non-trainable embedded data, so should be marked as non-differentiable:
 
@@ -152,17 +156,17 @@ result in an expectation value of 0.5 we can do the following:
 .. code-block:: python
 
     import torch
-    import pennylane as qp
+    import pennylane as qml
 
-    dev = qp.device('default.qubit', wires=2)
+    dev = qml.device('default.qubit', wires=2)
 
-    @qp.qnode(dev, interface='torch')
+    @qml.qnode(dev, interface='torch')
     def circuit4(phi, theta):
-        qp.RX(phi[0], wires=0)
-        qp.RZ(phi[1], wires=1)
-        qp.CNOT(wires=[0, 1])
-        qp.RX(theta, wires=0)
-        return qp.expval(qp.PauliZ(0))
+        qml.RX(phi[0], wires=0)
+        qml.RZ(phi[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.RX(theta, wires=0)
+        return qml.expval(qml.PauliZ(0))
 
     def cost(phi, theta):
         return torch.abs(circuit4(phi, theta) - 0.5)**2
@@ -219,15 +223,15 @@ the GPU will dominate performance; for less than 15 wires, the GPU will probably
     n_wires = 20
     n_layers = 10
 
-    dev = qp.device('default.qubit', wires=n_wires)
+    dev = qml.device('default.qubit', wires=n_wires)
 
-    params_shape = qp.StronglyEntanglingLayers.shape(n_layers=n_layers, n_wires=n_wires)
+    params_shape = qml.StronglyEntanglingLayers.shape(n_layers=n_layers, n_wires=n_wires)
     params = torch.rand(params_shape)
 
-    @qp.qnode(dev, interface='torch', diff_method="backprop")
+    @qml.qnode(dev, interface='torch', diff_method="backprop")
     def circuit_cuda(params):
-        qp.StronglyEntanglingLayers(params, wires=range(n_wires))
-        return qp.expval(qp.PauliZ(0))
+        qml.StronglyEntanglingLayers(params, wires=range(n_wires))
+        return qml.expval(qml.PauliZ(0))
 
 >>> import timeit
 >>> timeit.timeit("circuit_cuda(params)", globals=globals(), number=5))

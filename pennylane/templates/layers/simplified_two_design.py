@@ -14,14 +14,9 @@
 r"""
 Contains the SimplifiedTwoDesign template.
 """
-
-from jax import numpy as jnp
-
-from pennylane import capture, math
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops import CZ, RY
+# pylint: disable-msg=too-many-branches,too-many-arguments,protected-access
+import pennylane as qml
+from pennylane.operation import Operation, AnyWires
 
 
 class SimplifiedTwoDesign(Operation):
@@ -70,16 +65,16 @@ class SimplifiedTwoDesign(Operation):
 
         .. code-block:: python
 
-            import pennylane as qp
+            import pennylane as qml
             from math import pi
 
             n_wires = 3
-            dev = qp.device('default.qubit', wires=n_wires)
+            dev = qml.device('default.qubit', wires=n_wires)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(init_weights, weights):
-                qp.SimplifiedTwoDesign(initial_layer_weights=init_weights, weights=weights, wires=range(n_wires))
-                return [qp.expval(qp.Z(i)) for i in range(n_wires)]
+                qml.SimplifiedTwoDesign(initial_layer_weights=init_weights, weights=weights, wires=range(n_wires))
+                return [qml.expval(qml.Z(i)) for i in range(n_wires)]
 
             init_weights = [pi, pi, pi]
             weights_layer1 = [[0., pi],
@@ -88,28 +83,27 @@ class SimplifiedTwoDesign(Operation):
                               [pi, 0.]]
             weights = [weights_layer1, weights_layer2]
 
-        >>> circuit(init_weights, weights)
-        [np.float64(1.0), np.float64(-1.0), np.float64(1.0)]
+            >>> circuit(init_weights, weights)
+            [1., -1., 1.]
 
         **Parameter shapes**
 
         A list of shapes for the two weights arguments can be computed with the static method
-        :meth:`~.qp.SimplifiedTwoDesign.shape` and used when creating randomly
+        :meth:`~.qml.SimplifiedTwoDesign.shape` and used when creating randomly
         initialised weight tensors:
 
         .. code-block:: python
 
-            shapes = qp.SimplifiedTwoDesign.shape(n_layers=2, n_wires=2)
+            shapes = qml.SimplifiedTwoDesign.shape(n_layers=2, n_wires=2)
             weights = [np.random.random(size=shape) for shape in shapes]
 
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"num_wires", "n_layers"}
-
-    def __init__(self, initial_layer_weights, weights, wires):
-        shape = math.shape(weights)
+    def __init__(self, initial_layer_weights, weights, wires, id=None):
+        shape = qml.math.shape(weights)
 
         if len(shape) > 1:
             if shape[1] != len(wires) - 1:
@@ -122,7 +116,7 @@ class SimplifiedTwoDesign(Operation):
                     f"Weights tensor must have third dimension of length 2; got {shape[2]}"
                 )
 
-        shape2 = math.shape(initial_layer_weights)
+        shape2 = qml.math.shape(initial_layer_weights)
         if shape2 != (len(wires),):
             raise ValueError(
                 f"Initial layer weights must be of shape {(len(wires),)}; got {shape2}"
@@ -130,15 +124,11 @@ class SimplifiedTwoDesign(Operation):
 
         self.n_layers = shape[0]
 
-        super().__init__(initial_layer_weights, weights, wires=wires)
+        super().__init__(initial_layer_weights, weights, wires=wires, id=id)
 
     @property
     def num_params(self):
         return 2
-
-    @property
-    def resource_params(self) -> dict:
-        return {"num_wires": len(self.wires), "n_layers": math.shape(self.parameters[1])[0]}
 
     @staticmethod
     def compute_decomposition(
@@ -162,55 +152,39 @@ class SimplifiedTwoDesign(Operation):
 
         **Example**
 
-        >>> from math import pi
-        >>> init_weights = [pi, pi, pi]
-        >>> weights_layer1 = [[0., pi],
-        ...                   [0., pi]]
-        >>> weights_layer2 = [[pi, 0.],
-        ...                   [pi, 0.]]
-        >>> weights = np.array([weights_layer1, weights_layer2])
-        >>> ops = qp.SimplifiedTwoDesign.compute_decomposition(init_weights, weights, wires=["a", "b", "c"])
-        >>> from pprint import pprint
-        >>> pprint(ops)
-        [RY(3.141592653589793, wires=['a']),
-         RY(3.141592653589793, wires=['b']),
-         RY(3.141592653589793, wires=['c']),
-         CZ(wires=['a', 'b']),
-         RY(0.0, wires=['a']),
-         RY(3.141592653589793, wires=['b']),
-         CZ(wires=['b', 'c']),
-         RY(0.0, wires=['b']),
-         RY(3.141592653589793, wires=['c']),
-         CZ(wires=['a', 'b']),
-         RY(3.141592653589793, wires=['a']),
-         RY(0.0, wires=['b']),
-         CZ(wires=['b', 'c']),
-         RY(3.141592653589793, wires=['b']),
-         RY(0.0, wires=['c'])]
-
+        >>> qml.SimplifiedTwoDesign.compute_decomposition(initial_layer_weights, weights, wires=["a", "b", "c"])
+        [RY(tensor(3.1416), wires=['a']), RY(tensor(3.1416), wires=['b']), RY(tensor(3.1416), wires=['c']),
+        CZ(wires=['a', 'b']),
+        RY(tensor(0.), wires=['a']), RY(tensor(3.1416), wires=['b']),
+        CZ(wires=['b', 'c']),
+        RY(tensor(0.), wires=['b']), RY(tensor(3.1416), wires=['c']),
+        CZ(wires=['a', 'b']),
+        RY(tensor(3.1416), wires=['a']), RY(tensor(0.), wires=['b']),
+        CZ(wires=['b', 'c']),
+        RY(tensor(3.1416), wires=['b']), RY(tensor(0.), wires=['c'])]
         """
 
-        n_layers = math.shape(weights)[0]
+        n_layers = qml.math.shape(weights)[0]
         op_list = []
 
         # initial rotations
         for i in range(len(wires)):  # pylint: disable=consider-using-enumerate
-            op_list.append(RY(initial_layer_weights[i], wires=wires[i]))
+            op_list.append(qml.RY(initial_layer_weights[i], wires=wires[i]))
 
         for layer in range(n_layers):
             # even layer of entanglers
             even_wires = [wires[i : i + 2] for i in range(0, len(wires) - 1, 2)]
             for i, wire_pair in enumerate(even_wires):
-                op_list.append(CZ(wires=wire_pair))
-                op_list.append(RY(weights[layer, i, 0], wires=wire_pair[0]))
-                op_list.append(RY(weights[layer, i, 1], wires=wire_pair[1]))
+                op_list.append(qml.CZ(wires=wire_pair))
+                op_list.append(qml.RY(weights[layer, i, 0], wires=wire_pair[0]))
+                op_list.append(qml.RY(weights[layer, i, 1], wires=wire_pair[1]))
 
             # odd layer of entanglers
             odd_wires = [wires[i : i + 2] for i in range(1, len(wires) - 1, 2)]
             for i, wire_pair in enumerate(odd_wires):
-                op_list.append(CZ(wires=wire_pair))
-                op_list.append(RY(weights[layer, len(wires) // 2 + i, 0], wires=wire_pair[0]))
-                op_list.append(RY(weights[layer, len(wires) // 2 + i, 1], wires=wire_pair[1]))
+                op_list.append(qml.CZ(wires=wire_pair))
+                op_list.append(qml.RY(weights[layer, len(wires) // 2 + i, 0], wires=wire_pair[0]))
+                op_list.append(qml.RY(weights[layer, len(wires) // 2 + i, 1], wires=wire_pair[1]))
 
         return op_list
 
@@ -230,54 +204,3 @@ class SimplifiedTwoDesign(Operation):
             return [(n_wires,), (n_layers,)]
 
         return [(n_wires,), (n_layers, n_wires - 1, 2)]
-
-
-def _simplified_two_design_resources(n_layers, num_wires):
-    if num_wires > 1:
-        return {
-            RY: num_wires + (n_layers * num_wires - n_layers) * 2,
-            CZ: n_layers * num_wires - n_layers,
-        }
-    return {RY: num_wires}
-
-
-@register_resources(_simplified_two_design_resources)
-def _simplified_two_design_decomposition(initial_layer_weights, weights, wires):
-    n_layers = math.shape(weights)[0]
-
-    if capture.enabled():
-        initial_layer_weights, weights, wires = (
-            jnp.array(initial_layer_weights),
-            jnp.array(weights),
-            jnp.array(wires),
-        )
-
-    # initial rotations
-    @for_loop(len(wires))
-    def initial_rotation_loop(i):
-        RY(initial_layer_weights[i], wires=wires[i])
-
-    initial_rotation_loop()  # pylint: disable=no-value-for-parameter
-
-    @for_loop(n_layers)
-    def layers_loop(layer):
-
-        all_wire_pairs = [wires[i : i + 2] for i in range(0, len(wires) - 1, 2)] + [
-            wires[i : i + 2] for i in range(1, len(wires) - 1, 2)
-        ]
-        if capture.enabled():
-            all_wire_pairs = jnp.array(all_wire_pairs)
-
-        @for_loop(len(all_wire_pairs))
-        def block_loop(i):
-            wire_pair = all_wire_pairs[i]
-            CZ(wires=wire_pair)
-            RY(weights[layer, i, 0], wires=wire_pair[0])
-            RY(weights[layer, i, 1], wires=wire_pair[1])
-
-        block_loop()  # pylint: disable=no-value-for-parameter
-
-    layers_loop()  # pylint: disable=no-value-for-parameter
-
-
-add_decomps(SimplifiedTwoDesign, _simplified_two_design_decomposition)

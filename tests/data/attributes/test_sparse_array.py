@@ -15,6 +15,7 @@
 Tests for the ``DatasetSparseArray`` attribute type.
 """
 
+
 import pytest
 import scipy.sparse
 

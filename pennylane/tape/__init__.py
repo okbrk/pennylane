@@ -16,22 +16,6 @@ This subpackage contains the quantum tape, which tracks, queues, and
 validates quantum operations and measurements.
 """
 
-from pennylane.core.qscript import (
-    QuantumScript,
-    QuantumScriptBatch,
-    QuantumScriptOrBatch,
-    make_qscript,
-    process_queue,
-)
-
+from .tape import QuantumTape, TapeError, expand_tape_state_prep
 from .operation_recorder import OperationRecorder
-from .tape import QuantumTape, QuantumTapeBatch
-
-
-# pylint: disable=import-outside-toplevel
-def __getattr__(key):
-    if key == "plxpr_to_tape":
-        from .plxpr_conversion import plxpr_to_tape
-
-        return plxpr_to_tape
-    raise AttributeError(f"module 'pennylane.tape' has no attribute '{key}'")  # pragma: no cover
+from .qscript import QuantumScript, make_qscript

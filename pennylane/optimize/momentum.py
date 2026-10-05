@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Momentum optimizer"""
-
 from .gradient_descent import GradientDescentOptimizer
 
 
@@ -34,12 +33,12 @@ class MomentumOptimizer(GradientDescentOptimizer):
     * :math:`m`: the momentum
 
     Args:
-        stepsize (float): the user-defined hyperparameter :math:`\eta` (default value: 0.01).
-        momentum (float): the user-defined hyperparameter :math:`m` (default value: 0.9).
+        stepsize (float): user-defined hyperparameter :math:`\eta`
+        momentum (float): user-defined hyperparameter :math:`m`
 
     .. note::
 
-        When using ``torch`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
+        When using ``torch``, ``tensorflow`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
 
     """
 

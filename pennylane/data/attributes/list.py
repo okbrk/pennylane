@@ -14,8 +14,9 @@
 """Contains an DatasetAttribute that allows for heterogeneous lists of dataset
 types."""
 
-from collections.abc import Iterable, MutableSequence, Sequence
-from typing import Generic, overload
+import typing
+from collections.abc import Sequence
+from typing import Generic, List, Union, overload
 
 from pennylane.data.base.attribute import DatasetAttribute
 from pennylane.data.base.hdf5 import HDF5Any, HDF5Group
@@ -23,42 +24,44 @@ from pennylane.data.base.mapper import MapperMixin
 from pennylane.data.base.typing_util import T
 
 
-class DatasetList(
+class DatasetList(  # pylint: disable=too-many-ancestors
     Generic[T],
-    DatasetAttribute[HDF5Group, Sequence[T], Iterable[T]],
-    MutableSequence[T],
+    DatasetAttribute[HDF5Group, typing.Sequence[T], typing.Iterable[T]],
+    typing.MutableSequence[T],
     MapperMixin,
 ):
     """Provides a list-like collection type for Dataset Attributes."""
 
     type_id = "list"
 
-    def __post_init__(self, value: Iterable[T]):
+    def __post_init__(self, value: typing.Iterable[T]):
         super().__post_init__(value)
 
         self.extend(value)
 
     @classmethod
-    def default_value(cls) -> Iterable[T]:
+    def default_value(cls) -> typing.Iterable[T]:
         return []
 
-    def hdf5_to_value(self, bind: HDF5Group) -> MutableSequence[T]:
+    def hdf5_to_value(self, bind: HDF5Group) -> typing.MutableSequence[T]:
         return self
 
-    def value_to_hdf5(self, bind_parent: HDF5Group, key: str, value: Iterable[T]) -> HDF5Group:
+    def value_to_hdf5(
+        self, bind_parent: HDF5Group, key: str, value: typing.Iterable[T]
+    ) -> HDF5Group:
         grp = bind_parent.create_group(key)
 
         return grp
 
-    def copy_value(self) -> list[T]:
+    def copy_value(self) -> List[T]:
         return [self._mapper[str(i)].copy_value() for i in range(len(self))]
 
-    def copy(self) -> list[T]:
+    def copy(self) -> List[T]:
         """Returns a copy of this list as a builtin ``list``, with all
         elements copied.."""
         return self.copy_value()
 
-    def insert(self, index: int, value: T | DatasetAttribute[HDF5Any, T, T]):
+    def insert(self, index: int, value: Union[T, DatasetAttribute[HDF5Any, T, T]]):
         """Implements the insert() method."""
         if index < 0:
             index = len(self) + index
@@ -84,7 +87,7 @@ class DatasetList(
         if not len(self) == len(__value):
             return False
 
-        return all(x == y for x, y in zip(self, __value, strict=True))
+        return all(x == y for x, y in zip(self, __value))
 
     def __str__(self) -> str:
         return str(list(self))
@@ -94,14 +97,14 @@ class DatasetList(
         return f"[{items_repr}]"
 
     @overload
-    def __getitem__(self, index: slice) -> list[T]:
+    def __getitem__(self, index: slice) -> typing.List[T]:
         pass
 
     @overload
     def __getitem__(self, index: int) -> T:
         pass
 
-    def __getitem__(self, index: int | slice):
+    def __getitem__(self, index: Union[int, slice]):
         if isinstance(index, slice):
             return [self[i] for i in range(len(self))[index]]
 
@@ -113,7 +116,7 @@ class DatasetList(
 
         return self._mapper[str(index)].get_value()
 
-    def __setitem__(self, index: int, value: T | DatasetAttribute[HDF5Any, T, T]):
+    def __setitem__(self, index: int, value: Union[T, DatasetAttribute[HDF5Any, T, T]]):
         if index < 0:
             index = len(self) + index
         if not 0 <= index < len(self):

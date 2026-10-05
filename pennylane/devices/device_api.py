@@ -14,43 +14,27 @@
 """
 This module contains the Abstract Base Class for the next generation of devices.
 """
-
+# pylint: disable=comparison-with-callable
 import abc
-import warnings
-from collections.abc import Iterable
 from dataclasses import replace
-from numbers import Number
-from typing import overload
 
-from pennylane.core.qscript import QuantumScript, QuantumScriptBatch, QuantumScriptOrBatch
-from pennylane.core.shots import Shots
-from pennylane.core.transforms import CompilePipeline, Transform
-from pennylane.exceptions import PennyLaneDeprecationWarning, TransformError
-from pennylane.ops import H, X, Y, Z
-from pennylane.transforms import (
-    broadcast_expand,
-    defer_measurements,
-    diagonalize_measurements,
-    dynamic_one_shot,
-    split_non_commuting,
-    split_to_single_terms,
-)
+from collections.abc import Iterable
+from numbers import Number
+from typing import Callable, Union, Sequence, Tuple, Optional
+
+from pennylane.measurements import Shots
+from pennylane.tape import QuantumTape
 from pennylane.typing import Result, ResultBatch
 from pennylane.wires import Wires
+from pennylane import Tracker
+from pennylane.transforms.core import TransformProgram
 
-from .capabilities import (
-    DeviceCapabilities,
-    observable_stopping_condition_factory,
-    validate_mcm_method,
-)
-from .execution_config import ExecutionConfig
-from .preprocess import (
-    decompose,
-    validate_device_wires,
-    validate_measurements,
-    validate_observables,
-)
-from .tracker import Tracker
+from .execution_config import ExecutionConfig, DefaultExecutionConfig
+
+Result_or_ResultBatch = Union[Result, ResultBatch]
+QuantumTapeBatch = Sequence[QuantumTape]
+QuantumTape_or_Batch = Union[QuantumTape, QuantumTapeBatch]
+PostprocessingFn = Callable[[ResultBatch], Result_or_ResultBatch]
 
 
 # pylint: disable=unused-argument, no-self-use
@@ -66,7 +50,7 @@ class Device(abc.ABC):
         **Streamlined interface:** Only methods that are required to interact with the rest of PennyLane will be placed in the
         interface. Developers will be able to clearly see what they can change while still having a fully functional device.
 
-        **Reduction of duplicate methods:** Methods that solve similar problems are combined. Only one place will have
+        **Reduction of duplicate methods:** Methods that solve similar problems are combined together. Only one place will have
         to solve each individual problem.
 
         **Support for dynamic execution configurations:** Properties such as shots belong to specific executions.
@@ -78,14 +62,14 @@ class Device(abc.ABC):
     .. details::
         :title: Porting from the old interface
 
-        :meth:`pennylane.devices.LegacyDevice.batch_execute` and :meth:`~pennylane.devices.LegacyDevice.execute` are now a single method, :meth:`~.Device.execute`
+        :meth:`pennylane.Device.batch_execute` and :meth:`~pennylane.Device.execute` are now a single method, :meth:`~.Device.execute`
 
         :meth:`~.Device.batch_transform` and :meth:`~.Device.expand_fn` are now a single method, :meth:`~.Device.preprocess`
 
         Shot information is no longer stored on the device, but instead specified on individual input :class:`~.QuantumTape`.
 
         The old devices defined a :meth:`~.Device.capabilities` dictionary that defined characteristics of the devices and controlled various
-        preprocessing and validation steps, such as ``"supports_broadcasting"``.  These capabilities should now be handled by the
+        preprocessing and validation steps, such as ``"supports_broadcasting"``.  These capabilites should now be handled by the
         :meth:`~.Device.preprocess` method. For example, if a device does not support broadcasting, ``preprocess`` should
         split a quantum script with broadcasted parameters into a batch of quantum scripts. If the device does not support mid circuit
         measurements, then ``preprocess`` should apply :func:`~.defer_measurements`.  A set of default preprocessing steps will be available
@@ -99,7 +83,7 @@ class Device(abc.ABC):
         to certain inputs.
 
         Versioning should be specified by the package containing the device. If an external package includes a PennyLane device,
-        then the package requirements should specify the minimum PennyLane version required to work with the device.
+        then the package requirements should specify the minimium PennyLane version required to work with the device.
 
     .. details::
         :title: The relationship between preprocessing and execution
@@ -108,24 +92,18 @@ class Device(abc.ABC):
         If an arbitrary, non-preprocessed circuit is provided, :meth:`~.execute` has no responsibility to perform any
         validation or provide clearer error messages.
 
-        >>> import pennylane as qp
-        >>> op = qp.Permute(["c", 3,"a",2,0], wires=[3,2,"a",0,"c"])
-        >>> circuit = qp.tape.QuantumScript([op], [qp.state()])
-        >>> from pennylane.devices import DefaultQubit
+        >>> op = qml.Permute(["c", 3,"a",2,0], wires=[3,2,"a",0,"c"])
+        >>> circuit = qml.tape.QuantumScript([op], [qml.state()])
         >>> dev = DefaultQubit()
         >>> dev.execute(circuit)
-        Traceback (most recent call last):
-        ...
-        pennylane.exceptions.MatrixUndefinedError
-        >>> angles = qp.numpy.array([1.2, 2.3, 3.4])
-        >>> circuit = qp.tape.QuantumScript([qp.Rot(*angles, 0)], [qp.expval(qp.Z(0))])
+        MatrixUndefinedError
+        >>> circuit = qml.tape.QuantumScript([qml.Rot(1.2, 2.3, 3.4, 0)], [qml.expval(qml.Z(0))])
         >>> config = ExecutionConfig(gradient_method="adjoint")
-        >>> dev.compute_derivatives(circuit, config)  # the result will be incorrect
-        (array(0.), array(0.), array(0.))
-        >>> program, new_config = dev.preprocess(config)
-        >>> new_circuit, postprocessing = program([circuit])
+        >>> dev.compute_derivatives(circuit, config)
+        ValueError: Operation Rot is not written in terms of a single parameter
+        >>> new_circuit, postprocessing, new_config = dev.preprocess(circuit, config)
         >>> dev.compute_derivatives(new_circuit, new_config)
-        ((array(-1.6682...e-18), array(-0.7457...), array(-2.6785...e-18)),)
+        ((array(0.), array(-0.74570521), array(0.)),)
 
         Any validation checks or error messages should occur in :meth:`~.preprocess` to avoid failures after expending
         computation resources.
@@ -146,30 +124,7 @@ class Device(abc.ABC):
 
         * ``derivative_order``: Relevant for requested device derivatives.
 
-        * ``mcm_config``: Options for methods of handling mid-circuit-measures.
-
     """
-
-    config_filepath: str | None = None
-    """A device can use a `toml` file to specify the capabilities of the backend device. If this
-    is provided, the file will be loaded into a :class:`~.DeviceCapabilities` object assigned to
-    the :attr:`capabilities` attribute."""
-
-    capabilities: DeviceCapabilities | None = None
-    """A :class:`~.DeviceCapabilities` object describing the capabilities of the backend device."""
-
-    def __init_subclass__(cls, **kwargs):
-        if cls.config_filepath is not None:
-            cls.capabilities = DeviceCapabilities.from_toml_file(cls.config_filepath)
-        if cls.preprocess is not Device.preprocess and (
-            cls.setup_execution_config is not Device.setup_execution_config
-            or cls.preprocess_transforms is not Device.preprocess_transforms
-        ):
-            raise ValueError(
-                "A device should implement either `preprocess` or `setup_execution_config` "
-                "and `preprocess_transforms`, but not both."
-            )
-        super().__init_subclass__(**kwargs)
 
     @property
     def name(self) -> str:
@@ -182,7 +137,7 @@ class Device(abc.ABC):
         return type(self).__name__
 
     tracker: Tracker = Tracker()
-    """A :class:`~pennylane.Tracker` that can store information about device executions, shots, batches,
+    """A :class:`~.Tracker` that can store information about device executions, shots, batches,
     intermediate results, or any additional device dependent information.
 
     A plugin developer can store information in the tracker by:
@@ -202,11 +157,6 @@ class Device(abc.ABC):
     def __init__(self, wires=None, shots=None) -> None:
         # each instance should have its own Tracker.
         self.tracker = Tracker()
-        if shots is not None and shots != Shots():
-            warnings.warn(
-                "Setting shots on device is deprecated. Please use the `set_shots` transform on the respective QNode instead.",
-                PennyLaneDeprecationWarning,
-            )
         self._shots = Shots(shots)
 
         if wires is not None:
@@ -227,14 +177,6 @@ class Device(abc.ABC):
         details = f"({', '.join(details)}) " if details else ""
         return f"<{self.name} device {details}at {hex(id(self))}>"
 
-    def __getattr__(self, key):
-        raise AttributeError(
-            f"{type(self).__name__} has no attribute '{key}'."
-            " You may be looking for a property or method present in the legacy device interface."
-            f" Please consult the {type(self).__name__} documentation for an updated list of public"
-            " properties and methods."
-        )
-
     @property
     def shots(self) -> Shots:
         """Default shots for execution workflows containing this device.
@@ -244,14 +186,6 @@ class Device(abc.ABC):
 
         """
         return self._shots
-
-    @shots.setter
-    def shots(self, _):
-        raise AttributeError(
-            "Shots can no longer be set on a device instance. "
-            "You can set shots on a call to a QNode, on individual tapes, or "
-            "create a new device instance instead."
-        )
 
     @property
     def wires(self) -> Wires:
@@ -268,8 +202,8 @@ class Device(abc.ABC):
 
     def preprocess(
         self,
-        execution_config: ExecutionConfig | None = None,
-    ) -> tuple[CompilePipeline, ExecutionConfig]:
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
+    ) -> Tuple[TransformProgram, ExecutionConfig]:
         """Device preprocessing function.
 
         .. warning::
@@ -285,7 +219,7 @@ class Device(abc.ABC):
                 the execution.
 
         Returns:
-            CompilePipeline, ExecutionConfig: A compile pipeline that is called before execution, and a configuration
+            TransformProgram, ExecutionConfig: A transform program that is called before execution, and a configuration
                 with unset specifications filled in.
 
         Raises:
@@ -307,11 +241,8 @@ class Device(abc.ABC):
 
         .. code-block:: python
 
-                from pennylane.core.qscript import QuantumScriptBatch
-                from pennylane.typing import PostprocessingFn
-
-                @qp.transform
-                def my_preprocessing_transform(tape: qp.tape.QuantumScript) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+                @transform
+                def my_preprocessing_transform(tape: qml.tape.QuantumTape) -> (Sequence[qml.tape.QuantumTape], callable):
                     # e.g. valid the measurements, expand the tape for the hardware execution, ...
 
                     def blank_processing_fn(results):
@@ -325,240 +256,56 @@ class Device(abc.ABC):
         .. code-block:: python
 
                 def preprocess(config):
-                    program = CompilePipeline()
+                    program = TransformProgram()
                     program.add_transform(my_preprocessing_transform)
                     return program, config
 
-        .. seealso:: :func:`~.pennylane.transform.core.transform` and :class:`~.pennylane.transform.core.CompilePipeline`
+        .. seealso:: :func:`~.pennylane.transform.core.transform` and :class:`~.pennylane.transform.core.TransformProgram`
+
+        .. details::
+            :title: Post processing function and derivatives
+
+            Derivatives and jacobian products will be bound to the machine learning library before the postprocessing
+            function is called on results. Therefore the machine learning library will be responsible for combining the
+            device provided derivatives and post processing derivatives.
+
+            .. code-block:: python
+
+                from pennylane.interfaces.jax import execute as jax_boundary
+
+                def f(x):
+                    circuit = qml.tape.QuantumScript([qml.Rot(*x, wires=0)], [qml.expval(qml.Z(0))])
+                    config = ExecutionConfig(gradient_method="adjoint")
+                    program, config = dev.preprocess(config)
+                    circuit_batch, postprocessing = program((circuit, ))
+
+                    def execute_fn(tapes):
+                        return dev.execute_and_compute_derivatives(tapes, config)
+
+                    results = jax_boundary(circuit_batch, dev, execute_fn, None, {})
+                    return postprocessing(results)
+
+                x = jax.numpy.array([1.0, 2.0, 3.0])
+                jax.grad(f)(x)
+
+
+            In the above code, the quantum derivatives are registered with jax in the ``jax_boundary`` function.
+            Only then is the classical postprocessing called on the result object.
 
         """
-        if execution_config is None:
-            execution_config = ExecutionConfig()
-        execution_config = self.setup_execution_config(execution_config)
-        compile_pipeline = self.preprocess_transforms(execution_config)
-        return compile_pipeline, execution_config
-
-    def setup_execution_config(
-        self, config: ExecutionConfig | None = None, circuit: QuantumScript | None = None
-    ) -> ExecutionConfig:
-        """Sets up an ``ExecutionConfig`` that configures the execution behaviour.
-
-        The execution config stores information on how the device should perform the execution,
-        as well as how PennyLane should interact with the device. See :class:`ExecutionConfig`
-        for all available options and what they mean.
-
-        An ``ExecutionConfig`` is constructed from arguments passed to the ``QNode``, and this
-        method allows the device to update the config object based on device-specific requirements
-        or preferences. See :ref:`execution_config` for more details.
-
-        Args:
-            config (ExecutionConfig): The initial ExecutionConfig object that describes the
-                parameters needed to configure the execution behaviour.
-            circuit (QuantumScript): The quantum circuit to customize the execution config for.
-
-        Returns:
-            ExecutionConfig: The updated ExecutionConfig object
-
-        """
-
-        if self.__class__.preprocess is not Device.preprocess:
-            if config:
-                return self.preprocess(config)[1]
-            return self.preprocess()[1]
-
-        if config is None:
-            config = ExecutionConfig()
-
-        if self.supports_derivatives(config) and config.gradient_method in ("best", None):
-            return replace(config, gradient_method="device")
-
-        shots_present = bool(circuit is not None and bool(circuit.shots))
-        validate_mcm_method(self.capabilities, config.mcm_config.mcm_method, shots_present)
-        if config.mcm_config.mcm_method is None and self.capabilities is not None:
-            # This is a sensible default strategy for resolving the MCM method based on declared
-            # capabilities of a device, but if a device wishes to do this differently, it should
-            # override the ``setup_execution_config`` method itself.
-            default_mcm_method = _default_mcm_method(self.capabilities, shots_present)
-            new_mcm_config = replace(config.mcm_config, mcm_method=default_mcm_method)
-            config = replace(config, mcm_config=new_mcm_config)
-
-        return config
-
-    def preprocess_transforms(
-        self, execution_config: ExecutionConfig | None = None
-    ) -> CompilePipeline:
-        """Returns the compile pipeline to preprocess a circuit for execution.
-
-        Args:
-            execution_config (ExecutionConfig): The execution configuration object
-
-        Returns:
-            CompilePipeline: A compile pipeline that is called before execution
-
-        The compile pipeline is composed of a list of individual transforms, which may include:
-
-        * Decomposition of operations and measurements to what is supported by the device.
-        * Splitting a circuit with measurements of non-commuting observables or Hamiltonians into multiple executions.
-        * Splitting a circuit with batched parameters into multiple executions.
-        * Validation of wires, measurements, and observables.
-        * Gradient specific preprocessing, such as making sure trainable operators have generators.
-
-        **Example**
-
-        All transforms that are part of the preprocessing compile pipeline need to respect the
-        transform contract defined in :func:`pennylane.transform`.
-
-        .. code-block:: python
-
-            from pennylane.core.qscript import QuantumScriptBatch
-            from pennylane.typing import PostprocessingFn
-
-            @qp.transform
-            def my_preprocessing_transform(tape: qp.tape.QuantumScript) -> tuple[QuantumScriptBatch, PostprocessingFn]:
-                # e.g. valid the measurements, expand the tape for the hardware execution, ...
-
-                def blank_processing_fn(results):
-                    return results[0]
-
-                return [tape], processing_fn
-
-        A compile pipeline can hold an arbitrary number of individual transforms:
-
-        .. code-block:: python
-
-            def preprocess(self, config):
-                program = CompilePipeline()
-                program.add_transform(my_preprocessing_transform)
-                return program
-
-        .. seealso:: :func:`~.pennylane.transform.core.transform` and :class:`~.pennylane.transform.core.CompilePipeline`
-
-        """
-
-        # TODO: this is obviously not pretty but it's a temporary solution to ensure backwards
-        #       compatibility. Basically there are three scenarios:
-        #       1. The device does not override anything, then this method returns the default
-        #          compile pipeline, and preprocess calls this method, all good.
-        #       2. The device overrides preprocess, but not this method, then this method will
-        #          return what is returned from the overridden preprocess method.
-        #       3. The device overrides this method and not preprocess (recommended and what we
-        #          are ultimately aiming for), then preprocess calls the overridden method.
-        if self.__class__.preprocess is not Device.preprocess:
-            if execution_config:
-                return self.preprocess(execution_config)[0]
-            return self.preprocess()[0]
-
-        if not self.capabilities:
-            # The capabilities are required to construct a default compile pipeline.
-            return CompilePipeline()
-
-        if not execution_config:
-            execution_config = ExecutionConfig()
-
-        program = CompilePipeline()
-
-        # First handle mid-circuit measurements because it may add wires. At this point we
-        # should assume that the mcm method is already validated and resolved.
-        if execution_config.mcm_config.mcm_method == "deferred":
-            program.add_transform(
-                defer_measurements,
-                allow_postselect=self.capabilities.supports_operation("Projector"),
-            )
-        elif execution_config.mcm_config.mcm_method == "one-shot":
-            program.add_transform(
-                dynamic_one_shot,
-                postselect_mode=execution_config.mcm_config.postselect_mode,
-            )
-
-        capabilities_analytic = self.capabilities.filter(finite_shots=False)
-        capabilities_shots = self.capabilities.filter(finite_shots=True)
-
-        needs_diagonalization = False
-        base_obs = {"PauliZ": Z, "PauliX": X, "PauliY": Y, "Hadamard": H}
-        if (
-            not all(obs in self.capabilities.observables for obs in base_obs)
-            # This check is to confirm that `split_non_commuting` has been applied, since
-            # `diagonalize_measurements` does not work with non-commuting measurements. If
-            # a device is flexible enough to support non-commuting observables but for some
-            # reason does not support all of `PauliZ`, `PauliX`, `PauliY`, and `Hadamard`,
-            # we consider it enough of an edge case that the device should just implement
-            # its own preprocessing transform.
-            and not self.capabilities.non_commuting_observables
-        ):
-            needs_diagonalization = True
-        else:
-            # If the circuit does not need diagonalization, we decompose the circuit before
-            # potentially applying `split_non_commuting` that produces multiple tapes with
-            # duplicated operations. Otherwise, `decompose` has to be applied last because
-            # `diagonalize_measurements` may add additional gates that are not supported.
-            program.add_transform(
-                decompose,
-                target_gates=capabilities_analytic.gate_set() & capabilities_shots.gate_set(),
-                stopping_condition=capabilities_analytic.supports_operation,
-                stopping_condition_shots=capabilities_shots.supports_operation,
-                name=self.name,
-            )
-
-        if not self.capabilities.overlapping_observables:
-            program.add_transform(split_non_commuting, grouping_strategy="wires")
-        elif not self.capabilities.non_commuting_observables:
-            program.add_transform(split_non_commuting, grouping_strategy="qwc")
-        elif not self.capabilities.supports_observable("Sum"):
-            program.add_transform(split_to_single_terms)
-
-        if needs_diagonalization:
-            obs_names = base_obs.keys() & self.capabilities.observables.keys()
-            obs = {base_obs[obs] for obs in obs_names}
-            program.add_transform(diagonalize_measurements, supported_base_obs=obs)
-            program.add_transform(
-                decompose,
-                target_gates=capabilities_analytic.gate_set() & capabilities_shots.gate_set(),
-                stopping_condition=lambda o: capabilities_analytic.supports_operation(o.name),
-                stopping_condition_shots=lambda o: capabilities_shots.supports_operation(o.name),
-                name=self.name,
-            )
-
-        program.add_transform(broadcast_expand)
-
-        # Handle validations
-        program.add_transform(validate_device_wires, self.wires, name=self.name)
-        program.add_transform(
-            validate_measurements,
-            analytic_measurements=lambda mp: type(mp).__name__
-            in capabilities_analytic.measurement_processes,
-            sample_measurements=lambda mp: type(mp).__name__
-            in capabilities_shots.measurement_processes,
-            name=self.name,
-        )
-        program.add_transform(
-            validate_observables,
-            stopping_condition=observable_stopping_condition_factory(capabilities_analytic),
-            stopping_condition_shots=observable_stopping_condition_factory(capabilities_shots),
-            name=self.name,
-        )
-
-        return program
-
-    @abc.abstractmethod
-    @overload
-    def execute(
-        self, circuits: QuantumScript, execution_config: ExecutionConfig | None = None
-    ) -> Result: ...
-
-    @abc.abstractmethod
-    @overload
-    def execute(
-        self,
-        circuits: QuantumScriptBatch,
-        execution_config: ExecutionConfig | None = None,
-    ) -> ResultBatch: ...
+        if self.supports_derivatives(execution_config) and execution_config.gradient_method in {
+            "best",
+            None,
+        }:
+            return TransformProgram(), replace(execution_config, gradient_method="device")
+        return TransformProgram(), execution_config
 
     @abc.abstractmethod
     def execute(
         self,
-        circuits: QuantumScriptOrBatch,
-        execution_config: ExecutionConfig | None = None,
-    ) -> Result | ResultBatch:
+        circuits: QuantumTape_or_Batch,
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
+    ) -> Result_or_ResultBatch:
         """Execute a circuit or a batch of circuits and turn it into results.
 
         Args:
@@ -576,8 +323,6 @@ class Device(abc.ABC):
 
         .. details::
             :title: Return Shape
-
-            See :ref:`Return Type Specification <ReturnTypeSpec>` for more detailed information.
 
             The result for each :class:`~.QuantumTape` must match the shape specified by :class:`~.QuantumTape.shape`.
 
@@ -605,38 +350,42 @@ class Device(abc.ABC):
             measurement value in a numpy array. ``shape`` currently accepts a device, as historically devices
             stored shot information. In the future, this method will accept an ``ExecutionConfig`` instead.
 
-            >>> tape = qp.tape.QuantumScript(measurements=[qp.expval(qp.Z(0))])
+            >>> tape = qml.tape.QuantumTape(measurements=qml.expval(qml.Z(0))])
+            >>> tape.shape(dev)
+            ()
             >>> dev.execute(tape)
-            np.float64(1.0)
+            array(1.0)
 
             If execute recieves a batch of scripts, then it should return a tuple of results:
 
             >>> dev.execute([tape, tape])
-            (np.float64(1.0), np.float64(1.0))
+            (array(1.0), array(1.0))
             >>> dev.execute([tape])
-            (np.float64(1.0),)
+            (array(1.0),)
 
-            If the script has multiple measurements, then the device should return a tuple of measurements.
+            If the script has multiple measurments, then the device should return a tuple of measurements.
 
-            >>> tape = qp.tape.QuantumTape(measurements=[qp.expval(qp.Z(0)), qp.probs(wires=(0,1))])
+            >>> tape = qml.tape.QuantumTape(measurements=[qml.expval(qml.Z(0)), qml.probs(wires=(0,1))])
+            >>> tape.shape(dev)
+            ((), (4,))
             >>> dev.execute(tape)
-            (np.float64(1.0), array([1., 0., 0., 0.]))
+            (array(1.0), array([1., 0., 0., 0.]))
 
         """
         raise NotImplementedError
 
     def supports_derivatives(
         self,
-        execution_config: ExecutionConfig | None = None,
-        circuit: QuantumScript | None = None,
+        execution_config: Optional[ExecutionConfig] = None,
+        circuit: Optional[QuantumTape] = None,
     ) -> bool:
         """Determine whether or not a device provided derivative is potentially available.
 
-        Default behaviour assumes first order device derivatives for all circuits exist if :meth:`~.compute_derivatives` is overridden.
+        Default behaviour assumes first order device derivatives for all circuits exist if :meth:`~.compute_derivatives` is overriden.
 
         Args:
             execution_config (ExecutionConfig): A description of the hyperparameters for the desired computation.
-            circuit (None, QuantumTape): A specific circuit to check differentiation for.
+            circuit (None, QuantumTape): A specific circuit to check differentation for.
 
         Returns:
             Bool
@@ -646,7 +395,7 @@ class Device(abc.ABC):
         will be called for the derivative instead of :meth:`~.execute` with a batch of circuits.
 
         >>> config = ExecutionConfig(gradient_method="parameter-shift")
-        >>> custom_device.supports_derivatives(config)  # doctest: +SKIP
+        >>> custom_device.supports_derivatives(config)
         True
 
         In this case, :meth:`~.compute_derivatives` or :meth:`~.execute_and_compute_derivatives` will be called instead of :meth:`~.execute` with
@@ -660,37 +409,37 @@ class Device(abc.ABC):
         if the order is ``1`` and the execution occurs with no shots (``shots=None``).
 
         >>> config = ExecutionConfig(derivative_order=1, gradient_method="adjoint")
-        >>> dev.supports_derivatives(config)  # doctest: +SKIP
+        >>> dev.supports_derivatives(config)
         True
-        >>> circuit_analytic = qp.tape.QuantumScript([qp.RX(0.1, wires=0)], [qp.expval(qp.Z(0))], shots=None)
-        >>> dev.supports_derivatives(config, circuit=circuit_analytic)  # doctest: +SKIP
+        >>> circuit_analytic = qml.tape.QuantumScript([qml.RX(0.1, wires=0)], [qml.expval(qml.Z(0))], shots=None)
+        >>> dev.supports_derivatives(config, circuit=circuit_analytic)
         True
-        >>> circuit_finite_shots = qp.tape.QuantumScript([qp.RX(0.1, wires=0)], [qp.expval(qp.Z(0))], shots=10)
-        >>> dev.supports_derivatives(config, circuit = circuit_finite_shots)  # doctest: +SKIP
+        >>> circuit_finite_shots = qml.tape.QuantumScript([qml.RX(0.1, wires=0)], [qml.expval(qml.Z(0))], shots=10)
+        >>> dev.supports_derivatives(config, circuit = circuit_fintite_shots)
         False
 
         >>> config = ExecutionConfig(derivative_order=2, gradient_method="adjoint")
-        >>> dev.supports_derivatives(config)  # doctest: +SKIP
+        >>> dev.supports_derivatives(config)
         False
 
         Adjoint differentiation will only be supported for circuits with expectation value measurements.
         If a circuit is provided and it cannot be converted to a form supported by differentiation method by
         :meth:`~.Device.preprocess`, then ``supports_derivatives`` should return False.
 
-        >>> config = ExecutionConfig(derivative_order=1, gradient_method="adjoint")
-        >>> circuit = qp.tape.QuantumScript([qp.RX(2.0, wires=0)], [qp.probs(wires=(0,1))])
-        >>> dev.supports_derivatives(config, circuit=circuit)  # doctest: +SKIP
+        >>> config = ExecutionConfig(derivative_order=1, shots=None, gradient_method="adjoint")
+        >>> circuit = qml.tape.QuantumScript([qml.RX(2.0, wires=0)], [qml.probs(wires=(0,1))])
+        >>> dev.supports_derivatives(config, circuit=circuit)
         False
 
         If the circuit is not natively supported by the differentiation method but can be converted into a form
         that is supported, it should still return ``True``.  For example, :class:`~.Rot` gates are not natively
-        supported by adjoint differentiation, as they do not have a generator, but they can be compiled into
+        supported by adjoint differentation, as they do not have a generator, but they can be compiled into
         operations supported by adjoint differentiation. Therefore this method may reproduce compilation
         and validation steps performed by :meth:`~.Device.preprocess`.
 
-        >>> config = ExecutionConfig(derivative_order=1, gradient_method="adjoint")
-        >>> circuit = qp.tape.QuantumScript([qp.Rot(1.2, 2.3, 3.4, wires=0)], [qp.expval(qp.Z(0))])
-        >>> dev.supports_derivatives(config, circuit=circuit)  # doctest: +SKIP
+        >>> config = ExecutionConfig(derivative_order=1, shots=None, gradient_method="adjoint")
+        >>> circuit = qml.tape.QuantumScript([qml.Rot(1.2, 2.3, 3.4, wires=0)], [qml.expval(qml.Z(0))])
+        >>> dev.supports_derivatives(config, circuit=circuit)
         True
 
         **Backpropagation:**
@@ -699,9 +448,9 @@ class Device(abc.ABC):
         is only supported if the device is transparent to the machine learning framework from start to finish.
 
         >>> config = ExecutionConfig(gradient_method="backprop")
-        >>> python_device.supports_derivatives(config)  # doctest: +SKIP
+        >>> python_device.supports_derivatives(config)
         True
-        >>> cpp_device.supports_derivatives(config)  # doctest: +SKIP
+        >>> cpp_device.supports_derivatives(config)
         False
 
         """
@@ -718,8 +467,8 @@ class Device(abc.ABC):
 
     def compute_derivatives(
         self,
-        circuits: QuantumScriptOrBatch,
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         """Calculate the jacobian of either a single or a batch of circuits on the device.
 
@@ -748,8 +497,8 @@ class Device(abc.ABC):
 
     def execute_and_compute_derivatives(
         self,
-        circuits: QuantumScriptOrBatch,
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         """Compute the results and jacobians of circuits at the same time.
 
@@ -768,17 +517,15 @@ class Device(abc.ABC):
         diff gradients, calculating the result and gradient at the same can save computational work.
 
         """
-        if execution_config is None:
-            execution_config = ExecutionConfig()
         return self.execute(circuits, execution_config), self.compute_derivatives(
             circuits, execution_config
         )
 
     def compute_jvp(
         self,
-        circuits: QuantumScriptOrBatch,
-        tangents: tuple[Number, ...],
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        tangents: Tuple[Number],
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         r"""The jacobian vector product used in forward mode calculation of derivatives.
 
@@ -815,9 +562,9 @@ class Device(abc.ABC):
 
     def execute_and_compute_jvp(
         self,
-        circuits: QuantumScriptOrBatch,
-        tangents: tuple[Number, ...],
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        tangents: Tuple[Number],
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         """Execute a batch of circuits and compute their jacobian vector products.
 
@@ -831,22 +578,20 @@ class Device(abc.ABC):
 
         .. seealso:: :meth:`~pennylane.devices.Device.execute` and :meth:`~.Device.compute_jvp`
         """
-        if execution_config is None:
-            execution_config = ExecutionConfig()
         return self.execute(circuits, execution_config), self.compute_jvp(
             circuits, tangents, execution_config
         )
 
     def supports_jvp(
         self,
-        execution_config: ExecutionConfig | None = None,
-        circuit: QuantumScript | None = None,
+        execution_config: Optional[ExecutionConfig] = None,
+        circuit: Optional[QuantumTape] = None,
     ) -> bool:
         """Whether or not a given device defines a custom jacobian vector product.
 
         Args:
             execution_config (ExecutionConfig): A description of the hyperparameters for the desired computation.
-            circuit (None, QuantumTape): A specific circuit to check differentiation for.
+            circuit (None, QuantumTape): A specific circuit to check differentation for.
 
         Default behaviour assumes this to be ``True`` if :meth:`~.compute_jvp` is overridden.
 
@@ -855,9 +600,9 @@ class Device(abc.ABC):
 
     def compute_vjp(
         self,
-        circuits: QuantumScriptOrBatch,
-        cotangents: tuple[Number, ...],
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        cotangents: Tuple[Number],
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         r"""The vector jacobian product used in reverse-mode differentiation.
 
@@ -895,9 +640,9 @@ class Device(abc.ABC):
 
     def execute_and_compute_vjp(
         self,
-        circuits: QuantumScriptOrBatch,
-        cotangents: tuple[Number, ...],
-        execution_config: ExecutionConfig | None = None,
+        circuits: QuantumTape_or_Batch,
+        cotangents: Tuple[Number],
+        execution_config: ExecutionConfig = DefaultExecutionConfig,
     ):
         r"""Calculate both the results and the vector jacobian product used in reverse-mode differentiation.
 
@@ -913,119 +658,21 @@ class Device(abc.ABC):
 
         .. seealso:: :meth:`~pennylane.devices.Device.execute` and :meth:`~.Device.compute_vjp`
         """
-        if execution_config is None:
-            execution_config = ExecutionConfig()
         return self.execute(circuits, execution_config), self.compute_vjp(
             circuits, cotangents, execution_config
         )
 
     def supports_vjp(
         self,
-        execution_config: ExecutionConfig | None = None,
-        circuit: QuantumScript | None = None,
+        execution_config: Optional[ExecutionConfig] = None,
+        circuit: Optional[QuantumTape] = None,
     ) -> bool:
         """Whether or not a given device defines a custom vector jacobian product.
 
         Args:
             execution_config (ExecutionConfig): A description of the hyperparameters for the desired computation.
-            circuit (None, QuantumTape): A specific circuit to check differentiation for.
+            circuit (None, QuantumTape): A specific circuit to check differentation for.
 
         Default behaviour assumes this to be ``True`` if :meth:`~.compute_vjp` is overridden.
         """
         return type(self).compute_vjp != Device.compute_vjp
-
-
-def _default_mcm_method(capabilities: DeviceCapabilities, shots_present: bool) -> str:
-    """Simple strategy to find the best match for the default mcm method."""
-
-    supports_one_shot = "one-shot" in capabilities.supported_mcm_methods
-    has_device_support = "device" in capabilities.supported_mcm_methods
-
-    if has_device_support:
-        return "device"
-
-    if supports_one_shot and shots_present:
-        return "one-shot"
-
-    return "deferred"
-
-
-def _preprocess_device(original_device, transform, targs, tkwargs):
-    class TransformedDevice(type(original_device)):
-        """A transformed device with updated preprocess method."""
-
-        def __init__(self, original_device, transform, targs, tkwargs):
-            for key, value in original_device.__dict__.items():
-                self.__setattr__(key, value)
-            self.transform = transform
-            self.targs = targs
-            self.tkwargs = tkwargs
-            self._original_device = original_device
-
-        def __repr__(self):
-            return f"Transformed Device({repr(original_device)} with additional preprocess transform {self.transform})"
-
-        def preprocess(
-            self,
-            execution_config: ExecutionConfig | None = None,
-        ):
-            """This function updates the original device compile pipeline to be applied."""
-            program, config = self.original_device.preprocess(execution_config)
-            program = self.transform(program, *self.targs, **self.tkwargs)
-            return program, config
-
-        @property
-        def original_device(self):
-            """Return the original device."""
-            return self._original_device
-
-    return TransformedDevice(original_device, transform, targs, tkwargs)
-
-
-def _preprocess_transforms_device(original_device, transform, targs, tkwargs):
-    class TransformedDevice(type(original_device)):
-        """A transformed device with updated preprocess_transforms method."""
-
-        def __init__(self, original_device, transform, targs, tkwargs):
-            for key, value in original_device.__dict__.items():
-                self.__setattr__(key, value)
-            self.transform = transform
-            self.targs = targs
-            self.tkwargs = tkwargs
-            self._original_device = original_device
-
-        def __repr__(self):
-            return f"Transformed Device({repr(original_device)} with additional preprocess transform {self.transform})"
-
-        def preprocess_transforms(
-            self,
-            execution_config: ExecutionConfig | None = None,
-        ):
-            """This function updates the original device compile pipeline to be applied."""
-            program = self.original_device.preprocess_transforms(execution_config)
-            program = self.transform(program, *self.targs, **self.tkwargs)
-            return program
-
-        @property
-        def original_device(self):
-            """Return the original device."""
-            return self._original_device
-
-    return TransformedDevice(original_device, transform, targs, tkwargs)
-
-
-@Transform.generic_register
-def apply_to_device(obj: Device, transform, *targs, **tkwargs):
-    """Apply the transform on a device"""
-    if transform.expand_transform:
-        raise TransformError("Device transform does not support expand transforms.")
-    if transform.is_informative:
-        raise TransformError("Device transform does not support informative transforms.")
-    if transform.is_final_transform:
-        raise TransformError("Device transform does not support final transforms.")
-    targs, tkwargs = transform.setup_inputs(*targs, **tkwargs)
-
-    if type(obj).preprocess != Device.preprocess:
-        return _preprocess_device(obj, transform, targs, tkwargs)
-
-    return _preprocess_transforms_device(obj, transform, targs, tkwargs)

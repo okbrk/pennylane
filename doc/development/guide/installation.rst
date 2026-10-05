@@ -4,50 +4,44 @@ Installation and dependencies
 Dependencies
 ------------
 
-PennyLane requires `Python <http://python.org/>`_ >= 3.12 to be installed.
+PennyLane requires the following libraries be installed:
 
-After installing Python, we recommend using any virtual environment manager to install and manage
-dependencies. See the `Python documentation <https://docs.python.org/3/tutorial/venv.html>`_
-for more an example.
+* `Python <http://python.org/>`_ >= 3.9
 
 The following Python packages are hard dependencies, and will automatically
 be installed alongside PennyLane:
 
-* `numpy <http://numpy.org/>`_
-* `scipy <http://scipy.org/>`_
-* `NetworkX <https://networkx.github.io/>`_
-* `rustworkx <https://github.com/Qiskit/rustworkx>`_ >= 0.14.0
+* `numpy <http://numpy.org/>`_ >= 1.13.3
+* `scipy <http://scipy.org/>`_ >= 1.0.0
+* `NetworkX <https://networkx.github.io/>`_ >= 1.0.0
 * `autograd <https://github.com/HIPS/autograd>`_
+* `toml <https://github.com/uiri/toml>`_
 * `appdirs <https://github.com/ActiveState/appdirs>`_
-* `autoray <https://github.com/jcmgray/autoray>`__ == 0.8.2
-* `cachetools <https://github.com/tkem/cachetools>`_
-* `pennylane-lightning <https://github.com/PennyLaneAI/pennylane-lightning>`_ >= 0.42
-* `requests <https://github.com/psf/requests>`_
-* `typing_extensions <https://github.com/python/typing_extensions>`_
-* `packaging <https://github.com/pypa/packaging>`_
-* `diastatic-malt <https://github.com/PennyLaneAI/diastatic-malt>`_
+* `semantic-version <https://github.com/rbarrois/python-semanticversion>`_ >= 2.7
+* `autoray <https://github.com/jcmgray/autoray>`__ >= 0.6.1
 
 The following Python packages are optional:
 
-* `openfermionpyscf <https://github.com/quantumlib/OpenFermion-PySCF>`_, for the non-differentiable backend of the ``qp.qchem`` module
-* ``matplotlib``: for ``qp.draw_mpl`` and associated code
-* ``quimb``: for the ``default.tensor`` device
-* ``pyzx>=0.10``: for ``qp.transforms.to_zx``, ``qp.transforms.from_zx``, and ZX optimization transforms
-* ``stim``: for ``default.clifford``
-* ``openqasm3`` and ``antlr3_python3_runtime``: for ``qp.from_qasm3``
-* ``cvxopt``for ``qp.kernels.closest_psd_matrix``
+* `openfermionpyscf <https://github.com/quantumlib/OpenFermion-PySCF>`_, for the non-differentiable backend of the ``qml.qchem`` module
+
+If you currently do not have Python 3 installed, we recommend
+`Anaconda for Python 3 <https://www.anaconda.com/download/>`_, a distributed version
+of Python packaged for scientific computation.
 
 .. _install_interfaces:
 
 Interface dependencies
 ~~~~~~~~~~~~~~~~~~~~~~
 
-For development of the PyTorch and JAX interfaces, there are additional
+For development of the TensorFlow, PyTorch, and JAX interfaces, there are additional
 requirements which must be installed manually:
 
-* **JAX interface**: ``jax`` and ``jaxlib`` ~= 0.6.0
+* **JAX interface**: ``jax > 0.2.0`` and ``jaxlib``
 
-* **PyTorch interface**: ``pytorch``
+* **PyTorch interface**: ``pytorch >= 1.1``
+
+* **TensorFlow interface**: ``tensorflow >= 2.3``
+
 
 Installation
 ------------
@@ -59,7 +53,7 @@ using development mode:
 
     git clone https://github.com/PennyLaneAI/pennylane
     cd pennylane
-    python -m pip install -e .
+    pip install -e .
 
 The ``-e`` flag ensures that edits to the source code will be reflected when
 importing PennyLane in Python.
@@ -72,10 +66,54 @@ importing PennyLane in Python.
     requires ``pip install -e .`` to be re-run in the plugin repository
     for the changes to take effect.
 
-Apart from the core packages needed to run PennyLane, some extra packages need
-to be installed for several development processes, such as linting, testing, and
-pre-commit quality checks. Those can be installed easily via ``pip``:
+Docker
+------
 
-.. code-block:: bash
+Build a PennyLane Docker image
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    python -m pip install --group dev
+**Docker** support exists for building using **CPU** and **GPU** (Nvidia CUDA 11.1+) images.
+
+.. note::
+
+    Docker builds using "make" will work on Linux and MacOS only. For MS Windows
+    you can use `WSL <https://docs.microsoft.com/en-us/windows/wsl/install-win10>`__.
+    They are currently not supported on the Apple M1 chip (ARM64).
+
+
+Build a basic PennyLane image
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- To build a basic PennyLane image without any additional interfaces (Torch,
+  TensorFlow, or Jax) or **plugins** (qiskit, amazon-braket, cirq, forest), run
+  the following:
+
+  .. code-block:: bash
+
+    make -f docker/Makefile build-base
+
+Build a PennyLane image with a specific interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- To build a PennyLane image using a specific **interface** (Torch, TensorFlow or Jax), run the following:
+
+  .. code-block:: bash
+
+    make -f docker/Makefile build-interface interface-name=tensorflow
+
+- To build a PennyLane image using a specific interface (Torch, TensorFlow or
+  Jax) with GPU support, run the following:
+
+  .. code-block:: bash
+
+    make -f docker/Makefile build-interface-gpu interface-name=tensorflow
+
+Build a PennyLane image with a plugin
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- To build a PennyLane image using a specific plugin (qiskit, amazon-braket,
+  cirq, forest, etc), run the following:
+
+  .. code-block:: bash
+
+    make -f docker/Makefile build-plugin plugin-name=qiskit

@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Unit tests for the mutual_info module"""
-
 import copy
 
 import numpy as np
 import pytest
 
-import pennylane as qp
-from pennylane.exceptions import DeviceError, QuantumFunctionError
+import pennylane as qml
+from pennylane.measurements import MutualInfo, Shots
 from pennylane.measurements.mutual_info import MutualInfoMP
 from pennylane.wires import Wires
 
@@ -30,128 +29,82 @@ class TestMutualInfoUnitTests:
     def test_queue(self):
         """Test that the right measurement class is queued."""
 
-        with qp.queuing.AnnotatedQueue() as q:
-            m = qp.mutual_info(wires0=[0], wires1=[1])
+        with qml.queuing.AnnotatedQueue() as q:
+            m = qml.mutual_info(wires0=[0], wires1=[1])
 
         assert q.queue[0] is m
         assert isinstance(q.queue[0], MutualInfoMP)
 
-    @pytest.mark.parametrize("shots, shape", [(None, ()), (10, ())])
+    @pytest.mark.parametrize("shots, shape", [(None, ()), (10, ()), ([1, 10], ((), ()))])
     def test_shape(self, shots, shape):
         """Test that the shape is correct."""
-        res = qp.mutual_info(wires0=[0], wires1=[1])
-        assert res.shape(shots, 3) == shape
+        dev = qml.device("default.qubit", wires=3, shots=shots)
+        res = qml.mutual_info(wires0=[0], wires1=[1])
+        assert res.shape(dev, Shots(shots)) == shape
 
     def test_properties(self):
         """Test that the properties are correct."""
-        meas = qp.mutual_info(wires0=[0], wires1=[1])
+        meas = qml.mutual_info(wires0=[0], wires1=[1])
         assert meas.numeric_type == float
+        assert meas.return_type == MutualInfo
 
     def test_copy(self):
         """Test that the ``__copy__`` method also copies the ``log_base`` information."""
-        meas = qp.mutual_info(wires0=[0], wires1=[1], log_base=2)
+        meas = qml.mutual_info(wires0=[0], wires1=[1], log_base=2)
         meas_copy = copy.copy(meas)
         assert meas_copy.log_base == 2
         assert meas_copy.wires == Wires([0, 1])
 
     def test_repr(self):
         """Test that the representation includes information about both wires and the log_base"""
-        m1 = qp.mutual_info(wires0=[0], wires1=[1])
+        m1 = qml.mutual_info(wires0=[0], wires1=[1])
         assert repr(m1) == "MutualInfo(wires0=[0], wires1=[1], log_base=None)"
 
     def test_hash(self):
-        """Test the hash property includes the log_base property and the separation of the wires into two subsystems."""
+        """Test the hash property includes the log_base property and the separation of the wires into two subsytems."""
         m1 = MutualInfoMP(wires=[Wires(0), Wires(1)], log_base=2)
         m2 = MutualInfoMP(wires=[Wires(0), Wires(1)], log_base=10)
-        assert hash(m1) != hash(m2)
+        assert m1.hash != m2.hash
 
         m3 = MutualInfoMP(wires=[Wires((0, 1)), Wires(2)])
-        m4 = MutualInfoMP(wires=[Wires(0), Wires((1, 2))])
-        assert hash(m3) != hash(m4)
+        m4 = MutualInfoMP(wires=[Wires((0)), Wires((1, 2))])
+        assert m3.hash != m4.hash
 
     def test_map_wires(self):
         """Test that map_wires works as expected."""
         mapped1 = MutualInfoMP(wires=[Wires([0]), Wires([1])]).map_wires({0: 1, 1: 0})
         assert mapped1.raw_wires == [Wires([1]), Wires([0])]
-        qp.assert_equal(mapped1, MutualInfoMP(wires=[Wires([1]), Wires([0])]))
+        assert qml.equal(mapped1, MutualInfoMP(wires=[Wires([1]), Wires([0])]))
 
         mapped2 = MutualInfoMP(wires=[Wires(["a", "b"]), Wires(["c"])]).map_wires(
             {"a": 0, "b": 1, "c": 2}
         )
         assert mapped2.raw_wires == [Wires([0, 1]), Wires([2])]
-        qp.assert_equal(mapped2, MutualInfoMP(wires=[Wires([0, 1]), Wires([2])]))
-
-    def test_mutual_info_overlapping_wires(self):
-        """Test that an error is raised when subsystems overlap."""
-        dm = qp.math.array([[0.5, 0, 0, 0.5], [0, 0, 0, 0], [0, 0, 0, 0], [0.5, 0, 0, 0.5]])
-        wires = qp.wires.Wires(range(2))
-
-        with pytest.raises(
-            QuantumFunctionError,
-            match="Subsystems for computing mutual information must not overlap.",
-        ):
-            qp.mutual_info(wires0=[0], wires1=[0, 1]).process_density_matrix(dm, wires)
-
-    @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["numpy", "jax", "torch", "autograd"])
-    @pytest.mark.parametrize(
-        "wires0, wires1, log_base, expected_mutual_info",
-        [
-            ([0], [1], None, 1.3862943611198906),  # ln(4), natural log
-            ([0], [1], 2, 2.0),  # log2(4)
-        ],
-    )
-    def test_process_density_matrix_mutual_info(
-        self, interface, wires0, wires1, log_base, expected_mutual_info
-    ):  # pylint: disable=too-many-arguments
-        """Test mutual information calculation for non-overlapping subsystems."""
-        # Define a pure, entangled two-qubit state (|00> + |11>) / sqrt(2)
-        dm = qp.math.array(
-            [[0.5, 0, 0, 0.5], [0, 0, 0, 0], [0, 0, 0, 0], [0.5, 0, 0, 0.5]],
-            like=interface,
-        )
-
-        wires = qp.wires.Wires(range(2))
-
-        mutual_info = qp.mutual_info(
-            wires0=wires0, wires1=wires1, log_base=log_base
-        ).process_density_matrix(dm, wires)
-
-        # Set tolerance based on interface
-        atol = 1.0e-7 if interface == "torch" else 1.0e-8
-
-        assert qp.math.allclose(
-            mutual_info, expected_mutual_info, atol=atol
-        ), f"Wires0: {wires0}, Wires1: {wires1}, Log base: {log_base}, Mutual Info doesn't match expected value. Got {mutual_info}, expected {expected_mutual_info}"
-
-        # Test if the result is real
-        assert qp.math.allclose(
-            qp.math.imag(mutual_info), 0, atol=atol
-        ), f"Mutual Info should be real, but got imaginary part: {qp.math.imag(mutual_info)}"
+        assert qml.equal(mapped2, MutualInfoMP(wires=[Wires([0, 1]), Wires([2])]))
 
 
 class TestIntegration:
     """Tests for the mutual information functions"""
 
     @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["autograd", "jax", "torch"])
+    @pytest.mark.parametrize("interface", ["autograd", "jax", "tf", "torch"])
     @pytest.mark.parametrize(
         "state, expected",
         [
             ([1.0, 0.0, 0.0, 0.0], 0),
-            ([qp.math.sqrt(2) / 2, 0.0, qp.math.sqrt(2) / 2, 0.0], 0),
-            ([qp.math.sqrt(2) / 2, 0.0, 0.0, qp.math.sqrt(2) / 2], 2 * qp.math.log(2)),
-            (qp.math.ones(4) * 0.5, 0.0),
+            ([qml.math.sqrt(2) / 2, 0.0, qml.math.sqrt(2) / 2, 0.0], 0),
+            ([qml.math.sqrt(2) / 2, 0.0, 0.0, qml.math.sqrt(2) / 2], 2 * qml.math.log(2)),
+            (qml.math.ones(4) * 0.5, 0.0),
         ],
     )
     def test_mutual_info_output(self, interface, state, expected):
-        """Test the output of qp.mutual_info"""
-        dev = qp.device("default.qubit", wires=4)
+        """Test the output of qml.mutual_info"""
+        dev = qml.device("default.qubit", wires=4)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit():
-            qp.StatePrep(state, wires=[0, 1])
-            return qp.mutual_info(wires0=[0, 2], wires1=[1, 3])
+            qml.StatePrep(state, wires=[0, 1])
+            return qml.mutual_info(wires0=[0, 2], wires1=[1, 3])
 
         res = circuit()
         assert np.allclose(res, expected, atol=1e-6)
@@ -159,38 +112,39 @@ class TestIntegration:
     @pytest.mark.parametrize("shots", [1000, [1, 10, 10, 1000]])
     def test_finite_shots_error(self, shots):
         """Test an error is raised when using shot vectors with mutual_info."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2, shots=shots)
 
-        @qp.set_shots(shots)
-        @qp.qnode(device=dev)
+        @qml.qnode(device=dev)
         def circuit(x):
-            qp.Hadamard(wires=[0])
-            qp.CRX(x, wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.Hadamard(wires=[0])
+            qml.CRX(x, wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
-        with pytest.raises(DeviceError, match="not accepted with finite shots on default.qubit"):
+        with pytest.raises(
+            qml.DeviceError, match="not accepted with finite shots on default.qubit"
+        ):
             circuit(0.5)
 
     diff_methods = ["backprop", "finite-diff"]
 
     @pytest.mark.all_interfaces
     @pytest.mark.parametrize("device", ["default.qubit", "default.mixed", "lightning.qubit"])
-    @pytest.mark.parametrize("interface", ["autograd", "jax", "torch"])
+    @pytest.mark.parametrize("interface", ["autograd", "jax", "tensorflow", "torch"])
     @pytest.mark.parametrize("params", np.linspace(0, 2 * np.pi, 8))
     def test_qnode_state(self, device, interface, params):
-        """Test that the mutual information works for QNodes by comparing
+        """Test that the mutual information transform works for QNodes by comparing
         against analytic values"""
-        dev = qp.device(device, wires=2)
+        dev = qml.device(device, wires=2)
 
-        params = qp.math.asarray(params, like=interface)
+        params = qml.math.asarray(params, like=interface)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit(params):
-            qp.RY(params, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(params, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.state()
 
-        actual = circuit(params)
+        actual = qml.qinfo.mutual_info(circuit, wires0=[0], wires1=[1])(params)
 
         # compare transform results with analytic values
         expected = -2 * np.cos(params / 2) ** 2 * np.log(
@@ -201,57 +155,109 @@ class TestIntegration:
 
     @pytest.mark.all_interfaces
     @pytest.mark.parametrize("device", ["default.qubit", "default.mixed", "lightning.qubit"])
-    @pytest.mark.parametrize("interface", ["autograd", "jax", "torch"])
-    @pytest.mark.parametrize(
-        "params", list(zip(np.linspace(0, np.pi, 8), np.linspace(0, 2 * np.pi, 8)))
-    )
+    @pytest.mark.parametrize("interface", ["autograd", "jax", "tensorflow", "torch"])
+    @pytest.mark.parametrize("params", zip(np.linspace(0, np.pi, 8), np.linspace(0, 2 * np.pi, 8)))
     def test_qnode_mutual_info(self, device, interface, params):
         """Test that the measurement process for mutual information works for QNodes
         by comparing against the mutual information transform"""
-        dev = qp.device(device, wires=2)
+        dev = qml.device(device, wires=2)
 
-        params = qp.math.asarray(np.array(params), like=interface)
+        params = qml.math.asarray(np.array(params), like=interface)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit_mutual_info(params):
-            qp.RY(params[0], wires=0)
-            qp.RY(params[1], wires=1)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(params[0], wires=0)
+            qml.RY(params[1], wires=1)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit_state(params):
-            qp.RY(params[0], wires=0)
-            qp.RY(params[1], wires=1)
-            qp.CNOT(wires=[0, 1])
-            return qp.density_matrix(wires=[0, 1])
+            qml.RY(params[0], wires=0)
+            qml.RY(params[1], wires=1)
+            qml.CNOT(wires=[0, 1])
+            return qml.state()
 
         actual = circuit_mutual_info(params)
 
         # compare measurement results with transform results
-        dm = circuit_state(params)
-        expected = qp.math.mutual_info(dm, indices0=[0], indices1=[1])
+        expected = qml.qinfo.mutual_info(circuit_state, wires0=[0], wires1=[1])(params)
 
         assert np.allclose(actual, expected)
+
+    @pytest.mark.parametrize("device", ["default.qubit", "default.mixed", "lightning.qubit"])
+    def test_mutual_info_wire_labels(self, device):
+        """Test that mutual_info is correct with custom wire labels"""
+        param = np.array([0.678, 1.234])
+        wires = ["a", 8]
+        dev = qml.device(device, wires=wires)
+
+        @qml.qnode(dev)
+        def circuit(param):
+            qml.RY(param, wires=wires[0])
+            qml.CNOT(wires=wires)
+            return qml.state()
+
+        actual = qml.qinfo.mutual_info(circuit, wires0=[wires[0]], wires1=[wires[1]])(param)
+
+        # compare transform results with analytic values
+        expected = -2 * np.cos(param / 2) ** 2 * np.log(np.cos(param / 2) ** 2) - 2 * np.sin(
+            param / 2
+        ) ** 2 * np.log(np.sin(param / 2) ** 2)
+
+        assert np.allclose(actual, expected)
+
+    def test_mutual_info_cannot_specify_device(self):
+        """Test that an error is raised if a device or device wires are given
+        to the mutual_info transform manually."""
+        dev = qml.device("default.qubit", wires=2)
+
+        @qml.qnode(dev)
+        def circuit(params):
+            qml.RY(params, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.state()
+
+        with pytest.raises(ValueError, match="Cannot provide a 'device' value"):
+            _ = qml.qinfo.mutual_info(circuit, wires0=[0], wires1=[1], device=dev)
+
+        with pytest.raises(ValueError, match="Cannot provide a 'device_wires' value"):
+            _ = qml.qinfo.mutual_info(circuit, wires0=[0], wires1=[1], device_wires=dev.wires)
+
+    def test_mutual_info_no_state_error(self):
+        """Test that the correct error is raised if the return type is not State."""
+        dev = qml.device("default.qubit", wires=2)
+
+        @qml.qnode(dev)
+        def circuit(params):
+            qml.RY(params, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.probs()
+
+        transformed_circuit = qml.qinfo.mutual_info(circuit, wires0=[0], wires1=[1])
+
+        with pytest.raises(ValueError, match="The qfunc return type needs to be a state"):
+            _ = transformed_circuit(0.1)
 
     @pytest.mark.jax
     @pytest.mark.parametrize("params", np.linspace(0, 2 * np.pi, 8))
     def test_qnode_state_jax_jit(self, params):
         """Test that the mutual information transform works for QNodes by comparing
         against analytic values, for the JAX-jit interface"""
+        import jax
         import jax.numpy as jnp
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
         params = jnp.array(params)
 
-        @qp.qnode(dev, interface="jax-jit")
+        @qml.qnode(dev, interface="jax-jit")
         def circuit(params):
-            qp.RY(params, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(params, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.state()
 
-        actual = circuit(params)
+        actual = jax.jit(qml.qinfo.mutual_info(circuit, wires0=[0], wires1=[1]))(params)
 
         # compare transform results with analytic values
         expected = -2 * jnp.cos(params / 2) ** 2 * jnp.log(
@@ -261,9 +267,7 @@ class TestIntegration:
         assert np.allclose(actual, expected)
 
     @pytest.mark.jax
-    @pytest.mark.parametrize(
-        "params", list(zip(np.linspace(0, np.pi, 8), np.linspace(0, 2 * np.pi, 8)))
-    )
+    @pytest.mark.parametrize("params", zip(np.linspace(0, np.pi, 8), np.linspace(0, 2 * np.pi, 8)))
     @pytest.mark.parametrize("interface", ["jax-jit"])
     def test_qnode_mutual_info_jax_jit(self, params, interface):
         """Test that the measurement process for mutual information works for QNodes
@@ -271,29 +275,28 @@ class TestIntegration:
         import jax
         import jax.numpy as jnp
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
         params = jnp.array(params)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit_mutual_info(params):
-            qp.RY(params[0], wires=0)
-            qp.RY(params[1], wires=1)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(params[0], wires=0)
+            qml.RY(params[1], wires=1)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
-        @qp.qnode(dev, interface="jax-jit")
+        @qml.qnode(dev, interface="jax-jit")
         def circuit_state(params):
-            qp.RY(params[0], wires=0)
-            qp.RY(params[1], wires=1)
-            qp.CNOT(wires=[0, 1])
-            return qp.density_matrix(wires=[0, 1])
+            qml.RY(params[0], wires=0)
+            qml.RY(params[1], wires=1)
+            qml.CNOT(wires=[0, 1])
+            return qml.state()
 
         actual = jax.jit(circuit_mutual_info)(params)
 
         # compare measurement results with transform results
-        dm = circuit_state(params)
-        expected = qp.math.mutual_info(dm, indices0=[0], indices1=[1])
+        expected = jax.jit(qml.qinfo.mutual_info(circuit_state, wires0=[0], wires1=[1]))(params)
 
         assert np.allclose(actual, expected)
 
@@ -304,13 +307,13 @@ class TestIntegration:
     def test_qnode_grad(self, param, diff_method, interface):
         """Test that the gradient of mutual information works for QNodes
         with the autograd interface"""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
-        @qp.qnode(dev, interface=interface, diff_method=diff_method)
+        @qml.qnode(dev, interface=interface, diff_method=diff_method)
         def circuit(param):
-            qp.RY(param, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(param, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
         if param == 0:
             # we don't allow gradients to flow through the discontinuity at 0
@@ -323,7 +326,7 @@ class TestIntegration:
         # higher tolerance for finite-diff method
         tol = 1e-8 if diff_method == "backprop" else 1e-5
 
-        actual = qp.grad(circuit)(param)
+        actual = qml.grad(circuit)(param)
         assert np.allclose(actual, expected, atol=tol)
 
     @pytest.mark.jax
@@ -336,15 +339,15 @@ class TestIntegration:
         import jax
         import jax.numpy as jnp
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
         param = jnp.array(param)
 
-        @qp.qnode(dev, interface=interface, diff_method=diff_method)
+        @qml.qnode(dev, interface=interface, diff_method=diff_method)
         def circuit(param):
-            qp.RY(param, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(param, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
         if param == 0:
             # we don't allow gradients to flow through the discontinuity at 0
@@ -370,15 +373,15 @@ class TestIntegration:
         import jax
         import jax.numpy as jnp
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
         param = jnp.array(param)
 
-        @qp.qnode(dev, interface=interface, diff_method=diff_method)
+        @qml.qnode(dev, interface=interface, diff_method=diff_method)
         def circuit(param):
-            qp.RY(param, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(param, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
         if param == 0:
             # we don't allow gradients to flow through the discontinuity at 0
@@ -394,6 +397,42 @@ class TestIntegration:
         actual = jax.jit(jax.grad(circuit))(param)
         assert np.allclose(actual, expected, atol=tol)
 
+    @pytest.mark.tf
+    @pytest.mark.parametrize("param", np.linspace(0, 2 * np.pi, 16))
+    @pytest.mark.parametrize("diff_method", diff_methods)
+    @pytest.mark.parametrize("interface", ["tf"])
+    def test_qnode_grad_tf(self, param, diff_method, interface):
+        """Test that the gradient of mutual information works for QNodes
+        with the tensorflow interface"""
+        import tensorflow as tf
+
+        dev = qml.device("default.qubit", wires=2)
+
+        param = tf.Variable(param)
+
+        @qml.qnode(dev, interface=interface, diff_method=diff_method)
+        def circuit(param):
+            qml.RY(param, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
+
+        if param == 0:
+            # we don't allow gradients to flow through the discontinuity at 0
+            expected = 0
+        else:
+            expected = np.sin(param) * (
+                np.log(np.cos(param / 2) ** 2) - np.log(np.sin(param / 2) ** 2)
+            )
+
+        with tf.GradientTape() as tape:
+            out = circuit(param)
+
+        # higher tolerance for finite-diff method
+        tol = 1e-8 if diff_method == "backprop" else 1e-5
+
+        actual = tape.gradient(out, param)
+        assert np.allclose(actual, expected, atol=tol)
+
     @pytest.mark.torch
     @pytest.mark.parametrize("param", np.linspace(0, 2 * np.pi, 16))
     @pytest.mark.parametrize("diff_method", diff_methods)
@@ -403,13 +442,13 @@ class TestIntegration:
         with the torch interface"""
         import torch
 
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
-        @qp.qnode(dev, interface=interface, diff_method=diff_method)
+        @qml.qnode(dev, interface=interface, diff_method=diff_method)
         def circuit(param):
-            qp.RY(param, wires=0)
-            qp.CNOT(wires=[0, 1])
-            return qp.mutual_info(wires0=[0], wires1=[1])
+            qml.RY(param, wires=0)
+            qml.CNOT(wires=[0, 1])
+            return qml.mutual_info(wires0=[0], wires1=[1])
 
         if param == 0:
             # we don't allow gradients to flow through the discontinuity at 0
@@ -431,55 +470,52 @@ class TestIntegration:
 
     @pytest.mark.all_interfaces
     @pytest.mark.parametrize("device", ["default.qubit", "default.mixed", "lightning.qubit"])
-    @pytest.mark.parametrize("interface", ["autograd", "jax", "torch"])
+    @pytest.mark.parametrize("interface", ["autograd", "jax", "tensorflow", "torch"])
     @pytest.mark.parametrize(
         "params", [np.array([0.0, 0.0]), np.array([0.3, 0.4]), np.array([0.6, 0.8])]
     )
     def test_subsystem_overlap_error(self, device, interface, params):
         """Test that an error is raised when the subsystems overlap"""
-        dev = qp.device(device, wires=3)
+        dev = qml.device(device, wires=3)
 
-        params = qp.math.asarray(params, like=interface)
+        params = qml.math.asarray(params, like=interface)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit(params):
-            qp.RY(params[0], wires=0)
-            qp.RY(params[1], wires=1)
-            qp.CNOT(wires=[0, 1])
-            qp.CNOT(wires=[0, 2])
-            return qp.mutual_info(wires0=[0, 1], wires1=[1, 2])
+            qml.RY(params[0], wires=0)
+            qml.RY(params[1], wires=1)
+            qml.CNOT(wires=[0, 1])
+            qml.CNOT(wires=[0, 2])
+            return qml.mutual_info(wires0=[0, 1], wires1=[1, 2])
 
         msg = "Subsystems for computing mutual information must not overlap"
-        with pytest.raises(QuantumFunctionError, match=msg):
+        with pytest.raises(qml.QuantumFunctionError, match=msg):
             circuit(params)
 
     @pytest.mark.all_interfaces
-    @pytest.mark.parametrize("interface", ["autograd", "jax", "torch"])
+    @pytest.mark.parametrize("interface", ["autograd", "jax", "tensorflow", "torch"])
     @pytest.mark.parametrize("params", [np.array([0.0, 0.0]), np.array([0.3, 0.4])])
     def test_custom_wire_labels_works(self, interface, params):
         """Tests that no error is raised when mutual information is measured
         with custom wire labels"""
-        dev = qp.device("default.qubit", wires=["a", "b"])
+        dev = qml.device("default.qubit", wires=["a", "b"])
 
-        params = qp.math.asarray(params, like=interface)
+        params = qml.math.asarray(params, like=interface)
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit(params):
-            qp.RY(params[0], wires="a")
-            qp.RY(params[1], wires="b")
-            qp.CNOT(wires=["a", "b"])
-            return qp.mutual_info(wires0=["a"], wires1=["b"])
+            qml.RY(params[0], wires="a")
+            qml.RY(params[1], wires="b")
+            qml.CNOT(wires=["a", "b"])
+            return qml.mutual_info(wires0=["a"], wires1=["b"])
 
-        @qp.qnode(dev, interface=interface)
+        @qml.qnode(dev, interface=interface)
         def circuit_expected(params):
-            qp.RY(params[0], wires="a")
-            qp.RY(params[1], wires="b")
-            qp.CNOT(wires=["a", "b"])
-            return qp.density_matrix(wires=["a", "b"])
+            qml.RY(params[0], wires="a")
+            qml.RY(params[1], wires="b")
+            qml.CNOT(wires=["a", "b"])
+            return qml.state()
 
         actual = circuit(params)
-
-        dm = circuit_expected(params)
-        expected = qp.math.mutual_info(dm, indices0=[0], indices1=[1])
-
+        expected = qml.qinfo.mutual_info(circuit_expected, wires0=["a"], wires1=["b"])(params)
         assert np.allclose(actual, expected)

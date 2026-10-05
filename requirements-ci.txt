@@ -1,0 +1,14 @@
+numpy
+scipy
+cvxpy
+cvxopt
+networkx
+rustworkx
+autograd
+toml
+appdirs
+semantic_version
+autoray
+matplotlib
+requests
+tomli # Drop once minimum Python version is 3.11

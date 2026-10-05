@@ -22,42 +22,36 @@ using ``jax.pure_callback``.
 For example:
 
 >>> def f(x):
-...     return qp.math.unwrap(x)
+...     return qml.math.unwrap(x)
 >>> x = jax.numpy.array(1.0)
 >>> jax.jit(f)(x)
-Traceback (most recent call last):
-    ...
 ValueError: Converting a JAX array to a NumPy array not supported when using the JAX JIT.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
->>> jax.config.update("jax_enable_x64", True)
 >>> def g(x):
 ...     expected_output_shape = jax.ShapeDtypeStruct((), jax.numpy.float64)
-...     return jax.pure_callback(f, expected_output_shape, x, vmap_method="sequential")
->>> x = jax.numpy.array(1.0)
+...     return jax.pure_callback(f, expected_output_shape, x)
 >>> jax.jit(g)(x)
 Array(1., dtype=float64)
 
 Note that we must provide the expected output shape for the function to use pure callbacks.
 
 """
-
-# pylint: disable=unused-argument,too-many-arguments
+# pylint: disable=unused-argument, too-many-arguments
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 
-import pennylane as qp
+import pennylane as qml
 from pennylane.typing import ResultBatch
-from pennylane.workflow.jacobian_products import _compute_jvps
+
+from ..jacobian_products import _compute_jvps
 
 from .jax import _NonPytreeWrapper
 
 Zero = jax.custom_derivatives.SymbolicZero
 
 
-def _to_jax(result: ResultBatch) -> ResultBatch:
+def _to_jax(result: qml.typing.ResultBatch) -> qml.typing.ResultBatch:
     """Converts an arbitrary result batch to one with jax arrays.
     Args:
         result (ResultBatch): a nested structure of lists, tuples, and numpy arrays
@@ -65,8 +59,9 @@ def _to_jax(result: ResultBatch) -> ResultBatch:
         ResultBatch: a nested structure of tuples, and jax arrays
 
     """
-    if isinstance(result, dict):
-        return {key: _to_jax(value) for key, value in result.items()}
+    # jax-jit not compatible with counts
+    # if isinstance(result, dict):
+    #     return result
     if isinstance(result, (list, tuple)):
         return tuple(_to_jax(r) for r in result)
     return jnp.array(result)
@@ -74,16 +69,12 @@ def _to_jax(result: ResultBatch) -> ResultBatch:
 
 def _set_all_parameters_on_copy(tapes, params):
     """Copy a set of tapes with operations and set all parameters"""
-    return tuple(
-        t.bind_new_parameters(a, list(range(len(a)))) for t, a in zip(tapes, params, strict=True)
-    )
+    return tuple(t.bind_new_parameters(a, list(range(len(a)))) for t, a in zip(tapes, params))
 
 
 def _set_trainable_parameters_on_copy(tapes, params):
     """Copy a set of tapes with operations and set all trainable parameters"""
-    return tuple(
-        t.bind_new_parameters(a, t.trainable_params) for t, a in zip(tapes, params, strict=True)
-    )
+    return tuple(t.bind_new_parameters(a, t.trainable_params) for t, a in zip(tapes, params))
 
 
 def _jax_dtype(m_type):
@@ -96,61 +87,40 @@ def _jax_dtype(m_type):
     return jnp.dtype(m_type)
 
 
-def _get_counts_shape(mp: "qp.measurements.CountsMP", num_device_wires=0):
-    num_wires = len(mp.wires) if mp.wires else num_device_wires
-    outcome_counts = {}
-    binary_pattern = "{0:0" + str(num_wires) + "b}"
-    for outcome in range(2**num_wires):
-        outcome_binary = binary_pattern.format(outcome)
-        outcome_counts[outcome_binary] = jax.core.ShapedArray((), _jax_dtype(int))
-
-    return outcome_counts
-
-
-def _result_shape_dtype_struct(tape: "qp.tape.QuantumScript", device: "qp.devices.Device"):
+def _result_shape_dtype_struct(tape: "qml.tape.QuantumScript", device: "qml.Device"):
     """Auxiliary function for creating the shape and dtype object structure
     given a tape."""
 
-    num_device_wires = len(device.wires) if device.wires else len(tape.wires)
+    shape = tape.shape(device)
+    if len(tape.measurements) == 1:
+        m_dtype = _jax_dtype(tape.measurements[0].numeric_type)
+        if tape.shots.has_partitioned_shots:
+            return tuple(jax.ShapeDtypeStruct(s, m_dtype) for s in shape)
+        return jax.ShapeDtypeStruct(tuple(shape), m_dtype)
 
-    def struct(mp, shots):
-        # depends on num_device_wires and tape.batch_size from closure
-        if isinstance(mp, qp.measurements.CountsMP):
-            counts_shape = _get_counts_shape(mp, num_device_wires=num_device_wires)
-            if tape.batch_size:
-                return tuple(counts_shape for _ in range(tape.batch_size))
-            return counts_shape
-
-        mp_shape = mp.shape(shots=shots, num_device_wires=num_device_wires)
-        if tape.batch_size:
-            mp_shape = (tape.batch_size, *mp_shape)
-        return jax.ShapeDtypeStruct(mp_shape, _jax_dtype(mp.numeric_type))
-
-    shape = []
-    for s in tape.shots if tape.shots else [None]:
-        shots_shape = tuple(struct(mp, s) for mp in tape.measurements)
-
-        shots_shape = shots_shape[0] if len(shots_shape) == 1 else tuple(shots_shape)
-        shape.append(shots_shape)
-
-    return tuple(shape) if tape.shots.has_partitioned_shots else shape[0]
+    tape_dtype = tuple(_jax_dtype(m.numeric_type) for m in tape.measurements)
+    if tape.shots.has_partitioned_shots:
+        return tuple(
+            tuple(jax.ShapeDtypeStruct(tuple(s), d) for s, d in zip(si, tape_dtype)) for si in shape
+        )
+    return tuple(jax.ShapeDtypeStruct(tuple(s), d) for s, d in zip(shape, tape_dtype))
 
 
-def _jac_shape_dtype_struct(tape: "qp.tape.QuantumScript", device: "qp.devices.Device"):
+def _jac_shape_dtype_struct(tape: "qml.tape.QuantumScript", device: "qml.Device"):
     """The shape of a jacobian for a single tape given a device.
 
     Args:
         tape (QuantumTape): the tape who's output we want to determine
         device (Device): the device used to execute the tape.
 
-    >>> tape = qp.tape.QuantumScript([qp.RX(1.0, wires=0)], [qp.expval(qp.X(0)), qp.probs(0)])
-    >>> dev = qp.devices.DefaultQubit()
+    >>> tape = qml.tape.QuantumScript([qml.RX(1.0, wires=0)], [qml.expval(qml.X(0)), qml.probs(0)])
+    >>> dev = qml.devices.DefaultQubit()
     >>> _jac_shape_dtype_struct(tape, dev)
     (ShapeDtypeStruct(shape=(), dtype=float64),
     ShapeDtypeStruct(shape=(2,), dtype=float64))
-    >>> tapes, fn = qp.gradients.param_shift(tape)
+    >>> tapes, fn = qml.gradients.param_shift(tape)
     >>> fn(dev.execute(tapes))
-    (array(0.), array([-0.42...,  0.42...]))
+    (array(0.), array([-0.42073549,  0.42073549]))
     """
     shape_and_dtype = _result_shape_dtype_struct(tape, device)
     if len(tape.trainable_params) == 1:
@@ -176,19 +146,20 @@ def _execute_wrapper_inner(params, tapes, execute_fn, _, device, is_vjp=False) -
 
     def pure_callback_wrapper(p):
         new_tapes = _set_fn(tapes.vals, p)
-        return _to_jax(execute_fn(new_tapes))
+        res = tuple(_to_jax(execute_fn(new_tapes)))
+        # When executed under `jax.vmap` the `result_shapes_dtypes` will contain
+        # the shape without the vmap dimensions, while the function here will be
+        # executed with objects containing the vmap dimensions. So res[i].ndim
+        # will have an extra dimension for every `jax.vmap` wrapping this execution.
+        #
+        # The execute_fn will return an object with shape `(n_observables, batches)`
+        # but the default behaviour for `jax.pure_callback` is to add the extra
+        # dimension at the beginning, so `(batches, n_observables)`. So in here
+        # we detect with the heuristic above if we are executing under vmap and we
+        # swap the order in that case.
+        return jax.tree_map(lambda r, s: r.T if r.ndim > s.ndim else r, res, shape_dtype_structs)
 
-    # first order way of determining native parameter broadcasting support
-    # will be inaccurate when inclusion of broadcast_expand depends on ExecutionConfig values (like adjoint)
-    device_supports_vectorization = (
-        qp.transforms.broadcast_expand not in device.preprocess_transforms()
-    )
-
-    vmap_method = "legacy_vectorized" if device_supports_vectorization else "sequential"
-
-    out = jax.pure_callback(
-        pure_callback_wrapper, shape_dtype_structs, params, vmap_method=vmap_method
-    )
+    out = jax.pure_callback(pure_callback_wrapper, shape_dtype_structs, params, vectorized=True)
     return out
 
 
@@ -205,7 +176,7 @@ def _execute_and_compute_jvp(tapes, execute_fn, jpc, device, primals, tangents):
     calculation.
     """
     # Select the trainable params. Non-trainable params contribute a 0 gradient.
-    for tangent, tape in zip(tangents[0], tapes.vals, strict=True):
+    for tangent, tape in zip(tangents[0], tapes.vals):
         tape.trainable_params = tuple(
             idx for idx, t in enumerate(tangent) if not isinstance(t, Zero)
         )
@@ -219,9 +190,7 @@ def _execute_and_compute_jvp(tapes, execute_fn, jpc, device, primals, tangents):
 
     res_struct = tuple(_result_shape_dtype_struct(t, device) for t in tapes.vals)
     jac_struct = tuple(_jac_shape_dtype_struct(t, device) for t in tapes.vals)
-    results, jacobians = jax.pure_callback(
-        wrapper, (res_struct, jac_struct), primals[0], vmap_method="sequential"
-    )
+    results, jacobians = jax.pure_callback(wrapper, (res_struct, jac_struct), primals[0])
 
     jvps = _compute_jvps(jacobians, tangents_trainable, tapes.vals)
 
@@ -241,7 +210,7 @@ def _vjp_bwd(tapes, execute_fn, jpc, device, params, dy):
         return _to_jax(jpc.compute_vjp(new_tapes, inner_dy))
 
     vjp_shape = _pytree_shape_dtype_struct(params)
-    return (jax.pure_callback(wrapper, vjp_shape, params, dy, vmap_method="legacy_vectorized"),)
+    return (jax.pure_callback(wrapper, vjp_shape, params, dy, vectorized=True),)
 
 
 _execute_jvp_jit = jax.custom_jvp(_execute_wrapper, nondiff_argnums=[1, 2, 3, 4])
@@ -258,7 +227,7 @@ def jax_jit_jvp_execute(tapes, execute_fn, jpc, device):
         tapes (Sequence[.QuantumTape]): batch of tapes to execute
         execute_fn (Callable[[Sequence[.QuantumTape]], ResultBatch]): a function that turns a batch of circuits into results
         jpc (JacobianProductCalculator): a class that can compute the Jacobian for the input tapes.
-        device (pennylane.devices.Device): The device used for execution. Used to determine the shapes of outputs for
+        device (pennylane.Device, pennylane.devices.Device): The device used for execution. Used to determine the shapes of outputs for
             pure callback calls.
 
     Returns:
@@ -268,13 +237,13 @@ def jax_jit_jvp_execute(tapes, execute_fn, jpc, device):
     """
 
     if any(
-        isinstance(m, qp.measurements.CountsMP) and not (m.all_outcomes)
+        m.return_type in (qml.measurements.Counts, qml.measurements.AllCounts)
         for t in tapes
         for m in t.measurements
     ):
         # Obtaining information about the shape of the Counts measurements is
         # not implemented and is required for the callback logic
-        raise NotImplementedError("The JAX-JIT interface doesn't support qp.counts.")
+        raise NotImplementedError("The JAX-JIT interface doesn't support qml.counts.")
 
     parameters = tuple(tuple(t.get_parameters(trainable_only=False)) for t in tapes)
 
@@ -289,7 +258,7 @@ def jax_jit_vjp_execute(tapes, execute_fn, jpc, device=None):
         execute_fn (Callable[[Sequence[.QuantumTape]], ResultBatch]): a function that turns a batch of circuits into results
         jpc (JacobianProductCalculator): a class that can compute the vector Jacobian product (VJP)
             for the input tapes.
-        device (pennylane.devices.Device): The device used for execution. Used to determine the shapes of outputs for
+        device (pennylane.Device, pennylane.devices.Device): The device used for execution. Used to determine the shapes of outputs for
             pure callback calls.
 
     Returns:
@@ -298,13 +267,13 @@ def jax_jit_vjp_execute(tapes, execute_fn, jpc, device=None):
 
     """
     if any(
-        isinstance(m, qp.measurements.CountsMP) and not (m.all_outcomes)
+        m.return_type in (qml.measurements.Counts, qml.measurements.AllCounts)
         for t in tapes
         for m in t.measurements
     ):
         # Obtaining information about the shape of the Counts measurements is
         # not implemented and is required for the callback logic
-        raise NotImplementedError("The JAX-JIT interface doesn't support qp.counts.")
+        raise NotImplementedError("The JAX-JIT interface doesn't support qml.counts.")
 
     parameters = tuple(tuple(t.get_parameters()) for t in tapes)
 

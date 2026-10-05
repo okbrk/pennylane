@@ -12,93 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Unit tests for the Identity Operator."""
-
 import numpy as np
 import pytest
 
-import pennylane as qp
-from pennylane.core.operator.utils import abstractify
-from pennylane.ops.functions import assert_valid
-from pennylane.ops.identity import GlobalPhase, Identity
-from pennylane.typing import Float, Wire
-
-op_wires = [[], [0], ["a"], [0, 1], ["a", "b", "c"], [100, "xasd", 12]]
-op_repr = ["I()", "I(0)", "I('a')", "I([0, 1])", "I(['a', 'b', 'c'])", "I([100, 'xasd', 12])"]
-op_params = tuple(zip(op_wires, op_repr))
+import pennylane as qml
+from pennylane import Identity
 
 
-@pytest.mark.usefixtures("enable_and_disable_capture")
-@pytest.mark.parametrize("phi", (0.0, 1.0, -1.0))
-def test_global_phase_is_valid(phi):
-    """Tests that the GlobalPhase operator is valid."""
-    op = GlobalPhase(phi)
-    assert_valid(op, skip_differentiation=True)
-
-
-@pytest.mark.usefixtures("enable_and_disable_capture")
-@pytest.mark.parametrize("wires", ((), [0], [0, 1]))
-def test_identity_is_valid(wires):
-    """Tests that Identity ops are valid."""
-    op = Identity(wires)
-    assert_valid(op, skip_differentiation=True)
-
-
-def test_abstractify_globalphase():
-    """Test that globalphase can be abstractified."""
-
-    assert abstractify(GlobalPhase(0.5)) == GlobalPhase(Float)
-    assert abstractify(GlobalPhase(1)) == GlobalPhase(Float)
-
-
-def test_abstractify_identity():
-    """Test that identity can be abstractified."""
-
-    assert abstractify(Identity(wires=[0])) == Identity(Wire[1])
-    assert abstractify(Identity(wires=[0, 1])) == Identity(Wire[2])
-
-
-def test_is_verified_hermitian():
-    """Test that identity is verified to be hermitian."""
-    assert Identity.is_verified_hermitian is True
-    assert Identity(0).is_verified_hermitian is True
-
-
-@pytest.mark.parametrize("wires", op_wires)
+@pytest.mark.parametrize("wires", [[0], [0, 1], ["a", "b", "c"], [100, "xasd", 12]])
 class TestIdentity:
     # pylint: disable=protected-access
     def test_flatten_unflatten(self, wires):
         """Test the flatten and unflatten methods of identity."""
         op = Identity(wires)
         data, metadata = op._flatten()
-        assert data == ([], [qp.wires.Wires(wires)], [])
-        assert hash(metadata)
+        assert data == tuple()
+        assert metadata[0] == qml.wires.Wires(wires)
+        assert metadata[1] == tuple()
 
         new_op = Identity._unflatten(*op._flatten())
-        qp.assert_equal(op, new_op)
+        assert qml.equal(op, new_op)
 
     def test_class_name(self, wires):
         """Test the class name of either I and Identity is by default 'Identity'"""
-        assert qp.I.__name__ == "Identity"
-        assert qp.Identity.__name__ == "Identity"
+        assert qml.I.__name__ == "Identity"
+        assert qml.Identity.__name__ == "Identity"
 
-        assert qp.I(wires).name == "Identity"
-        assert qp.Identity(wires).name == "Identity"
+        assert qml.I(wires).name == "Identity"
+        assert qml.Identity(wires).name == "Identity"
 
     @pytest.mark.jax
     def test_jax_pytree_integration(self, wires):
-        """Test that identity round-trips through the jax pytree registry."""
+        """Test that identity is a pytree by jitting a function of it."""
         import jax
 
-        op = qp.Identity(wires)
+        op = qml.Identity(wires)
 
-        leaves, tree_def = jax.tree_util.tree_flatten(op)
-        qp.assert_equal(jax.tree_util.tree_unflatten(tree_def, leaves), op)
+        adj_op = jax.jit(lambda op: qml.adjoint(op, lazy=False))(op)
 
-        if all(isinstance(w, int) for w in wires):
-            # ``Operator2`` treats wires as dynamic pytree leaves, so only integer wire
-            # labels can be traced by ``jax.jit``.
-            adj_op = jax.jit(lambda op: qp.adjoint(op, lazy=False))(op)
-            qp.assert_equal(op, adj_op)
+        assert qml.equal(op, adj_op)
 
     def test_identity_eigvals(self, wires, tol):
         """Test identity eigenvalues are correct"""
@@ -127,25 +79,8 @@ class TestIdentity:
 
     def test_matrix_representation(self, wires, tol):
         """Test the matrix representation"""
-        res_static = Identity.compute_matrix(wires=wires)
+        res_static = Identity.compute_matrix(n_wires=len(wires))
         res_dynamic = Identity(wires=wires).matrix()
         expected = np.eye(int(2 ** len(wires)))
         assert np.allclose(res_static, expected, atol=tol)
         assert np.allclose(res_dynamic, expected, atol=tol)
-
-    def test_sparse_matrix_format(self, wires):
-        from scipy.sparse import coo_matrix, csc_matrix, csr_matrix, lil_matrix
-
-        op = qp.Identity(wires=wires)
-        assert isinstance(op.sparse_matrix(), csr_matrix)
-        assert isinstance(op.sparse_matrix(format="csc"), csc_matrix)
-        assert isinstance(op.sparse_matrix(format="lil"), lil_matrix)
-        assert isinstance(op.sparse_matrix(format="coo"), coo_matrix)
-        assert qp.math.allclose(op.matrix(), op.sparse_matrix().toarray())
-
-
-@pytest.mark.parametrize("wires, expected_repr", op_params)
-def test_repr(wires, expected_repr):
-    """Test the operator's repr"""
-    op = Identity(wires=wires)
-    assert repr(op) == expected_repr

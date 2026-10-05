@@ -25,9 +25,9 @@ This version of NumPy **must** be used when using PennyLane with the :doc:`Autog
 
 .. note::
 
-    If using other interfaces, such as :doc:`PyTorch </introduction/interfaces/torch>`,
-    or :doc:`JAX </introduction/interfaces/jax>`, then the PennyLane-provided NumPy
-    should not be used; instead, simply use the standard NumPy import.
+    If using other interfaces, such as :doc:`TensorFlow </introduction/interfaces/tf>` :doc:`PyTorch
+    </introduction/interfaces/torch>`, or :doc:`JAX </introduction/interfaces/jax>`, then the
+    PennyLane-provided NumPy should not be used; instead, simply use the standard NumPy import.
 
 This package is a wrapper around ``autograd.numpy``; for details on all available functions,
 please refer to the `Autograd
@@ -80,14 +80,11 @@ For more details, please consult the `Autograd
 docs <https://github.com/HIPS/autograd/blob/master/docs/tutorial.md>`__.
 
 """
-
-# pylint: disable=wrong-import-position,undefined-variable
-
+# pylint: disable=wrong-import-position,wildcard-import,undefined-variable
 from autograd import numpy as _np
 from autograd.numpy import *
 
-from pennylane.exceptions import NonDifferentiableError
-from .wrapper import extract_tensors, tensor_wrapper, wrap_arrays
+from .wrapper import wrap_arrays, extract_tensors, tensor_wrapper
 
 wrap_arrays(_np.__dict__, globals())
 
@@ -97,8 +94,10 @@ del fft
 del linalg
 del random
 
-from . import fft, linalg, random
-from .tensor import asarray as _asarray
-from .tensor import tensor
+from . import fft
+from . import linalg
+from . import random
+
+from .tensor import tensor, NonDifferentiableError, asarray as _asarray
 
 asarray = tensor_wrapper(_asarray)

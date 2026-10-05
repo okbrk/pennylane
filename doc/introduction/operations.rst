@@ -13,14 +13,14 @@ These operators can be used in quantum functions, like shown in the following ex
 
 .. code-block:: python
 
-    import pennylane as qp
+    import pennylane as qml
 
     def my_quantum_function(x, y):
-        qp.RZ(x, wires=0)
-        qp.CNOT(wires=[0,1])
-        qp.RY(y, wires=1)
-        qp.AmplitudeDamping(0.1, wires=0)
-        return qp.expval(qp.PauliZ(1))
+        qml.RZ(x, wires=0)
+        qml.CNOT(wires=[0,1])
+        qml.RY(y, wires=1)
+        qml.AmplitudeDamping(0.1, wires=0)
+        return qml.expval(qml.PauliZ(1))
 
 This quantum function uses the :class:`RZ <pennylane.RZ>`,
 :class:`CNOT <pennylane.CNOT>`,
@@ -60,15 +60,15 @@ Operator to Operator functions
     ~pennylane.map_wires
     ~pennylane.dot
     ~pennylane.evolve
-    ~pennylane.simplify
+    ~pennylane.iterative_qpe
 
 These operator functions act on operators to produce new operators.
 
->>> op = qp.prod(qp.PauliX(0), qp.PauliZ(1))
->>> op = qp.sum(qp.Hadamard(0), op)
->>> op = qp.s_prod(1.2, op)
+>>> op = qml.prod(qml.PauliX(0), qml.PauliZ(1))
+>>> op = qml.sum(qml.Hadamard(0), op)
+>>> op = qml.s_prod(1.2, op)
 >>> op
-1.2 * (H(0) + X(0) @ Z(1))
+1.2 * (Hadamard(wires=[0]) + X(0) @ Z(1))
 
 Operator to Other functions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -80,21 +80,20 @@ Operator to Other functions
     ~pennylane.is_commuting
     ~pennylane.is_hermitian
     ~pennylane.is_unitary
-    ~pennylane.iterative_qpe
-
+    ~pennylane.simplify
 
 These operator functions act on operators and return other data types.
 All operator functions can be used on instantiated operators.
 
->>> op = qp.RX(0.54, wires=0)
->>> qp.matrix(op)
-array([[0.9637709+0.j        , 0.       -0.26673144j],
-       [0.       -0.26673144j, 0.9637709+0.j        ]])
+>>> op = qml.RX(0.54, wires=0)
+>>> qml.matrix(op)
+[[0.9637709+0.j         0.       -0.26673144j]
+[0.       -0.26673144j 0.9637709+0.j        ]]
 
 Some operator functions can also be used in a functional form:
 
 >>> x = torch.tensor(0.6, requires_grad=True)
->>> matrix_fn = qp.matrix(qp.RX)
+>>> matrix_fn = qml.matrix(qml.RX)
 >>> matrix_fn(x, wires=0)
 tensor([[0.9553+0.0000j, 0.0000-0.2955j],
         [0.0000-0.2955j, 0.9553+0.0000j]], grad_fn=<StackBackward0>)
@@ -110,17 +109,13 @@ Some operator transforms can also act on multiple operators, by passing
 quantum functions, QNodes or tapes:
 
 >>> def circuit(theta):
-...     qp.RX(theta, wires=1)
-...     qp.Z(wires=0)
->>> qp.matrix(circuit, wire_order=[0,1])(np.pi / 4)
-array([[ 0.92387953+0.j        ,  0.        -0.38268343j,
-         0.        +0.j        ,  0.        +0.j        ],
-       [ 0.        -0.38268343j,  0.92387953+0.j        ,
-         0.        +0.j        ,  0.        +0.j        ],
-       [ 0.        +0.j        ,  0.        +0.j        ,
-        -0.92387953+0.j        ,  0.        +0.38268343j],
-       [ 0.        +0.j        ,  0.        +0.j        ,
-         0.        +0.38268343j, -0.92387953+0.j        ]])
+...     qml.RX(theta, wires=1)
+...     qml.Z(wires=0)
+>>> qml.matrix(circuit)(np.pi / 4)
+array([[ 0.92387953+0.j,  0.+0.j ,  0.-0.38268343j,  0.+0.j],
+[ 0.+0.j,  -0.92387953+0.j,  0.+0.j,  0. +0.38268343j],
+[ 0. -0.38268343j,  0.+0.j,  0.92387953+0.j,  0.+0.j],
+[ 0.+0.j,  0.+0.38268343j,  0.+0.j,  -0.92387953+0.j]])
 
 
 Matrix to Operator functions
@@ -135,11 +130,12 @@ These functions take a matrix and return an associated native PennyLane operator
 For example:
 
 >>> mat = np.array([[1, 1], [1, -1]])
->>> h = qp.pauli_decompose(mat)
+>>> h = qml.pauli_decompose(mat)
 >>> type(h)
-<class 'pennylane.ops.op_math.linear_combination.LinearCombination'>
+<class 'pennylane.ops.qubit.hamiltonian.Hamiltonian'>
 >>> print(h)
-1.0 * X(0) + 1.0 * Z(0)
+(1.0) [X0]
++ (1.0) [Z0]
 
 .. _intro_ref_ops_qubit:
 
@@ -159,26 +155,26 @@ Non-parametrized gates
 
     ~pennylane.Identity
     ~pennylane.Hadamard
-    ~pennylane.S
-    ~pennylane.CNOT
-    ~pennylane.T
-    ~pennylane.Toffoli
     ~pennylane.PauliX
     ~pennylane.PauliY
     ~pennylane.PauliZ
+    ~pennylane.S
+    ~pennylane.T
     ~pennylane.SX
-    ~pennylane.CY
+    ~pennylane.CNOT
     ~pennylane.CZ
+    ~pennylane.CY
     ~pennylane.CH
-    ~pennylane.CCZ
     ~pennylane.SWAP
     ~pennylane.ISWAP
-    ~pennylane.CSWAP
-    ~pennylane.SISWAP
     ~pennylane.ECR
+    ~pennylane.SISWAP
     ~pennylane.SQISW
+    ~pennylane.CSWAP
+    ~pennylane.Toffoli
     ~pennylane.MultiControlledX
     ~pennylane.Barrier
+    ~pennylane.WireCut
 
 :html:`</div>`
 
@@ -199,7 +195,6 @@ Parametrized gates
     ~pennylane.RZ
     ~pennylane.MultiRZ
     ~pennylane.PauliRot
-    ~pennylane.PPR
     ~pennylane.PhaseShift
     ~pennylane.ControlledPhaseShift
     ~pennylane.CPhase
@@ -348,5 +343,192 @@ Observables
     ~pennylane.Projector
     ~pennylane.Hamiltonian
     ~pennylane.SparseHamiltonian
+
+:html:`</div>`
+
+.. _intro_ref_ops_cv:
+
+Continuous-Variable (CV) operators
+-----------------------------------
+
+If you would like to learn more about the CV model of quantum computing, check out the
+`quantum photonics <https://strawberryfields.ai/photonics/concepts/photonics.html>`_
+page of the `Strawberry Fields <https://strawberryfields.ai/>`__ documentation.
+
+.. _intro_ref_ops_cvgates:
+
+CV gates
+^^^^^^^^
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.Identity
+    ~pennylane.Beamsplitter
+    ~pennylane.ControlledAddition
+    ~pennylane.ControlledPhase
+    ~pennylane.CrossKerr
+    ~pennylane.CubicPhase
+    ~pennylane.Displacement
+    ~pennylane.InterferometerUnitary
+    ~pennylane.Kerr
+    ~pennylane.QuadraticPhase
+    ~pennylane.Rotation
+    ~pennylane.Squeezing
+    ~pennylane.TwoModeSqueezing
+
+:html:`</div>`
+
+.. _intro_ref_ops_cvstateprep:
+
+CV state preparation
+^^^^^^^^^^^^^^^^^^^^
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.CatState
+    ~pennylane.CoherentState
+    ~pennylane.DisplacedSqueezedState
+    ~pennylane.FockDensityMatrix
+    ~pennylane.FockState
+    ~pennylane.FockStateVector
+    ~pennylane.GaussianState
+    ~pennylane.SqueezedState
+    ~pennylane.ThermalState
+
+:html:`</div>`
+
+.. _intro_ref_ops_cvobs:
+
+CV observables
+^^^^^^^^^^^^^^
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.FockStateProjector
+    ~pennylane.Identity
+    ~pennylane.NumberOperator
+    ~pennylane.TensorN
+    ~pennylane.QuadP
+    ~pennylane.PolyXP
+    ~pennylane.QuadOperator
+    ~pennylane.QuadX
+
+:html:`</div>`
+
+.. _intro_ref_ops_qutrit:
+
+Qutrit operators
+----------------
+
+.. _intro_ref_ops_qutrit_nonparam:
+
+Qutrit non-parametrized gates
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.TShift
+    ~pennylane.TClock
+    ~pennylane.THadamard
+    ~pennylane.TAdd
+    ~pennylane.TSWAP
+
+:html:`</div>`
+
+.. _intro_ref_ops_qutrit_matrix:
+
+Qutrit gates constructed from a matrix
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.QutritUnitary
+    ~pennylane.ControlledQutritUnitary
+
+:html:`</div>`
+
+.. _intro_ref_ops_qutrit_param:
+
+Qutrit parametrized gates
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.TRX
+    ~pennylane.TRY
+    ~pennylane.TRZ
+
+:html:`</div>`
+
+.. _intro_ref_ops_qutrit_stateprep:
+
+Qutrit State preparation
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.QutritBasisState
+
+:html:`</div>`
+
+.. _intro_ref_ops_qutrit_obs:
+
+Qutrit Observables
+^^^^^^^^^^^^^^^^^^
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.THermitian
+    ~pennylane.GellMann
+
+:html:`</div>`
+
+.. _intro_ref_ops_pulse:
+
+Pulse-level operators
+---------------------
+
+If you would like to learn more about the implementation of pulse-level control in PennyLane, see the
+:mod:`~.pulse` module documentation.
+
+
+Pulse operator
+^^^^^^^^^^^^^^
+
+:html:`<div class="summary-table">`
+
+.. autosummary::
+    :nosignatures:
+
+    ~pennylane.pulse.ParametrizedEvolution
+    ~pennylane.pulse.ParametrizedHamiltonian
 
 :html:`</div>`

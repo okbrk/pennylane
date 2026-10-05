@@ -14,13 +14,13 @@
 """
 Unit tests for functions needed for computing the particle number observable.
 """
-
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import Identity, PauliZ
 from pennylane import numpy as np
 from pennylane import qchem
+from pennylane.operation import enable_new_opmath, disable_new_opmath
 
 
 @pytest.mark.parametrize(
@@ -57,14 +57,18 @@ def test_particle_number(orbitals, coeffs_ref, ops_ref):
     function `'spin_z'`.
     """
     n = qchem.particle_number(orbitals)
-    n_ref = qp.dot(coeffs_ref, ops_ref)
-    qp.assert_equal(n_ref, n)
-    assert isinstance(n, qp.ops.Sum)
+    n_ref = qml.Hamiltonian(coeffs_ref, ops_ref)
+    assert n.compare(n_ref)
+
+    enable_new_opmath()
+    n_pl_op = qchem.particle_number(orbitals)
+    disable_new_opmath()
 
     wire_order = n_ref.wires
+    assert not isinstance(n_pl_op, qml.Hamiltonian)
     assert np.allclose(
-        qp.matrix(n, wire_order=wire_order),
-        qp.matrix(n_ref, wire_order=wire_order),
+        qml.matrix(n_pl_op, wire_order=wire_order),
+        qml.matrix(n_ref, wire_order=wire_order),
     )
 
 

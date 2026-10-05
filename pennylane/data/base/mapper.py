@@ -14,9 +14,11 @@
 """Contains a class for mapping HDF5 groups to Dataset Attributes, and a mixin
 class that provides the mapper class."""
 
-from collections.abc import Iterator, Mapping, MutableMapping
+
+import typing
+from collections.abc import MutableMapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Dict, Optional, Type
 
 from pennylane.data.base.attribute import (
     AttributeInfo,
@@ -44,7 +46,7 @@ class AttributeTypeMapper(MutableMapping):
     """
 
     bind: HDF5Group
-    _cache: dict[str, DatasetAttribute]
+    _cache: Dict[str, DatasetAttribute]
 
     def __init__(self, bind: HDF5Group) -> None:
         self._cache = {}
@@ -71,8 +73,8 @@ class AttributeTypeMapper(MutableMapping):
         self,
         key: str,
         value: Any,
-        info: AttributeInfo | None,
-        require_type: type[DatasetAttribute] | None = None,
+        info: Optional[AttributeInfo],
+        require_type: Optional[Type[DatasetAttribute]] = None,
     ) -> None:
         """Creates or replaces attribute ``key`` with ``value``, optionally
         including ``info``.
@@ -118,14 +120,14 @@ class AttributeTypeMapper(MutableMapping):
         self.bind.move(src, dest)
         self._cache.pop(src, None)
 
-    def view(self) -> Mapping[str, DatasetAttribute]:
+    def view(self) -> typing.Mapping[str, DatasetAttribute]:
         """Returns a read-only mapping of the attributes in ``bind``."""
         return MappingProxyType(self)
 
     def __len__(self) -> int:
         return len(self.bind)
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> typing.Iterator[str]:
         return iter(self.bind)
 
     def __contains__(self, key: str) -> bool:

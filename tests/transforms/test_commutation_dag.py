@@ -14,14 +14,11 @@
 """
 Unit tests for CommutationDAG
 """
-
 from collections import OrderedDict
-
 import pytest
-
-import pennylane as qp
-import pennylane.numpy as np
 from pennylane.wires import Wires
+import pennylane.numpy as np
+import pennylane as qml
 
 
 class TestCommutationDAG:
@@ -29,9 +26,9 @@ class TestCommutationDAG:
 
     def test_return_dag(self):
         def circuit():
-            qp.PauliZ(wires=0)
+            qml.PauliZ(wires=0)
 
-        dag_object = qp.transforms.commutation_dag(circuit)()
+        dag_object = qml.transforms.commutation_dag(circuit)()
         dag = dag_object.graph
 
         assert len(dag) != 0
@@ -40,49 +37,49 @@ class TestCommutationDAG:
         """Test a simple DAG on 1 wire with a quantum function."""
 
         def circuit():
-            qp.PauliZ(wires=0)
-            qp.PauliX(wires=0)
+            qml.PauliZ(wires=0)
+            qml.PauliX(wires=0)
 
-        dag = qp.transforms.commutation_dag(circuit)()
+        dag = qml.transforms.commutation_dag(circuit)()
 
-        a = qp.PauliZ(wires=0)
-        b = qp.PauliX(wires=0)
+        a = qml.PauliZ(wires=0)
+        b = qml.PauliX(wires=0)
 
         nodes = [a, b]
         edges = [(0, 1, {"commute": False})]
 
-        assert dag.get_node(0).op == a
-        assert dag.get_node(1).op == b
+        assert dag.get_node(0).op.compare(a)
+        assert dag.get_node(1).op.compare(b)
         assert dag.get_edge(0, 1) == {0: {"commute": False}}
         assert dag.get_edge(0, 2) is None
         assert dag.observables == []
         for i, node in enumerate(dag.get_nodes()):
-            assert node[1].op == nodes[i]
+            assert node[1].op.compare(nodes[i])
         for i, edge in enumerate(dag.get_edges()):
             assert edges[i] == edge
 
     def test_dag_transform_simple_dag_tape(self):
         """Test a simple DAG on 1 wire with a quantum tape."""
-        with qp.queuing.AnnotatedQueue() as q:
-            qp.PauliZ(wires=0)
-            qp.PauliX(wires=0)
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.PauliZ(wires=0)
+            qml.PauliX(wires=0)
 
-        tape = qp.tape.QuantumScript.from_queue(q)
-        dag = qp.transforms.commutation_dag(tape)
+        tape = qml.tape.QuantumScript.from_queue(q)
+        dag = qml.transforms.commutation_dag(tape)
 
-        a = qp.PauliZ(wires=0)
-        b = qp.PauliX(wires=0)
+        a = qml.PauliZ(wires=0)
+        b = qml.PauliX(wires=0)
 
         nodes = [a, b]
         edges = [(0, 1, {"commute": False})]
 
-        assert dag.get_node(0).op == (a)
-        assert dag.get_node(1).op == (b)
+        assert dag.get_node(0).op.compare(a)
+        assert dag.get_node(1).op.compare(b)
         assert dag.get_edge(0, 1) == {0: {"commute": False}}
         assert dag.get_edge(0, 2) is None
         assert dag.observables == []
         for i, node in enumerate(dag.get_nodes()):
-            assert node[1].op == (nodes[i])
+            assert node[1].op.compare(nodes[i])
         for i, edge in enumerate(dag.get_edges()):
             assert edges[i] == edge
 
@@ -90,54 +87,54 @@ class TestCommutationDAG:
         """Test a simple DAG on 2 wires with a quantum function and custom wires."""
 
         def circuit():
-            qp.PauliZ(wires="a")
-            qp.PauliX(wires="c")
+            qml.PauliZ(wires="a")
+            qml.PauliX(wires="c")
 
-        dag = qp.transforms.commutation_dag(circuit)()
+        dag = qml.transforms.commutation_dag(circuit)()
 
-        a = qp.PauliZ(wires=0)
-        b = qp.PauliX(wires=1)
+        a = qml.PauliZ(wires=0)
+        b = qml.PauliX(wires=1)
 
         nodes = [a, b]
         edges = [(0, 1, {"commute": False})]
 
-        assert dag.get_node(0).op == (a)
-        assert dag.get_node(1).op == (b)
+        assert dag.get_node(0).op.compare(a)
+        assert dag.get_node(1).op.compare(b)
         assert dag.get_edge(0, 1) is None
         assert dag.get_edge(0, 2) is None
         assert dag.observables == []
         for i, node in enumerate(dag.get_nodes()):
-            assert node[1].op == (nodes[i])
+            assert node[1].op.compare(nodes[i])
         for i, edge in enumerate(dag.get_edges()):
             assert edges[i] == edge
 
     def test_dag_transform_simple_dag_qnode(self):
         """Test a simple DAG on 1 wire with a qnode."""
 
-        dev = qp.device("default.qubit", wires=1)
+        dev = qml.device("default.qubit", wires=1)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit():
-            qp.PauliZ(wires=0)
-            qp.PauliX(wires=0)
-            return qp.expval(qp.PauliX(wires=0))
+            qml.PauliZ(wires=0)
+            qml.PauliX(wires=0)
+            return qml.expval(qml.PauliX(wires=0))
 
-        dag = qp.transforms.commutation_dag(circuit)()
+        dag = qml.transforms.commutation_dag(circuit)()
 
-        a = qp.PauliZ(wires=0)
-        b = qp.PauliX(wires=0)
+        a = qml.PauliZ(wires=0)
+        b = qml.PauliX(wires=0)
 
         nodes = [a, b]
         edges = [(0, 1, {"commute": False})]
 
-        assert dag.get_node(0).op == (a)
-        assert dag.get_node(1).op == (b)
+        assert dag.get_node(0).op.compare(a)
+        assert dag.get_node(1).op.compare(b)
         assert dag.get_edge(0, 1) == {0: {"commute": False}}
         assert dag.get_edge(0, 2) is None
         assert dag.observables[0].name == "PauliX"
         assert dag.observables[0].wires.tolist() == [0]
         for i, node in enumerate(dag.get_nodes()):
-            assert node[1].op == (nodes[i])
+            assert node[1].op.compare(nodes[i])
         for i, edge in enumerate(dag.get_edges()):
             assert edges[i] == edge
 
@@ -146,25 +143,25 @@ class TestCommutationDAG:
         # pylint: disable=protected-access
 
         op_wires = [
-            (qp.CNOT, [3, 0]),
-            (qp.PauliX, [4]),
-            (qp.PauliZ, [0]),
-            (qp.CNOT, [4, 2]),
-            (qp.CNOT, [0, 1]),
-            (qp.CNOT, [3, 4]),
-            (qp.CNOT, [1, 2]),
-            (qp.PauliX, [1]),
-            (qp.CNOT, [1, 0]),
-            (qp.PauliX, [1]),
-            (qp.CNOT, [1, 2]),
-            (qp.CNOT, [0, 3]),
+            (qml.CNOT, [3, 0]),
+            (qml.PauliX, [4]),
+            (qml.PauliZ, [0]),
+            (qml.CNOT, [4, 2]),
+            (qml.CNOT, [0, 1]),
+            (qml.CNOT, [3, 4]),
+            (qml.CNOT, [1, 2]),
+            (qml.PauliX, [1]),
+            (qml.CNOT, [1, 0]),
+            (qml.PauliX, [1]),
+            (qml.CNOT, [1, 2]),
+            (qml.CNOT, [0, 3]),
         ]
 
         def circuit():
             for op, ws in op_wires:
                 op(wires=ws)
 
-        dag = qp.transforms.commutation_dag(circuit)()
+        dag = qml.transforms.commutation_dag(circuit)()
 
         wires = [3, 0, 4, 2, 1]
         consecutive_wires = Wires(range(len(wires)))
@@ -235,32 +232,91 @@ class TestCommutationDAG:
     def test_dag_parameters_autograd(self):
         "Test a the DAG and its attributes for autograd parameters."
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x, y, z):
-            qp.RX(x, wires=0)
-            qp.RX(y, wires=0)
-            qp.CNOT(wires=[1, 2])
-            qp.RY(y, wires=1)
-            qp.Hadamard(wires=2)
-            qp.CRZ(z, wires=[2, 0])
-            qp.RY(-y, wires=1)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            qml.CNOT(wires=[1, 2])
+            qml.RY(y, wires=1)
+            qml.Hadamard(wires=2)
+            qml.CRZ(z, wires=[2, 0])
+            qml.RY(-y, wires=1)
+            return qml.expval(qml.PauliZ(0))
 
         x = np.array([np.pi / 4, np.pi / 3, np.pi / 2], requires_grad=False)
 
-        get_dag = qp.transforms.commutation_dag(circuit)
+        get_dag = qml.transforms.commutation_dag(circuit)
         dag = get_dag(x[0], x[1], x[2])
 
         nodes = [
-            qp.RX(x[0], wires=0),
-            qp.RX(x[1], wires=0),
-            qp.CNOT(wires=[1, 2]),
-            qp.RY(x[1], wires=1),
-            qp.Hadamard(wires=2),
-            qp.CRZ(x[2], wires=[2, 0]),
-            qp.RY(-x[1], wires=1),
+            qml.RX(x[0], wires=0),
+            qml.RX(x[1], wires=0),
+            qml.CNOT(wires=[1, 2]),
+            qml.RY(x[1], wires=1),
+            qml.Hadamard(wires=2),
+            qml.CRZ(x[2], wires=[2, 0]),
+            qml.RY(-x[1], wires=1),
+        ]
+
+        edges = [
+            (0, 5, {"commute": False}),
+            (1, 5, {"commute": False}),
+            (2, 3, {"commute": False}),
+            (2, 4, {"commute": False}),
+            (2, 6, {"commute": False}),
+            (4, 5, {"commute": False}),
+        ]
+
+        direct_successors = [[5], [5], [3, 4, 6], [], [5], [], []]
+        successors = [[5], [5], [3, 4, 5, 6], [], [5], [], []]
+        direct_predecessors = [[], [], [], [2], [2], [0, 1, 4], [2]]
+        predecessors = [[], [], [], [2], [2], [0, 1, 2, 4], [2]]
+
+        for i in range(0, 7):
+            assert dag.get_node(i).op.name == nodes[i].name
+            assert dag.get_node(i).op.data == nodes[i].data
+            assert dag.get_node(i).op.wires == nodes[i].wires
+            assert dag.direct_successors(i) == direct_successors[i]
+            assert dag.get_node(i).successors == successors[i] == dag.successors(i)
+            assert dag.direct_predecessors(i) == direct_predecessors[i]
+            assert dag.get_node(i).predecessors == predecessors[i] == dag.predecessors(i)
+
+        for i, edge in enumerate(dag.get_edges()):
+            assert edges[i] == edge
+
+    @pytest.mark.tf
+    def test_dag_parameters_tf(self):
+        "Test a the DAG and its attributes for tensorflow parameters."
+        import tensorflow as tf
+
+        dev = qml.device("default.qubit", wires=3)
+
+        @qml.qnode(dev)
+        def circuit(x, y, z):
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            qml.CNOT(wires=[1, 2])
+            qml.RY(y, wires=1)
+            qml.Hadamard(wires=2)
+            qml.CRZ(z, wires=[2, 0])
+            qml.RY(-y, wires=1)
+            return qml.expval(qml.PauliZ(0))
+
+        x = tf.Variable([np.pi / 4, np.pi / 3, np.pi / 2], dtype=tf.float64)
+
+        get_dag = qml.transforms.commutation_dag(circuit)
+        dag = get_dag(x[0], x[1], x[2])
+
+        nodes = [
+            qml.RX(x[0], wires=0),
+            qml.RX(x[1], wires=0),
+            qml.CNOT(wires=[1, 2]),
+            qml.RY(x[1], wires=1),
+            qml.Hadamard(wires=2),
+            qml.CRZ(x[2], wires=[2, 0]),
+            qml.RY(-x[1], wires=1),
         ]
 
         edges = [
@@ -294,32 +350,32 @@ class TestCommutationDAG:
         "Test a the DAG and its attributes for torch parameters."
         import torch
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x, y, z):
-            qp.RX(x, wires=0)
-            qp.RX(y, wires=0)
-            qp.CNOT(wires=[1, 2])
-            qp.RY(y, wires=1)
-            qp.Hadamard(wires=2)
-            qp.CRZ(z, wires=[2, 0])
-            qp.RY(-y, wires=1)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            qml.CNOT(wires=[1, 2])
+            qml.RY(y, wires=1)
+            qml.Hadamard(wires=2)
+            qml.CRZ(z, wires=[2, 0])
+            qml.RY(-y, wires=1)
+            return qml.expval(qml.PauliZ(0))
 
         x = torch.tensor([np.pi / 4, np.pi / 3, np.pi / 2], requires_grad=False)
 
-        get_dag = qp.transforms.commutation_dag(circuit)
+        get_dag = qml.transforms.commutation_dag(circuit)
         dag = get_dag(x[0], x[1], x[2])
 
         nodes = [
-            qp.RX(x[0], wires=0),
-            qp.RX(x[1], wires=0),
-            qp.CNOT(wires=[1, 2]),
-            qp.RY(x[1], wires=1),
-            qp.Hadamard(wires=2),
-            qp.CRZ(x[2], wires=[2, 0]),
-            qp.RY(-x[1], wires=1),
+            qml.RX(x[0], wires=0),
+            qml.RX(x[1], wires=0),
+            qml.CNOT(wires=[1, 2]),
+            qml.RY(x[1], wires=1),
+            qml.Hadamard(wires=2),
+            qml.CRZ(x[2], wires=[2, 0]),
+            qml.RY(-x[1], wires=1),
         ]
 
         edges = [
@@ -354,31 +410,31 @@ class TestCommutationDAG:
 
         from jax import numpy as jnp
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x, y, z):
-            qp.RX(x, wires=0)
-            qp.RX(y, wires=0)
-            qp.CNOT(wires=[1, 2])
-            qp.RY(y, wires=1)
-            qp.Hadamard(wires=2)
-            qp.CRZ(z, wires=[2, 0])
-            qp.RY(-y, wires=1)
-            return qp.expval(qp.PauliZ(0))
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            qml.CNOT(wires=[1, 2])
+            qml.RY(y, wires=1)
+            qml.Hadamard(wires=2)
+            qml.CRZ(z, wires=[2, 0])
+            qml.RY(-y, wires=1)
+            return qml.expval(qml.PauliZ(0))
 
         x = jnp.array([np.pi / 4, np.pi / 3, np.pi / 2], dtype=jnp.float64)
-        get_dag = qp.transforms.commutation_dag(circuit)
+        get_dag = qml.transforms.commutation_dag(circuit)
         dag = get_dag(x[0], x[1], x[2])
 
         nodes = [
-            qp.RX(x[0], wires=0),
-            qp.RX(x[1], wires=0),
-            qp.CNOT(wires=[1, 2]),
-            qp.RY(x[1], wires=1),
-            qp.Hadamard(wires=2),
-            qp.CRZ(x[2], wires=[2, 0]),
-            qp.RY(-x[1], wires=1),
+            qml.RX(x[0], wires=0),
+            qml.RX(x[1], wires=0),
+            qml.CNOT(wires=[1, 2]),
+            qml.RY(x[1], wires=1),
+            qml.Hadamard(wires=2),
+            qml.CRZ(x[2], wires=[2, 0]),
+            qml.RY(-x[1], wires=1),
         ]
 
         edges = [

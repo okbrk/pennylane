@@ -17,122 +17,79 @@ Unit tests for Operators inheriting from ControlledOp.
 
 import numpy as np
 import pytest
-from gate_data import CY, CZ, ControlledPhaseShift, CRot3, CRotx, CRoty, CRotz
-from scipy import sparse
 from scipy.linalg import fractional_matrix_power
 from scipy.stats import unitary_group
 
-import pennylane as qp
-from pennylane.ops.op_math.controlled import custom_ctrl_dispatch
-from pennylane.ops.op_math.controlled_ops import _toffoli_elbow
-from pennylane.typing import AbstractWires, Wire
+from gate_data import CY, CZ, CRotx, CRoty, CRotz, CRot3, ControlledPhaseShift
+
+import pennylane as qml
 from pennylane.wires import Wires
+from pennylane.ops.qubit.matrix_ops import QubitUnitary
 
 NON_PARAMETRIZED_OPERATIONS = [
-    (qp.CY, CY),
-    (qp.CZ, CZ),
+    (qml.CY, CY),
+    (qml.CZ, CZ),
 ]
 
 PARAMETRIZED_OPERATIONS = [
-    (qp.CRX, CRotx),
-    (qp.CRY, CRoty),
-    (qp.CRZ, CRotz),
-    (qp.CRot, CRot3),
-    (qp.ControlledPhaseShift, ControlledPhaseShift),
+    (qml.CRX, CRotx),
+    (qml.CRY, CRoty),
+    (qml.CRZ, CRotz),
+    (qml.CRot, CRot3),
+    (qml.ControlledPhaseShift, ControlledPhaseShift),
 ]
 
 ALL_OPERATIONS = NON_PARAMETRIZED_OPERATIONS + PARAMETRIZED_OPERATIONS
 
 NON_PARAMETRIC_OPS_DECOMPOSITIONS = (
-    (qp.CY, [qp.CRY(np.pi, wires=[0, 1]), qp.S(0)]),
-    (qp.CZ, [qp.ControlledPhaseShift(np.pi, wires=[0, 1])]),
+    (qml.CY, [qml.CRY(np.pi, wires=[0, 1]), qml.S(0)]),
+    (qml.CZ, [qml.ControlledPhaseShift(np.pi, wires=[0, 1])]),
 )
 
 X = np.array([[0, 1], [1, 0]])
 X_broadcasted = np.array([X] * 3)
 
 
-# pylint: disable=too-many-public-methods
 class TestControlledQubitUnitary:
     """Tests specific to the ControlledQubitUnitary operation"""
 
-    def test_has_decomposition_sparse_edge_case(self):
-        """Test that has_decomposition doesn't error out with sparse matrices."""
-        U = np.random.rand(4, 4) + 1.0j * np.random.rand(4, 4)
-        U, _ = np.linalg.qr(U)
-        U = sparse.csr_matrix(U)
-        op = qp.ControlledQubitUnitary(U, wires=(0, 1, 2))
-        assert not op.has_decomposition
-        with pytest.raises(qp.operation.DecompositionUndefinedError):
-            op.decomposition()
+    def test_initialization_from_matrix_and_operator(self):
+        base_op = QubitUnitary(X, wires=1)
 
-    @pytest.mark.usefixtures("enable_and_disable_capture")
-    @pytest.mark.parametrize(
-        "op",
-        [
-            qp.ControlledQubitUnitary(np.eye(2), wires=(1, 2)),
-            qp.ControlledQubitUnitary(np.eye(2), wires=(1, 2, 3)),
-            qp.ControlledQubitUnitary(np.eye(4), wires=(1, 2, 3, 4)),
-            qp.ControlledQubitUnitary(np.eye(8), wires=(1, 2, 3, 4, 5)),
-        ],
-    )
-    def test_standard_validity(self, op):
-        """Test that the operation is valid."""
-        qp.ops.functions.assert_valid(op, skip_differentiation=True)
+        op1 = qml.ControlledQubitUnitary(X, control_wires=[0, 2], wires=1)
+        op2 = qml.ControlledQubitUnitary(base_op, control_wires=[0, 2])
 
-    def test_noniterable_base(self):
-        """Test that an error is raised if the user provides a non-iterable base operator"""
+        assert qml.equal(op1, op2)
 
-        # make a non-iterable, non-QubitUnitary base operator
-        def base_op(x):
-            return 1 if x == 0 else 0  # pauliX as a mapping
+    def test_no_control(self):
+        """Test if ControlledQubitUnitary raises an error if control wires are not specified"""
+        with pytest.raises(
+            TypeError, match="missing 1 required positional argument: 'control_wires'"
+        ):
+            qml.ControlledQubitUnitary(X, wires=2)
 
-        with pytest.raises(ValueError, match="U must be a matrix"):
-            qp.ControlledQubitUnitary(base_op, wires=[0, 1])
+    def test_shared_control(self):
+        """Test if ControlledQubitUnitary raises an error if control wires are shared with wires"""
+        with pytest.raises(
+            ValueError, match="The control wires must be different from the base operation wires"
+        ):
+            qml.ControlledQubitUnitary(X, control_wires=[0, 2], wires=2)
 
-    def test_wires_is_none(self):
-        """Test that an error is raised if the user provides no target wires for an iterable base operator"""
-        base_op = [[0, 1], [1, 0]]
+    def test_wires_specified_twice_warning(self):
+        base = qml.QubitUnitary(X, 0)
+        with pytest.warns(
+            UserWarning,
+            match="base operator already has wires; values specified through wires kwarg will be ignored.",
+        ):
+            qml.ControlledQubitUnitary(base, control_wires=[1, 2], wires=3)
 
-        with pytest.raises(TypeError, match="Must specify a set of wires"):
-            qp.ControlledQubitUnitary(base_op, wires=None)
+    def test_wrong_shape(self):
+        """Test if ControlledQubitUnitary raises a ValueError if a unitary of shape inconsistent
+        with wires is provided"""
+        with pytest.raises(ValueError, match=r"Input unitary must be of shape \(2, 2\)"):
+            qml.ControlledQubitUnitary(np.eye(4), control_wires=[0, 1], wires=2).matrix()
 
-    @pytest.mark.capture
-    @pytest.mark.parametrize(
-        "control_wires, wires",
-        [(0, 1), ([0, 1], [2])],
-    )
-    def test_consistency_with_capture(self, control_wires, wires):
-        """Test that the operator wires are as expected with capture enabled"""
-        base_op = [[0, 1], [1, 0]]
-
-        op_kwarg = qp.ControlledQubitUnitary(base_op, wires=Wires(control_wires) + Wires(wires))
-        assert op_kwarg.base.wires == Wires(wires)
-        assert op_kwarg.control_wires == Wires(control_wires)
-        op = qp.ControlledQubitUnitary(base_op, wires=Wires(control_wires) + Wires(wires))
-        assert op.base.wires == Wires(wires)
-        assert op.control_wires == Wires(control_wires)
-
-    @pytest.mark.capture
-    def test_pairwise_consistency_with_capture(self):
-        """Test that both combinations of control and target wires lead to the same operator"""
-        base_op = [[0, 1], [1, 0]]
-
-        control_wires_1, target_wires_1 = [0, 1], [2]
-        op_1 = qp.ControlledQubitUnitary(base_op, wires=control_wires_1 + target_wires_1)
-
-        assert op_1.base.wires == Wires(2)
-        assert op_1.control_wires == Wires([0, 1])
-
-        control_wires_2, target_wires_2 = [0, 1, 2], ()
-        op_2 = qp.ControlledQubitUnitary(
-            base_op, wires=Wires(control_wires_2) + Wires(target_wires_2)
-        )
-
-        assert op_2.base.wires == Wires(2)
-        assert op_2.control_wires == Wires([0, 1])
-
-    @pytest.mark.parametrize("target_wire", list(range(3)))
+    @pytest.mark.parametrize("target_wire", range(3))
     def test_toffoli(self, target_wire):
         """Test if ControlledQubitUnitary acts like a Toffoli gate when the input unitary is a
         single-qubit X. This test allows the target wire to be any of the three wires."""
@@ -143,59 +100,26 @@ class TestControlledQubitUnitary:
         U1 = unitary_group.rvs(8, random_state=1)
         U2 = unitary_group.rvs(8, random_state=2)
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f1():
-            qp.QubitUnitary(U1, wires=range(3))
-            qp.ControlledQubitUnitary(X, wires=control_wires + [target_wire])
-            qp.QubitUnitary(U2, wires=range(3))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(3))
+            qml.ControlledQubitUnitary(X, control_wires=control_wires, wires=target_wire)
+            qml.QubitUnitary(U2, wires=range(3))
+            return qml.state()
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f2():
-            qp.QubitUnitary(U1, wires=range(3))
-            qp.Toffoli(wires=control_wires + [target_wire])
-            qp.QubitUnitary(U2, wires=range(3))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(3))
+            qml.Toffoli(wires=control_wires + [target_wire])
+            qml.QubitUnitary(U2, wires=range(3))
+            return qml.state()
 
         state_1 = f1()
         state_2 = f2()
 
         assert np.allclose(state_1, state_2)
-
-    def test_toffoli_elbow_decomposition(self):
-        """Test that the decomposed Toffoli gate using TemporaryAnd operators works properly."""
-
-        wires = qp.wires.Wires([0, 1, 2])
-
-        def arbitrary_input(wires):
-            for ind, wire in enumerate(wires):
-                qp.RX(ind + 0.3, wire)
-
-        dev = qp.device("default.qubit", wires=5)
-
-        with qp.tape.QuantumTape() as tape:
-            arbitrary_input(wires=wires)
-            qp.Toffoli(
-                wires=wires,
-            )
-
-            _toffoli_elbow(
-                wires=wires,
-            )
-
-            qp.adjoint(arbitrary_input)(wires=wires)
-
-        qs = qp.tape.QuantumScript(tape.operations, [qp.probs(wires=wires)])
-
-        assert len(qs.wires) == 4  # one work wire has been allocated
-
-        program, _ = dev.preprocess()
-        tape = program([qs])
-        output = dev.execute(tape[0])[0]
-
-        assert np.isclose(output[0], 1.0)
 
     @pytest.mark.parametrize("target_wire", range(3))
     def test_toffoli_broadcasted(self, target_wire):
@@ -208,21 +132,23 @@ class TestControlledQubitUnitary:
         U1 = unitary_group.rvs(8, random_state=1)
         U2 = unitary_group.rvs(8, random_state=2)
 
-        dev = qp.device("default.qubit", wires=3)
+        dev = qml.device("default.qubit", wires=3)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f1():
-            qp.QubitUnitary(U1, wires=range(3))
-            qp.ControlledQubitUnitary(X_broadcasted, wires=control_wires + [target_wire])
-            qp.QubitUnitary(U2, wires=range(3))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(3))
+            qml.ControlledQubitUnitary(
+                X_broadcasted, control_wires=control_wires, wires=target_wire
+            )
+            qml.QubitUnitary(U2, wires=range(3))
+            return qml.state()
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f2():
-            qp.QubitUnitary(U1, wires=range(3))
-            qp.Toffoli(wires=control_wires + [target_wire])
-            qp.QubitUnitary(U2, wires=range(3))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(3))
+            qml.Toffoli(wires=control_wires + [target_wire])
+            qml.QubitUnitary(U2, wires=range(3))
+            return qml.state()
 
         state_1 = f1()
         state_2 = f2()
@@ -251,7 +177,7 @@ class TestControlledQubitUnitary:
 
         # We now need to swap wires so that the control wires are [1, 3] and the target wires are
         # [2, 0]
-        swap = qp.SWAP.compute_matrix()
+        swap = qml.SWAP.compute_matrix()
 
         # initial wire permutation: 0123
         # target wire permutation: 1302
@@ -263,21 +189,21 @@ class TestControlledQubitUnitary:
         all_swap = swap4 @ swap3 @ swap2 @ swap1
         U_matrix = all_swap.T @ U_matrix @ all_swap
 
-        dev = qp.device("default.qubit", wires=4)
+        dev = qml.device("default.qubit", wires=4)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f1():
-            qp.QubitUnitary(U1, wires=range(4))
-            qp.ControlledQubitUnitary(U, wires=control_wires + target_wires)
-            qp.QubitUnitary(U2, wires=range(4))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(4))
+            qml.ControlledQubitUnitary(U, control_wires=control_wires, wires=target_wires)
+            qml.QubitUnitary(U2, wires=range(4))
+            return qml.state()
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def f2():
-            qp.QubitUnitary(U1, wires=range(4))
-            qp.QubitUnitary(U_matrix, wires=range(4))
-            qp.QubitUnitary(U2, wires=range(4))
-            return qp.state()
+            qml.QubitUnitary(U1, wires=range(4))
+            qml.QubitUnitary(U_matrix, wires=range(4))
+            qml.QubitUnitary(U2, wires=range(4))
+            return qml.state()
 
         state_1 = f1()
         state_2 = f2()
@@ -295,8 +221,8 @@ class TestControlledQubitUnitary:
         with pytest.raises(
             ValueError, match="control_values should be the same length as control_wires"
         ):
-            qp.ControlledQubitUnitary(
-                X, wires=control_wires + target_wires, control_values=control_values
+            qml.ControlledQubitUnitary(
+                X, control_wires=control_wires, wires=target_wires, control_values=control_values
             )
 
     @pytest.mark.parametrize(
@@ -318,7 +244,7 @@ class TestControlledQubitUnitary:
         control values."""
         target_wires = Wires(wires)
 
-        dev = qp.device("default.qubit", wires=len(control_wires + target_wires))
+        dev = qml.device("default.qubit", wires=len(control_wires + target_wires))
 
         # Pick a random unitary
         U = unitary_group.rvs(2 ** len(target_wires), random_state=1967)
@@ -327,15 +253,15 @@ class TestControlledQubitUnitary:
         control_state_weights = np.random.normal(size=2 ** (len(control_wires) + 1) - 2)
         target_state_weights = np.random.normal(size=2 ** (len(target_wires) + 1) - 2)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit_mixed_polarity():
-            qp.templates.ArbitraryStatePreparation(control_state_weights, wires=control_wires)
-            qp.templates.ArbitraryStatePreparation(target_state_weights, wires=target_wires)
+            qml.templates.ArbitraryStatePreparation(control_state_weights, wires=control_wires)
+            qml.templates.ArbitraryStatePreparation(target_state_weights, wires=target_wires)
 
-            qp.ControlledQubitUnitary(
-                U, wires=control_wires + target_wires, control_values=control_values
+            qml.ControlledQubitUnitary(
+                U, control_wires=control_wires, wires=target_wires, control_values=control_values
             )
-            return qp.state()
+            return qml.state()
 
         # The result of applying the mixed-polarity gate should be the same as
         # if we conjugated the specified control wires with Pauli X and applied the
@@ -343,20 +269,20 @@ class TestControlledQubitUnitary:
 
         x_locations = [x for x in range(len(control_values)) if control_values[x] == 0]
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit_pauli_x():
-            qp.templates.ArbitraryStatePreparation(control_state_weights, wires=control_wires)
-            qp.templates.ArbitraryStatePreparation(target_state_weights, wires=target_wires)
+            qml.templates.ArbitraryStatePreparation(control_state_weights, wires=control_wires)
+            qml.templates.ArbitraryStatePreparation(target_state_weights, wires=target_wires)
 
             for wire in x_locations:
-                qp.PauliX(wires=control_wires[wire])
+                qml.PauliX(wires=control_wires[wire])
 
-            qp.ControlledQubitUnitary(U, wires=control_wires + target_wires)
+            qml.ControlledQubitUnitary(U, control_wires=control_wires, wires=wires)
 
             for wire in x_locations:
-                qp.PauliX(wires=control_wires[wire])
+                qml.PauliX(wires=control_wires[wire])
 
-            return qp.state()
+            return qml.state()
 
         mixed_polarity_state = circuit_mixed_polarity()
         pauli_x_state = circuit_pauli_x()
@@ -366,14 +292,14 @@ class TestControlledQubitUnitary:
     def test_same_as_Toffoli(self):
         """Test if ControlledQubitUnitary returns the correct matrix for a control-control-X
         (Toffoli) gate"""
-        mat = qp.ControlledQubitUnitary(X, wires=[0, 1, 2]).matrix()
-        mat2 = qp.Toffoli(wires=[0, 1, 2]).matrix()
+        mat = qml.ControlledQubitUnitary(X, control_wires=[0, 1], wires=2).matrix()
+        mat2 = qml.Toffoli(wires=[0, 1, 2]).matrix()
         assert np.allclose(mat, mat2)
 
     def test_matrix_representation(self, tol):
         """Test that the matrix representation is defined correctly"""
         U = np.array([[0.94877869, 0.31594146], [-0.31594146, 0.94877869]])
-        res_dynamic = qp.ControlledQubitUnitary(U, wires=[1, 0]).matrix()
+        res_dynamic = qml.ControlledQubitUnitary(U, control_wires=[1], wires=0).matrix()
         expected = np.array(
             [
                 [1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
@@ -394,7 +320,7 @@ class TestControlledQubitUnitary:
             ]
         )
 
-        res_dynamic = qp.ControlledQubitUnitary(U, wires=[1, 0]).matrix()
+        res_dynamic = qml.ControlledQubitUnitary(U, control_wires=[1], wires=0).matrix()
         expected = np.array(
             [
                 [
@@ -429,17 +355,19 @@ class TestControlledQubitUnitary:
             ]
         )
 
-        op = qp.ControlledQubitUnitary(U1, wires=("b", "c", "a"), control_values=[0, 1])
+        op = qml.ControlledQubitUnitary(
+            U1, control_wires=("b", "c"), wires="a", control_values="01"
+        )
 
         pow_ops = op.pow(n)
         assert len(pow_ops) == 1
 
         assert pow_ops[0].target_wires == op.target_wires
         assert pow_ops[0].control_wires == op.control_wires
-        assert np.array_equal(pow_ops[0].control_values, op.control_values)
+        assert pow_ops[0].control_values == op.control_values
 
-        op_mat_to_pow = qp.math.linalg.matrix_power(op.data[0], n)
-        assert qp.math.allclose(pow_ops[0].data[0], op_mat_to_pow)
+        op_mat_to_pow = qml.math.linalg.matrix_power(op.data[0], n)
+        assert qml.math.allclose(pow_ops[0].data[0], op_mat_to_pow)
 
     @pytest.mark.parametrize("n", (2, -1, -2))
     def test_pow_broadcasted(self, n):
@@ -456,7 +384,7 @@ class TestControlledQubitUnitary:
             axes=0,
         )
 
-        op = qp.ControlledQubitUnitary(U1, wires=("b", "c", "a"))
+        op = qml.ControlledQubitUnitary(U1, control_wires=("b", "c"), wires="a")
 
         pow_ops = op.pow(n)
         assert len(pow_ops) == 1
@@ -464,8 +392,8 @@ class TestControlledQubitUnitary:
         assert pow_ops[0].target_wires == op.target_wires
         assert pow_ops[0].control_wires == op.control_wires
 
-        op_mat_to_pow = qp.math.linalg.matrix_power(op.data[0], n)
-        assert qp.math.allclose(pow_ops[0].data[0], op_mat_to_pow)
+        op_mat_to_pow = qml.math.linalg.matrix_power(op.data[0], n)
+        assert qml.math.allclose(pow_ops[0].data[0], op_mat_to_pow)
 
     def test_noninteger_pow(self):
         """Test that a ControlledQubitUnitary raised to a non-integer power evalutes."""
@@ -476,13 +404,13 @@ class TestControlledQubitUnitary:
             ]
         )
 
-        op = qp.ControlledQubitUnitary(U1, wires=("b", "c", "a"))
+        op = qml.ControlledQubitUnitary(U1, control_wires=("b", "c"), wires="a")
 
         z = 0.12
         [pow_op] = op.pow(z)
         expected = np.eye(8, dtype=complex)
         expected[-2:, -2:] = fractional_matrix_power(U1, z)
-        assert qp.math.allequal(pow_op.matrix(), expected)
+        assert qml.math.allequal(pow_op.matrix(), expected)
 
     def test_noninteger_pow_broadcasted(self):
         """Test that a ControlledQubitUnitary raised to a non-integer power raises an error."""
@@ -497,69 +425,34 @@ class TestControlledQubitUnitary:
             axes=0,
         )
 
-        op = qp.ControlledQubitUnitary(U1, wires=("b", "c", "a"))
+        op = qml.ControlledQubitUnitary(U1, control_wires=("b", "c"), wires="a")
 
-        with pytest.raises(qp.operation.PowUndefinedError):
+        with pytest.raises(qml.operation.PowUndefinedError):
             op.pow(0.12)
 
-    def test_ctrl_of_controlled_qubit_unitary(self):
-        """Test that controlling a ControlledQubitUnitary (``_ctrl_c_qu``) merges into a single
-        ControlledQubitUnitary with the combined control wires, control values and work wires."""
-        U = np.array(
-            [
-                [0.73708696 + 0.61324932j, 0.27034258 + 0.08685028j],
-                [-0.24979544 - 0.1350197j, 0.95278437 + 0.1075819j],
-            ]
-        )
-        base = qp.ControlledQubitUnitary(
-            U, wires=(0, 1), control_values=[1], work_wires=[4], work_wire_type="zeroed"
+    def test_controlled(self):
+        """Test the _controlled method for ControlledQubitUnitary."""
+
+        U = qml.PauliX(0).compute_matrix()
+
+        original = qml.ControlledQubitUnitary(U, control_wires=(0, 1), wires=4, control_values="01")
+        expected = qml.ControlledQubitUnitary(
+            U, control_wires=(0, 1, "a"), wires=4, control_values="011"
         )
 
-        op = qp.ctrl(
-            base,
-            control=[2, 3],
-            control_values=[0, 1],
-            work_wires=[5],
-            work_wire_type="borrowed",
-        )
-
-        assert isinstance(op, qp.ControlledQubitUnitary)
-        assert op.wires == Wires([2, 3, 0, 1])
-        assert op.control_wires == Wires([2, 3, 0])
-        assert op.target_wires == Wires([1])
-        assert list(op.control_values) == [False, True, True]
-        assert op.work_wires == Wires([5, 4])
-        assert op.work_wire_type == "borrowed"
-        assert qp.math.allclose(op.data[0], U)
-
-        # The merged op is equivalent to constructing the ControlledQubitUnitary directly.
-        wire_order = [2, 3, 0, 1]
-        expected = qp.ControlledQubitUnitary(U, wires=wire_order, control_values=[0, 1, 1])
-        assert qp.math.allclose(
-            op.matrix(wire_order=wire_order), expected.matrix(wire_order=wire_order)
-        )
-
-    def test_ctrl_of_controlled_qubit_unitary_defaults(self):
-        """Test ``_ctrl_c_qu`` with default control values and merging of zeroed work wire types."""
-        U = qp.RX.compute_matrix(0.5)
-        base = qp.ControlledQubitUnitary(U, wires=(0, 1), work_wire_type="zeroed")
-
-        op = qp.ctrl(base, control=[2], work_wires=[5], work_wire_type="zeroed")
-        assert isinstance(op, qp.ControlledQubitUnitary)
-        assert op.control_wires == Wires([2, 0])
-        assert list(op.control_values) == [True, True]
-        assert op.work_wires == Wires([5])
-        # zeroed + zeroed stays zeroed; borrowed anywhere makes it borrowed.
-        assert op.work_wire_type == "zeroed"
+        out = original._controlled("a")  # pylint: disable=protected-access
+        assert qml.equal(out, expected)
 
     def test_unitary_check(self):
         unitary = np.array([[0.94877869j, 0.31594146], [-0.31594146, 0.94877869j]])
         not_unitary = np.array([[0.94877869j, 0.31594146], [-5, 0.94877869j]])
 
-        qp.ControlledQubitUnitary(unitary, wires=[0, 2, 1], unitary_check=True)
+        qml.ControlledQubitUnitary(unitary, control_wires=[0, 2], wires=1, unitary_check=True)
 
         with pytest.warns(UserWarning, match="may not be unitary"):
-            qp.ControlledQubitUnitary(not_unitary, wires=[0, 2, 1], unitary_check=True)
+            qml.ControlledQubitUnitary(
+                not_unitary, control_wires=[0, 2], wires=1, unitary_check=True
+            )
 
 
 @pytest.mark.parametrize("op_cls, _", NON_PARAMETRIZED_OPERATIONS)
@@ -576,7 +469,7 @@ def test_map_wires_non_parametric(op_cls, _):
 
 def test_controlled_phase_shift_alias():
     """Tests that the alias for ControlledPhaseShift works"""
-    qp.assert_equal(qp.ControlledPhaseShift(0.123, wires=[0, 1]), qp.CPhase(0.123, wires=[0, 1]))
+    assert qml.equal(qml.ControlledPhaseShift(0.123, wires=[0, 1]), qml.CPhase(0.123, wires=[0, 1]))
 
 
 def _arbitrary_crot(x, y, z):
@@ -620,9 +513,9 @@ def _phase_shift_matrix_broadcasted(phi):
 
 
 EXPECTED_MATRICES = [
-    (qp.CRX, [0], np.identity(4)),
+    (qml.CRX, [0], np.identity(4)),
     (
-        qp.CRX,
+        qml.CRX,
         [np.pi / 2],
         np.array(
             [
@@ -633,9 +526,9 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRX, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1j], [0, 0, -1j, 0]])),
+    (qml.CRX, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1j], [0, 0, -1j, 0]])),
     (
-        qp.CRX,
+        qml.CRX,
         [np.array([np.pi / 2, np.pi])],
         np.array(
             [
@@ -649,9 +542,9 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRY, [0], np.identity(4)),
+    (qml.CRY, [0], np.identity(4)),
     (
-        qp.CRY,
+        qml.CRY,
         [np.pi / 2],
         np.array(
             [
@@ -662,9 +555,9 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRY, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1], [0, 0, 1, 0]])),
+    (qml.CRY, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1], [0, 0, 1, 0]])),
     (
-        qp.CRY,
+        qml.CRY,
         [np.array([np.pi / 2, np.pi])],
         np.array(
             [
@@ -678,9 +571,9 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRZ, [0], np.identity(4)),
+    (qml.CRZ, [0], np.identity(4)),
     (
-        qp.CRZ,
+        qml.CRZ,
         [np.pi / 2],
         np.array(
             [
@@ -691,9 +584,9 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRZ, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1j, 0], [0, 0, 0, 1j]])),
+    (qml.CRZ, [np.pi], np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1j, 0], [0, 0, 0, 1j]])),
     (
-        qp.CRZ,
+        qml.CRZ,
         [np.array([np.pi / 2, np.pi])],
         np.array(
             [
@@ -707,49 +600,49 @@ EXPECTED_MATRICES = [
             ]
         ),
     ),
-    (qp.CRot, [0, 0, 0], np.identity(4)),
+    (qml.CRot, [0, 0, 0], np.identity(4)),
     (
-        qp.CRot,
+        qml.CRot,
         [np.pi, np.pi, np.pi],
         np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1], [0, 0, 1, 0]]),
     ),
-    (qp.CRot, [0.432, -0.152, 0.9234], _arbitrary_crot(0.432, -0.152, 0.9234)),
-    (qp.CRot, [np.zeros(5), np.zeros(5), np.zeros(5)], np.identity(4)),
+    (qml.CRot, [0.432, -0.152, 0.9234], _arbitrary_crot(0.432, -0.152, 0.9234)),
+    (qml.CRot, [np.zeros(5), np.zeros(5), np.zeros(5)], np.identity(4)),
     (
-        qp.CRot,
+        qml.CRot,
         [np.ones(3) * np.pi, np.ones(3) * np.pi, np.ones(3) * np.pi],
         np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, -1], [0, 0, 1, 0]]),
     ),
     (
-        qp.CRot,
+        qml.CRot,
         [np.array([0.432, -0.124]), np.array([-0.152, 2.912]), np.array([0.9234, -9.2])],
         _arbitrary_crot_broadcasted(
             np.array([0.432, -0.124]), np.array([-0.152, 2.912]), np.array([0.9234, -9.2])
         ),
     ),
-    (qp.ControlledPhaseShift, [0.123], ControlledPhaseShift(0.123)),
+    (qml.ControlledPhaseShift, [0.123], ControlledPhaseShift(0.123)),
     (
-        qp.ControlledPhaseShift,
+        qml.ControlledPhaseShift,
         [np.array([0.2, np.pi / 2, -0.1])],
         _phase_shift_matrix_broadcasted(np.array([0.2, np.pi / 2, -0.1])),
     ),
 ]
 
 EXPECTED_EIGVALS = [
-    (qp.CRZ, [0], np.ones(4)),
-    (qp.CRZ, [np.pi / 2], np.array([1, 1, np.exp(-1j * np.pi / 4), np.exp(1j * np.pi / 4)])),
-    (qp.CRZ, [np.pi], np.array([1, 1, -1j, 1j])),
+    (qml.CRZ, [0], np.ones(4)),
+    (qml.CRZ, [np.pi / 2], np.array([1, 1, np.exp(-1j * np.pi / 4), np.exp(1j * np.pi / 4)])),
+    (qml.CRZ, [np.pi], np.array([1, 1, -1j, 1j])),
     (
-        qp.CRZ,
+        qml.CRZ,
         [np.array([np.pi / 2, np.pi])],
         [
             np.array([1, 1, np.exp(-1j * np.pi / 4), np.exp(1j * np.pi / 4)]),
             np.array([1, 1, -1j, 1j]),
         ],
     ),
-    (qp.ControlledPhaseShift, [0.123], np.linalg.eigvals(ControlledPhaseShift(0.123))),
+    (qml.ControlledPhaseShift, [0.123], np.linalg.eigvals(ControlledPhaseShift(0.123))),
     (
-        qp.ControlledPhaseShift,
+        qml.ControlledPhaseShift,
         [np.array([0.2, np.pi / 2, -0.1])],
         np.linalg.eigvals(_phase_shift_matrix_broadcasted(np.array([0.2, np.pi / 2, -0.1]))),
     ),
@@ -766,6 +659,18 @@ class TestComputations:
         assert np.allclose(op.compute_matrix(*params), expected_matrix, atol=tol, rtol=0)
         assert np.allclose(op(*params, wires=[0, 1]).matrix(), expected_matrix, atol=tol, rtol=0)
 
+    @pytest.mark.tf
+    @pytest.mark.parametrize("op, params, expected_matrix", EXPECTED_MATRICES)
+    def test_matrix_tf(self, tol, op, params, expected_matrix):
+        """Tests that the correct matrix is returned when using TensorFlow"""
+
+        import tensorflow as tf
+
+        variables = [tf.Variable(param) for param in params]
+
+        assert np.allclose(op.compute_matrix(*variables), expected_matrix, atol=tol, rtol=0)
+        assert np.allclose(op(*variables, wires=[0, 1]).matrix(), expected_matrix, atol=tol, rtol=0)
+
     @pytest.mark.parametrize("op, params, expected_eigvals", EXPECTED_EIGVALS)
     def test_eigvals(self, tol, op, params, expected_eigvals):
         """Tests that the correct eigenvalues are returned"""
@@ -773,116 +678,63 @@ class TestComputations:
         assert np.allclose(op.compute_eigvals(*params), expected_eigvals, atol=tol, rtol=0)
         assert np.allclose(op(*params, wires=[0, 1]).eigvals(), expected_eigvals, atol=tol, rtol=0)
 
+    @pytest.mark.tf
+    @pytest.mark.parametrize("op, params, expected_eigvals", EXPECTED_EIGVALS)
+    def test_eigvals_tf(self, tol, op, params, expected_eigvals):
+        """Tests that the correct eigenvalues are returned when using TensorFlow"""
+
+        import tensorflow as tf
+
+        variables = [tf.Variable(param) for param in params]
+
+        assert np.allclose(op.compute_eigvals(*variables), expected_eigvals, atol=tol, rtol=0)
+        assert np.allclose(
+            op(*variables, wires=[0, 1]).eigvals(), expected_eigvals, atol=tol, rtol=0
+        )
+
 
 def test_simplify_crot():
     """Simplify CRot operations with different parameters."""
 
-    crot_x = qp.CRot(np.pi / 2, 0.1, -np.pi / 2, wires=[0, 1])
+    crot_x = qml.CRot(np.pi / 2, 0.1, -np.pi / 2, wires=[0, 1])
     simplify_crot_x = crot_x.simplify()
 
     assert simplify_crot_x.name == "CRX"
     assert simplify_crot_x.data == (0.1,)
     assert np.allclose(simplify_crot_x.matrix(), crot_x.matrix())
 
-    crot_y = qp.CRot(0, 0.1, 0, wires=[0, 1])
+    crot_y = qml.CRot(0, 0.1, 0, wires=[0, 1])
     simplify_crot_y = crot_y.simplify()
 
     assert simplify_crot_y.name == "CRY"
     assert simplify_crot_y.data == (0.1,)
     assert np.allclose(simplify_crot_y.matrix(), crot_y.matrix())
 
-    crot_z = qp.CRot(0.1, 0, 0.2, wires=[0, 1])
+    crot_z = qml.CRot(0.1, 0, 0.2, wires=[0, 1])
     simplify_crot_z = crot_z.simplify()
 
     assert simplify_crot_z.name == "CRZ"
     assert np.allclose(simplify_crot_z.data, [0.3])
     assert np.allclose(simplify_crot_z.matrix(), crot_z.matrix())
 
-    crot = qp.CRot(0.1, 0.2, 0.3, wires=[0, 1])
+    crot = qml.CRot(0.1, 0.2, 0.3, wires=[0, 1])
     not_simplified_crot = crot.simplify()
 
     assert not_simplified_crot.name == "CRot"
     assert np.allclose(not_simplified_crot.matrix(), crot.matrix())
 
 
-@pytest.mark.parametrize(
-    "control, control_values",
-    [([0, 1], [True, False]), ([10, "a"], (0, 0)), ([2], 1), (2, (True,))],
-)
-@pytest.mark.parametrize(
-    "base_op", [qp.CRX(0.2, [21, 22]), qp.CNOT([21, 22]), qp.CPhase(0.6, [21, 22])]
-)
-def test_controlling_a_controlled_operation(control, control_values, base_op):
-    """Test that a controlled op can be controlled again."""
-    qp.ctrl(base_op, control=control, control_values=control_values)
+controlled_data = [
+    (qml.RX(1.234, wires=0), qml.CRX(1.234, wires=("a", 0))),
+    (qml.RY(1.234, wires=0), qml.CRY(1.234, wires=("a", 0))),
+    (qml.RZ(1.234, wires=0), qml.CRZ(1.234, wires=("a", 0))),
+    (qml.PhaseShift(1.234, wires=0), qml.ControlledPhaseShift(1.234, wires=("a", 0))),
+    (qml.Rot(1.2, 2.3, 3.4, wires=0), qml.CRot(1.2, 2.3, 3.4, wires=("a", 0))),
+]
 
 
-@pytest.mark.parametrize("op_type", (qp.CH, qp.CY, qp.CZ, qp.CNOT))
-def test_tuple_control_wires_non_parametric_ops(op_type):
-    """Test that tuples can be provided as control wire labels."""
-
-    assert op_type([(0, 1), 2]).wires == qp.wires.Wires([(0, 1), 2])
-
-
-@pytest.mark.parametrize("op_type", (qp.CRX, qp.CRY, qp.CRZ, qp.CPhase))
-def test_tuple_control_wires_parametric_ops(op_type):
-    """Test that tuples can be provided as control wire labels."""
-
-    assert op_type(0.123, [(0, 1), 2]).wires == qp.wires.Wires([(0, 1), 2])
-
-
-@pytest.mark.parametrize("op_type, wires", [(qp.CNOT, Wire[2]), (qp.Toffoli, Wire[3])])
-def test_abstract_controlled_ops(op_type, wires):
-    """Tests creating abstract controlled ops as one might for resource keys."""
-    key = op_type(wires)
-
-    assert isinstance(key, op_type)
-    assert isinstance(key.wires, AbstractWires)
-    assert len(key.wires) == len(wires)
-
-
-@pytest.mark.parametrize(
-    "base, control_wires, control_values, expected",
-    [
-        (qp.X(Wire[1]), Wire[1], [1], qp.CNOT(Wire[2])),
-        (qp.CNOT(Wire[2]), Wire[1], [1], qp.Toffoli(Wire[3])),
-        (qp.Y(Wire[1]), Wire[1], [1], qp.CY(Wire[2])),
-    ],
-)
-def test_custom_controlled_ops_dispatch(base, control_wires, control_values, expected):
-    """Tests that we can use the custom dispatch logic with abstract controlled ops."""
-    mapped_op = custom_ctrl_dispatch(base, control_wires, control_values, None, "borrowed")
-    assert mapped_op == expected
-
-
-@pytest.mark.catalyst
-@pytest.mark.parametrize(
-    ("op_type", "rule_name"),
-    [
-        (qp.CNOT, "_cnot_lattice_surgery_ppm"),
-        (qp.CY, "_cy_lattice_surgery_ppm"),
-        (qp.CZ, "_cz_lattice_surgery_ppm"),
-    ],
-)
-def test_ppm_decomposition(op_type, rule_name, seed):
-    """Tests that the PPM decomposition of Hadamard is correct."""
-    rule = qp.list_decomps(op_type)[rule_name]
-    rng = np.random.default_rng(seed)
-    init_state = rng.random(4) + 1j * rng.random(4)
-    init_state /= np.linalg.norm(init_state)
-
-    @qp.qjit(capture=True)
-    @qp.qnode(qp.device("lightning.qubit", wires=[0, 1, 2]))
-    def circuit():
-        qp.StatePrep(init_state, [0, 1])
-        rule([0, 1])
-        op_type([0, 1])
-        return qp.state()
-
-    init_state_full = np.kron(init_state, np.array([1, 0], dtype=complex))
-    assert np.allclose(init_state_full, circuit())
-
-
-def test_CY_decomposition():
-    """The migrated ``CY`` uses its registered graph decomposition rule."""
-    assert qp.CY([0, 1]).decomposition() == [qp.CRY(np.pi, wires=[0, 1]), qp.S(0)]
+@pytest.mark.parametrize("base, cbase", controlled_data)
+def test_controlled_method(base, cbase):
+    """Tests the _controlled method for parametric ops."""
+    # pylint: disable=protected-access
+    assert qml.equal(base._controlled("a"), cbase)

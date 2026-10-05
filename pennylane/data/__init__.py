@@ -15,7 +15,7 @@
 
 .. note::
 
-    To start using datasets, please first see the
+    For more details on using datasets, please see the
     :doc:`quantum datasets quickstart guide </introduction/data>`.
 
 Overview
@@ -37,7 +37,6 @@ Additionally, users can easily create, write to disk, and read custom datasets u
     load
     load_interactive
     list_attributes
-    list_data_names
     list_datasets
 
 In addition, various dataset types are provided
@@ -83,14 +82,15 @@ Creating a Dataset
 
 To create a new dataset in-memory, initialize a new :class:`~.Dataset` with the desired attributes:
 
->>> hamiltonian = qp.Hamiltonian([1., 1.], [qp.Z(0), qp.Z(1)])
->>> eigvals, eigvecs = np.linalg.eigh(qp.matrix(hamiltonian))
->>> dataset = qp.data.Dataset(
+>>> hamiltonian = qml.Hamiltonian([1., 1.], [qml.Z(0), qml.Z(1)])
+>>> eigvals, eigvecs = np.linalg.eigh(qml.matrix(hamiltonian))
+>>> dataset = qml.data.Dataset(
 ...   hamiltonian = hamiltonian,
 ...   eigen = {"eigvals": eigvals, "eigvecs": eigvecs}
 ... )
 >>> dataset.hamiltonian
-1.0 * Z(0) + 1.0 * Z(1)
+(1.0) [Z0]
++ (1.0) [Z1]
 >>> dataset.eigen
 {'eigvals': array([-2.,  0.,  0.,  2.]),
 'eigvecs': array([[0.+0.j, 0.+0.j, 0.+0.j, 1.+0.j],
@@ -146,19 +146,19 @@ Attribute Metadata
 Dataset attributes can also contain additional metadata, such as docstrings. The :func:`~.data.attribute`
 function can be used to attach metadata on assignment or initialization.
 
->>> hamiltonian = qp.Hamiltonian([1., 1.], [qp.Z(0), qp.Z(1)])
->>> eigvals, eigvecs = np.linalg.eigh(qp.matrix(hamiltonian))
->>> dataset = qp.data.Dataset(hamiltonian = qp.data.attribute(
+>>> hamiltonian = qml.Hamiltonian([1., 1.], [qml.Z(0), qml.Z(1)])
+>>> eigvals, eigvecs = np.linalg.eigh(qml.matrix(hamiltonian))
+>>> dataset = qml.data.Dataset(hamiltonian = qml.data.attribute(
 ...     hamiltonian,
 ...     doc="The hamiltonian of the system"))
->>> dataset.eigen = qp.data.attribute(
+>>> dataset.eigen = qml.data.attribute(
 ...     {"eigvals": eigvals, "eigvecs": eigvecs},
-...     doc="Eigenvalues and eigenvectors of the hamiltonian")
+...     doc="Eigenvalues and eigenvectors of the hamiltonain")
 
 This metadata can then be accessed using the :meth:`Dataset.attr_info` mapping:
 
 >>> dataset.attr_info["eigen"]["doc"]
-'Eigenvalues and eigenvectors of the hamiltonian'
+'Eigenvalues and eigenvectors of the hamiltonain'
 
 
 Declarative API
@@ -174,13 +174,13 @@ their associated type and documentation:
 
 .. code-block:: python
 
-    class QuantumOscillator(qp.data.Dataset, data_name="quantum_oscillator", identifiers=["mass", "force_constant"]):
+    class QuantumOscillator(qml.data.Dataset, data_name="quantum_oscillator", identifiers=["mass", "force_constant"]):
         \"""Dataset describing a quantum oscillator.\"""
 
-        mass: float = qp.data.field(doc = "The mass of the particle")
-        force_constant: float = qp.data.field(doc = "The force constant of the oscillator")
-        hamiltonian: qp.Hamiltonian = qp.data.field(doc = "The hamiltonian of the particle")
-        energy_levels: np.ndarray = qp.data.field(doc = "The first 1000 energy levels of the system")
+        mass: float = qml.data.field(doc = "The mass of the particle")
+        force_constant: float = qml.data.field(doc = "The force constant of the oscillator")
+        hamiltonian: qml.Hamiltonian = qml.data.field(doc = "The hamiltonian of the particle")
+        energy_levels: np.ndarray = qml.data.field(doc = "The first 1000 energy levels of the system")
 
 The ``data_name`` keyword specifies a category or descriptive name for the dataset type, and the ``identifiers``
 keyword to the class is used to specify fields that function as parameters, i.e they determine the behaviour
@@ -192,7 +192,7 @@ definition:
 >>> dataset = QuantumOscillator(
 ...     mass=1,
 ...     force_constant=0.5,
-...     hamiltonian=qp.X(0),
+...     hamiltonian=qml.X(0),
 ...     energy_levels=np.array([0.1, 0.2])
 ... )
 >>> dataset.attr_info["mass"]["doc"]
@@ -208,7 +208,6 @@ from .attributes import (
     DatasetMolecule,
     DatasetNone,
     DatasetOperator,
-    DatasetPyTree,
     DatasetScalar,
     DatasetSparseArray,
     DatasetString,
@@ -222,7 +221,6 @@ from .data_manager import (
     FULL,
     list_attributes,
     list_datasets,
-    list_data_names,
     load,
     load_interactive,
 )
@@ -235,7 +233,6 @@ __all__ = (
     "DatasetAttribute",
     "DatasetNotWriteableError",
     "DatasetArray",
-    "DatasetPyTree",
     "DatasetScalar",
     "DatasetString",
     "DatasetList",
@@ -249,7 +246,6 @@ __all__ = (
     "load",
     "load_interactive",
     "list_attributes",
-    "list_data_names",
     "list_datasets",
     "DEFAULT",
     "FULL",

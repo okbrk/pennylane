@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Root mean square propagation optimizer"""
-
 from numpy import sqrt
-
 from .adagrad import AdagradOptimizer
 
 
 class RMSPropOptimizer(AdagradOptimizer):
     r"""Root mean squared propagation optimizer.
 
-    The root mean square propagation optimizer is a modified
-    :class:`Adagrad optimizer <pennylane.optimize.AdagradOptimizer>`,
+    The root mean square progation optimizer is a modified
+    :class:`Adagrad optimizer <pennylane.optmimize.AdagradOptimizer>`,
     with a decay of learning rate adaptation.
 
     Extensions of the Adagrad optimization method generally
@@ -37,10 +35,10 @@ class RMSPropOptimizer(AdagradOptimizer):
 
     Args:
         stepsize (float): the user-defined hyperparameter :math:`\eta`
-            used in the Adagrad optimization (default value: 0.01).
-        decay (float): the learning rate decay :math:`\gamma` (default value: 0.9).
-        eps (float): offset :math:`\epsilon` added for numerical stability (default value: 1e-08).
-            See :class:`Adagrad <pennylane.optimize.AdagradOptimizer>` for more information.
+            used in the Adagrad optmization
+        decay (float): the learning rate decay :math:`\gamma`
+        eps (float): offset :math:`\epsilon` added for numerical stability
+            (see :class:`Adagrad <pennylane.optmimize.AdagradOptimizer>`)
 
     """
 

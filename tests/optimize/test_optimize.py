@@ -14,19 +14,18 @@
 """
 Unit tests for the :mod:`pennylane` optimizers.
 """
-
 # pylint: disable=redefined-outer-name,too-few-public-methods
 import pytest
 
-import pennylane as qp
+import pennylane as qml
 from pennylane import numpy as np
 from pennylane.optimize import (
-    AdagradOptimizer,
-    AdamOptimizer,
     GradientDescentOptimizer,
     MomentumOptimizer,
     NesterovMomentumOptimizer,
+    AdagradOptimizer,
     RMSPropOptimizer,
+    AdamOptimizer,
 )
 
 
@@ -118,7 +117,7 @@ class TestOverOpts:
         """Check non-trainable argument does not get updated"""
 
         def func(a, b, c, d):
-            assert qp.math.allclose(b, 1.0)
+            assert qml.math.allclose(b, 1.0)
             return a * b * c * d
 
         a = np.array(0.1, requires_grad=True)
@@ -160,12 +159,12 @@ class TestOverOpts:
     def test_one_trainable_one_non_trainable(self, opt):
         """Tests that a cost function that takes one trainable and one
         non-trainable parameter executes well."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x):
-            qp.RX(x, wires=0)
-            return qp.expval(qp.PauliZ(0) @ qp.PauliZ(1))
+            qml.RX(x, wires=0)
+            return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1))
 
         def cost(x, target):
             return (circuit(x) - target) ** 2
@@ -184,12 +183,12 @@ class TestOverOpts:
     def test_one_non_trainable_one_trainable(self, opt):
         """Tests that a cost function that takes one non-trainable and one
         trainable parameter executes well."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x):
-            qp.RX(x, wires=0)
-            return qp.expval(qp.PauliZ(0) @ qp.PauliZ(1))
+            qml.RX(x, wires=0)
+            return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1))
 
         def cost(target, x):  # Note: the order of the arguments has been swapped
             return (circuit(x) - target) ** 2
@@ -207,13 +206,13 @@ class TestOverOpts:
     def test_two_trainable_args(self, opt):
         """Tests that a cost function that takes at least two trainable
         arguments executes well."""
-        dev = qp.device("default.qubit", wires=2)
+        dev = qml.device("default.qubit", wires=2)
 
-        @qp.qnode(dev)
+        @qml.qnode(dev)
         def circuit(x, y):
-            qp.RX(x, wires=0)
-            qp.RX(y, wires=0)
-            return qp.expval(qp.PauliZ(0) @ qp.PauliZ(1))
+            qml.RX(x, wires=0)
+            qml.RX(y, wires=0)
+            return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1))
 
         def cost(x, y, target):
             return (circuit(x, y) - target) ** 2

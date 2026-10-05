@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Nesterov momentum optimizer"""
-
 from pennylane._grad import grad as get_gradient
-
 from .momentum import MomentumOptimizer
 
 
@@ -34,19 +32,19 @@ class NesterovMomentumOptimizer(MomentumOptimizer):
     * :math:`m`: the momentum
 
     Args:
-        stepsize (float): the user-defined hyperparameter :math:`\eta` (default value: 0.01).
-        momentum (float): the user-defined hyperparameter :math:`m` (default value: 0.9).
+        stepsize (float): user-defined hyperparameter :math:`\eta`
+        momentum (float): user-defined hyperparameter :math:`m`
 
     .. note::
 
-        When using ``torch`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
+        When using ``torch``, ``tensorflow`` or ``jax`` interfaces, refer to :doc:`Gradients and training </introduction/interfaces>` for suitable optimizers.
 
     """
 
     def compute_grad(
         self, objective_fn, args, kwargs, grad_fn=None
     ):  # pylint: disable=arguments-renamed
-        r"""Compute the gradient of the objective function at the shifted point :math:`(x -
+        r"""Compute gradient of the objective function at at the shifted point :math:`(x -
         m\times\text{accumulation})` and return it along with the objective function forward pass
         (if available).
 
@@ -62,7 +60,7 @@ class NesterovMomentumOptimizer(MomentumOptimizer):
         Returns:
             tuple [array]: the NumPy array containing the gradient :math:`\nabla f(x^{(t)})` and the
             objective function output. If ``grad_fn`` is provided, the objective function
-            will not be evaluated and instead ``None`` will be returned.
+            will not be evaluted and instead ``None`` will be returned.
         """
         shifted_args = list(args)
 

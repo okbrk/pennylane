@@ -14,12 +14,9 @@
 r"""
 Contains the BasicEntanglerLayers template.
 """
-
-from pennylane import capture, math
-from pennylane.control_flow import for_loop
-from pennylane.core.operator import Operation, abstractify
-from pennylane.decomposition import add_decomps, register_resources
-from pennylane.ops import CNOT, RX, cond
+# pylint: disable=consider-using-enumerate,too-many-arguments
+import pennylane as qml
+from pennylane.operation import Operation, AnyWires
 
 
 class BasicEntanglerLayers(Operation):
@@ -53,7 +50,7 @@ class BasicEntanglerLayers(Operation):
         weights (tensor_like): Weight tensor of shape ``(L, len(wires))``. Each weight is used as a parameter
             for the rotation.
         wires (Iterable): wires that the template acts on
-        rotation (Type[pennylane.operation.Operation]): one-parameter single-qubit gate to use,
+        rotation (pennylane.ops.Operation): one-parameter single-qubit gate to use,
             if ``None``, :class:`~pennylane.ops.RX` is used as default
 
     Raises:
@@ -66,19 +63,19 @@ class BasicEntanglerLayers(Operation):
 
         .. code-block:: python
 
-            import pennylane as qp
+            import pennylane as qml
             from math import pi
 
             n_wires = 3
-            dev = qp.device('default.qubit', wires=n_wires)
+            dev = qml.device('default.qubit', wires=n_wires)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(weights):
-                qp.BasicEntanglerLayers(weights=weights, wires=range(n_wires))
-                return [qp.expval(qp.Z(i)) for i in range(n_wires)]
+                qml.BasicEntanglerLayers(weights=weights, wires=range(n_wires))
+                return [qml.expval(qml.Z(i)) for i in range(n_wires)]
 
         >>> circuit([[pi, pi, pi]])
-        [np.float64(1.0), np.float64(1.0), np.float64(-1.0)]
+        [1., 1., -1.]
 
         **Parameter shape**
 
@@ -88,7 +85,7 @@ class BasicEntanglerLayers(Operation):
 
         .. code-block:: python
 
-            shape = qp.BasicEntanglerLayers.shape(n_layers=2, n_wires=2)
+            shape = qml.BasicEntanglerLayers.shape(n_layers=2, n_wires=2)
             weights = np.random.random(size=shape)
 
         **No periodic boundary for two wires**
@@ -99,15 +96,15 @@ class BasicEntanglerLayers(Operation):
         .. code-block:: python
 
             n_wires = 2
-            dev = qp.device('default.qubit', wires=n_wires)
+            dev = qml.device('default.qubit', wires=n_wires)
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(weights):
-                qp.BasicEntanglerLayers(weights=weights, wires=range(n_wires))
-                return [qp.expval(qp.Z(i)) for i in range(n_wires)]
+                qml.BasicEntanglerLayers(weights=weights, wires=range(n_wires))
+                return [qml.expval(qml.Z(i)) for i in range(n_wires)]
 
         >>> circuit([[pi, pi]])
-        [np.float64(-1.0), np.float64(1.0)]
+        [-1, 1]
 
 
         **Changing the rotation gate**
@@ -116,25 +113,24 @@ class BasicEntanglerLayers(Operation):
 
         .. code-block:: python
 
-            @qp.qnode(dev)
+            @qml.qnode(dev)
             def circuit(weights):
-                qp.BasicEntanglerLayers(weights=weights, wires=range(n_wires), rotation=qp.RZ)
-                return [qp.expval(qp.Z(i)) for i in range(n_wires)]
+                qml.BasicEntanglerLayers(weights=weights, wires=range(n_wires), rotation=qml.RZ)
+                return [qml.expval(qml.Z(i)) for i in range(n_wires)]
 
         Accidentally using a gate that expects more parameters throws a
         ``ValueError: Wrong number of parameters``.
     """
 
+    num_wires = AnyWires
     grad_method = None
 
-    resource_keys = {"repeat", "num_wires", "rotation"}
-
-    def __init__(self, weights, wires=None, rotation=None):
+    def __init__(self, weights, wires=None, rotation=None, id=None):
         # convert weights to numpy array if weights is list otherwise keep unchanged
-        interface = math.get_interface(weights)
-        weights = math.asarray(weights, like=interface)
+        interface = qml.math.get_interface(weights)
+        weights = qml.math.asarray(weights, like=interface)
 
-        shape = math.shape(weights)
+        shape = qml.math.shape(weights)
         if not (len(shape) == 3 or len(shape) == 2):  # 3 is when batching, 2 is no batching
             raise ValueError(
                 f"Weights tensor must be 2-dimensional "
@@ -147,20 +143,12 @@ class BasicEntanglerLayers(Operation):
                 f"Weights tensor must have last dimension of length {len(wires)}; got {shape[-1]}"
             )
 
-        self._hyperparameters = {"rotation": rotation or RX}
-        super().__init__(weights, wires=wires)
+        self._hyperparameters = {"rotation": rotation or qml.RX}
+        super().__init__(weights, wires=wires, id=id)
 
     @property
     def num_params(self):
         return 1
-
-    @property
-    def resource_params(self) -> dict:
-        return {
-            "repeat": math.shape(self.parameters[0])[-2],
-            "num_wires": len(self.wires),
-            "rotation": self.hyperparameters["rotation"],
-        }
 
     @staticmethod
     def compute_decomposition(weights, wires, rotation):  # pylint: disable=arguments-differ
@@ -168,13 +156,15 @@ class BasicEntanglerLayers(Operation):
 
         .. math:: O = O_1 O_2 \dots O_n.
 
+
+
         .. seealso:: :meth:`~.BasicEntanglerLayers.decomposition`.
 
         Args:
             weights (tensor_like): Weight tensor of shape ``(L, len(wires))``. Each weight is used as a parameter
                 for the rotation.
             wires (Any or Iterable[Any]): wires that the operator acts on
-            rotation (Type[pennylane.ops.Operation]): one-parameter single-qubit gate to use
+            rotation (pennylane.ops.Operation): one-parameter single-qubit gate to use
 
         Returns:
             list[.Operator]: decomposition of the operator
@@ -182,12 +172,15 @@ class BasicEntanglerLayers(Operation):
         **Example**
 
         >>> weights = torch.tensor([[1.2, -0.4], [0.3, -0.2]])
-        >>> qp.BasicEntanglerLayers.compute_decomposition(weights, wires=["a", "b"], rotation=qp.RX)
-        [RX(1.200..., wires=['a']), RX(-0.400..., wires=['b']), CNOT(wires=['a', 'b']), RX(0.300..., wires=['a']), RX(-0.200..., wires=['b']), CNOT(wires=['a', 'b'])]
+        >>> qml.BasicEntanglerLayers.compute_decomposition(weights, wires=["a", "b"], rotation=qml.RX)
+        [RX(tensor(1.2000), wires=['a']), RX(tensor(-0.4000), wires=['b']),
+        CNOT(wires=['a', 'b']),
+        RX(tensor(0.3000), wires=['a']), RX(tensor(-0.2000), wires=['b']),
+        CNOT(wires=['a', 'b'])]
         """
         # first dimension of the weights tensor (second when batching) determines
         # the number of layers
-        repeat = math.shape(weights)[-2]
+        repeat = qml.math.shape(weights)[-2]
 
         op_list = []
         for layer in range(repeat):
@@ -195,12 +188,12 @@ class BasicEntanglerLayers(Operation):
                 op_list.append(rotation(weights[..., layer, i], wires=wires[i : i + 1]))
 
             if len(wires) == 2:
-                op_list.append(CNOT(wires=wires))
+                op_list.append(qml.CNOT(wires=wires))
 
             elif len(wires) > 2:
                 for i in range(len(wires)):
                     w = wires.subset([i, i + 1], periodic_boundary=True)
-                    op_list.append(CNOT(wires=w))
+                    op_list.append(qml.CNOT(wires=w))
 
         return op_list
 
@@ -217,47 +210,3 @@ class BasicEntanglerLayers(Operation):
         """
 
         return n_layers, n_wires
-
-
-def _basic_entangler_resources(repeat, num_wires, rotation):
-    resources = {abstractify(rotation): repeat * num_wires}
-
-    if num_wires == 2:
-        resources[CNOT] = repeat
-
-    elif num_wires > 2:
-        resources[CNOT] = repeat * num_wires
-
-    return resources
-
-
-@register_resources(_basic_entangler_resources)
-def _basic_entangler_decomposition(weights, wires, rotation):
-    repeat = math.shape(weights)[-2]
-
-    if capture.enabled():
-        weights, wires = math.array(weights, like="jax"), math.array(wires, like="jax")
-
-    @for_loop(repeat)
-    def repeat_loop(layer):
-
-        @for_loop(len(wires))
-        def wires_loop(i):
-            rotation(weights[..., layer, i], wires=wires[i])
-
-        wires_loop()  # pylint: disable=no-value-for-parameter
-
-        def elif_body():
-            for i in range(len(wires)):  # pylint: disable=consider-using-enumerate
-                j = (i + 1) % len(wires)
-                CNOT(wires=[wires[i], wires[j]])
-
-        def true_body():
-            CNOT(wires=wires)
-
-        cond(len(wires) == 2, true_body, false_fn=None, elifs=((len(wires) > 2, elif_body),))()
-
-    repeat_loop()  # pylint: disable=no-value-for-parameter
-
-
-add_decomps(BasicEntanglerLayers, _basic_entangler_decomposition)

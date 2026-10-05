@@ -14,13 +14,81 @@
 """
 Unit tests for the :func:`pennylane.math.is_abstract` function.
 """
-
 import functools
 
 import numpy as np
 import pytest
 
-import pennylane as qp
+import pennylane as qml
+
+
+@pytest.mark.tf
+class TestTensorFlow:
+    """Test that tensorflow integrates with is_abstract"""
+
+    def test_eager(self):
+        """Test that no tensors are abstract when in eager mode"""
+        import tensorflow as tf
+
+        def cost(x, w):
+            y = x**2
+            z = tf.ones([2, 2])
+
+            assert tf.executing_eagerly()
+
+            assert not qml.math.is_abstract(w)
+            assert not qml.math.is_abstract(x)
+            assert not qml.math.is_abstract(y)
+            assert not qml.math.is_abstract(z)
+
+            return tf.reduce_sum(y)
+
+        x = tf.Variable([0.5, 0.1])
+        w = tf.constant(0.1)
+
+        assert not qml.math.is_abstract(w)
+        assert not qml.math.is_abstract(x)
+
+        with tf.GradientTape() as tape:
+            res = cost(x, w)
+
+        assert res == 0.26
+
+        grad = tape.gradient(res, x)
+        assert np.allclose(grad, 2 * x)
+
+    @pytest.mark.parametrize("jit_compile", [True, False])
+    def test_jit(self, jit_compile):
+        """Test that all tensors are abstract when in autograd mode"""
+        import tensorflow as tf
+
+        @tf.function(jit_compile=jit_compile)
+        def cost(x, w):
+            y = x**2
+            z = tf.ones([2, 2])
+
+            assert not tf.executing_eagerly()
+
+            assert qml.math.is_abstract(w)
+            assert qml.math.is_abstract(x)
+            assert qml.math.is_abstract(y)
+            assert qml.math.is_abstract(z)
+
+            return tf.reduce_sum(y)
+
+        x = tf.Variable([0.5, 0.1])
+        w = tf.constant(0.1)
+
+        assert not qml.math.is_abstract(w)
+        assert not qml.math.is_abstract(x)
+
+        with tf.GradientTape() as tape:
+            res = cost(x, w)
+
+        assert res == 0.26
+
+        grad = tape.gradient(res, x)
+        assert np.allclose(grad, 2 * x)
 
 
 @pytest.mark.jax
@@ -36,18 +104,18 @@ class TestJAX:
             y = x**2
             z = jnp.ones([2, 2])
 
-            assert not qp.math.is_abstract(w)
-            assert not qp.math.is_abstract(x)
-            assert not qp.math.is_abstract(y)
-            assert not qp.math.is_abstract(z)
+            assert not qml.math.is_abstract(w)
+            assert not qml.math.is_abstract(x)
+            assert not qml.math.is_abstract(y)
+            assert not qml.math.is_abstract(z)
 
             return jnp.sum(y)
 
         x = jnp.array([0.5, 0.1])
         w = jnp.array(0.1)
 
-        assert not qp.math.is_abstract(w)
-        assert not qp.math.is_abstract(x)
+        assert not qml.math.is_abstract(w)
+        assert not qml.math.is_abstract(x)
 
         res = cost(x, w)
         assert res == 0.26
@@ -67,19 +135,19 @@ class TestJAX:
             y = x**2
             z = jnp.ones([2, 2])
 
-            assert qp.math.is_abstract(w) == w_is_abstract
+            assert qml.math.is_abstract(w) == w_is_abstract
 
-            assert qp.math.is_abstract(x)
-            assert qp.math.is_abstract(y)
-            assert qp.math.is_abstract(z)
+            assert qml.math.is_abstract(x)
+            assert qml.math.is_abstract(y)
+            assert qml.math.is_abstract(z)
 
             return jnp.sum(y)
 
         x = jnp.array([0.5, 0.1])
         w = jnp.array(0.1)
 
-        assert not qp.math.is_abstract(w)
-        assert not qp.math.is_abstract(x)
+        assert not qml.math.is_abstract(w)
+        assert not qml.math.is_abstract(x)
 
         res = cost(x, w)
         assert res == 0.26

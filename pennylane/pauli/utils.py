@@ -20,21 +20,19 @@ representation of Pauli words and applications, see:
 * `arXiv:1701.08213 <https://arxiv.org/abs/1701.08213>`_
 * `arXiv:1907.09386 <https://arxiv.org/abs/1907.09386>`_
 """
-
-from functools import lru_cache, singledispatch
+from functools import lru_cache, reduce, singledispatch
 from itertools import product
+from typing import List, Union
 
 import numpy as np
 
-import pennylane as qp
-from pennylane.ops import Identity, PauliX, PauliY, PauliZ, Prod, SProd, Sum
+import pennylane as qml
+from pennylane.operation import Tensor
+from pennylane.ops import Hamiltonian, Identity, PauliX, PauliY, PauliZ, Prod, SProd
 from pennylane.wires import Wires
 
-# Define constants that are used often within the functions in this module
+# To make this quicker later on
 ID_MAT = np.eye(2)
-_PAULI_MAP = {"X": PauliX, "Y": PauliY, "Z": PauliZ}
-_BINARY_PAULI_MAP = {(1, 0): PauliX, (1, 1): PauliY, (0, 1): PauliZ}
-_PAULI_STRING_SET = frozenset(("I", "X", "Y", "Z"))
 
 
 def _wire_map_from_pauli_pair(pauli_word_1, pauli_word_2):
@@ -60,16 +58,18 @@ def is_pauli_word(observable):
 
     * A single pauli operator (see :class:`~.PauliX` for an example).
 
+    * A :class:`.Tensor` instance containing Pauli operators.
+
     * A :class:`.Prod` instance containing Pauli operators.
 
     * A :class:`.SProd` instance containing a valid Pauli word.
 
-    * A :class:`.Sum` instance with only one term.
+    * A :class:`.Hamiltonian` instance with only one term.
 
     .. Warning::
 
         This function will only confirm that all operators are Pauli or Identity operators,
-        and not whether the observable is mathematically a Pauli word.
+        and not whether the Observable is mathematically a Pauli word.
         If an Observable consists of multiple Pauli operators targeting the same wire, the
         function will return ``True`` regardless of any complex coefficients.
 
@@ -82,13 +82,13 @@ def is_pauli_word(observable):
 
     **Example**
 
-    >>> is_pauli_word(qp.Identity(0))
+    >>> is_pauli_word(qml.Identity(0))
     True
-    >>> is_pauli_word(qp.X(0) @ qp.Z(2))
+    >>> is_pauli_word(qml.X(0) @ qml.Z(2))
     True
-    >>> is_pauli_word(qp.Z(0) @ qp.Hadamard(1))
+    >>> is_pauli_word(qml.Z(0) @ qml.Hadamard(1))
     False
-    >>> is_pauli_word(4 * qp.X(0) @ qp.Z(0))
+    >>> is_pauli_word(4 * qml.X(0) @ qml.Z(0))
     True
     """
     return _is_pauli_word(observable) or (len(observable.pauli_rep or []) == 1)
@@ -108,15 +108,20 @@ def _is_pauli_word(observable):  # pylint:disable=unused-argument
 @_is_pauli_word.register(PauliZ)
 @_is_pauli_word.register(Identity)
 def _is_pw_pauli(
-    observable: PauliX | PauliY | PauliZ | Identity,
-):
+    observable: Union[PauliX, PauliY, PauliZ, Identity]
+):  # pylint:disable=unused-argument
     return True
 
 
-@_is_pauli_word.register(Sum)
-def _is_pw_ham(observable: Sum):
-    ops = observable.terms()[1]
-    return False if len(ops) != 1 else is_pauli_word(ops[0])
+@_is_pauli_word.register
+def _is_pw_tensor(observable: Tensor):
+    pauli_word_names = ["Identity", "PauliX", "PauliY", "PauliZ"]
+    return set(observable.name).issubset(pauli_word_names)
+
+
+@_is_pauli_word.register
+def _is_pw_ham(observable: Hamiltonian):
+    return False if len(observable.ops) != 1 else is_pauli_word(observable.ops[0])
 
 
 @_is_pauli_word.register
@@ -130,31 +135,33 @@ def _is_pw_sprod(observable: SProd):
 
 
 def are_identical_pauli_words(pauli_1, pauli_2):
+    # pylint: disable=isinstance-second-argument-not-valid-type
     """Performs a check if two Pauli words have the same ``wires`` and ``name`` attributes.
 
-    This is a convenience function that checks if two given :class:`~.Prod`
+    This is a convenience function that checks if two given :class:`~.Tensor` or :class:`~.Prod`
     instances specify the same Pauli word.
 
     Args:
-        pauli_1 (Union[Identity, PauliX, PauliY, PauliZ, Prod, SProd]): the first Pauli word
-        pauli_2 (Union[Identity, PauliX, PauliY, PauliZ, Prod, SProd]): the second Pauli word
+        pauli_1 (Union[Identity, PauliX, PauliY, PauliZ, Tensor, Prod, SProd]): the first Pauli word
+        pauli_2 (Union[Identity, PauliX, PauliY, PauliZ, Tensor, Prod, SProd]): the second Pauli word
 
     Returns:
         bool: whether ``pauli_1`` and ``pauli_2`` have the same wires and name attributes
 
     Raises:
         TypeError: if ``pauli_1`` or ``pauli_2`` are not :class:`~.Identity`, :class:`~.PauliX`,
-            :class:`~.PauliY`, :class:`~.PauliZ`, :class:`~.SProd`, or :class:`~.Prod` instances
+            :class:`~.PauliY`, :class:`~.PauliZ`, :class:`~.Tensor`, :class:`~.SProd`, or
+            :class:`~.Prod` instances
 
     **Example**
 
-    >>> are_identical_pauli_words(qp.Z(0) @ qp.Z(1), qp.Z(1) @ qp.Z(0))
+    >>> are_identical_pauli_words(qml.Z(0) @ qml.Z(1), qml.Z(0) @ qml.Z(1))
     True
-    >>> are_identical_pauli_words(qp.I(0) @ qp.X(1), qp.X(1))
-    True
-    >>> are_identical_pauli_words(qp.Z(0) @ qp.Z(1), qp.Z(0) @ qp.X(3))
+    >>> are_identical_pauli_words(qml.Z(0) @ qml.Z(1), qml.Z(0) @ qml.X(3))
     False
     """
+    if pauli_1.name == "Hamiltonian" or pauli_2.name == "Hamiltonian":
+        return False
     if not (is_pauli_word(pauli_1) and is_pauli_word(pauli_2)):
         raise TypeError(f"Expected Pauli word observables, instead got {pauli_1} and {pauli_2}.")
 
@@ -165,19 +172,20 @@ def are_identical_pauli_words(pauli_1, pauli_2):
 
 
 def pauli_to_binary(pauli_word, n_qubits=None, wire_map=None, check_is_pauli_word=True):
-    """Converts a Pauli word to the binary vector (symplectic) representation.
+    # pylint: disable=isinstance-second-argument-not-valid-type
+    """Converts a Pauli word to the binary vector representation.
 
     This functions follows convention that the first half of binary vector components specify
     PauliX placements while the last half specify PauliZ placements.
 
     Args:
-        pauli_word (Union[Identity, PauliX, PauliY, PauliZ, Prod, SProd]): the Pauli word to be
+        pauli_word (Union[Identity, PauliX, PauliY, PauliZ, Tensor, Prod, SProd]): the Pauli word to be
             converted to binary vector representation
         n_qubits (int): number of qubits to specify dimension of binary vector representation
         wire_map (dict): dictionary containing all wire labels used in the Pauli word as keys, and
             unique integer labels as their values
         check_is_pauli_word (bool): If True (default) then a check is run to verify that pauli_word
-            is in fact a Pauli word.
+            is infact a Pauli word
 
     Returns:
         array: the ``2*n_qubits`` dimensional binary vector representation of the input Pauli word
@@ -194,9 +202,9 @@ def pauli_to_binary(pauli_word, n_qubits=None, wire_map=None, check_is_pauli_wor
     Pauli operations will be read from left-to-right in the tensor product when ``wire_map`` is
     unspecified, e.g.,
 
-    >>> pauli_to_binary(qp.X('a') @ qp.Y('b') @ qp.Z('c'))
+    >>> pauli_to_binary(qml.X('a') @ qml.Y('b') @ qml.Z('c'))
     array([1., 1., 0., 0., 1., 1.])
-    >>> pauli_to_binary(qp.X('c') @ qp.Y('a') @ qp.Z('b'))
+    >>> pauli_to_binary(qml.X('c') @ qml.Y('a') @ qml.Z('b'))
     array([1., 1., 0., 0., 1., 1.])
 
     The above cases have the same binary representation since they are equivalent up to a
@@ -205,9 +213,9 @@ def pauli_to_binary(pauli_word, n_qubits=None, wire_map=None, check_is_pauli_wor
     keyword argument ``wire_map`` to set this enumeration.
 
     >>> wire_map = {'a': 0, 'b': 1, 'c': 2}
-    >>> pauli_to_binary(qp.X('a') @ qp.Y('b') @ qp.Z('c'), wire_map=wire_map)
+    >>> pauli_to_binary(qml.X('a') @ qml.Y('b') @ qml.Z('c'), wire_map=wire_map)
     array([1., 1., 0., 0., 1., 1.])
-    >>> pauli_to_binary(qp.X('c') @ qp.Y('a') @ qp.Z('b'), wire_map=wire_map)
+    >>> pauli_to_binary(qml.X('c') @ qml.Y('a') @ qml.Z('b'), wire_map=wire_map)
     array([1., 0., 1., 1., 1., 0.])
 
     Now the two Pauli words are distinct in the binary vector representation, as the vector
@@ -217,38 +225,38 @@ def pauli_to_binary(pauli_word, n_qubits=None, wire_map=None, check_is_pauli_wor
     If ``n_qubits`` is unspecified, the dimensionality of the vector representation will be inferred
     from the size of support of the Pauli word,
 
-    >>> pauli_to_binary(qp.X(0) @ qp.X(1))
+    >>> pauli_to_binary(qml.X(0) @ qml.X(1))
     array([1., 1., 0., 0.])
-    >>> pauli_to_binary(qp.X(0) @ qp.X(5))
+    >>> pauli_to_binary(qml.X(0) @ qml.X(5))
     array([1., 1., 0., 0.])
 
     Dimensionality higher than twice the support can be specified by ``n_qubits``,
 
-    >>> pauli_to_binary(qp.X(0) @ qp.X(1), n_qubits=6)
+    >>> pauli_to_binary(qml.X(0) @ qml.X(1), n_qubits=6)
     array([1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
-    >>> pauli_to_binary(qp.X(0) @ qp.X(5), n_qubits=6)
+    >>> pauli_to_binary(qml.X(0) @ qml.X(5), n_qubits=6)
     array([1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
 
     For these Pauli words to have a consistent mapping to vector representation, we once again
     need to specify a ``wire_map``.
 
     >>> wire_map = {0:0, 1:1, 5:5}
-    >>> pauli_to_binary(qp.X(0) @ qp.X(1), n_qubits=6, wire_map=wire_map)
+    >>> pauli_to_binary(qml.X(0) @ qml.X(1), n_qubits=6, wire_map=wire_map)
     array([1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
-    >>> pauli_to_binary(qp.X(0) @ qp.X(5), n_qubits=6, wire_map=wire_map)
+    >>> pauli_to_binary(qml.X(0) @ qml.X(5), n_qubits=6, wire_map=wire_map)
     array([1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.])
 
     Note that if ``n_qubits`` is unspecified and ``wire_map`` is specified, the dimensionality of the
     vector representation will be inferred from the highest integer in ``wire_map.values()``.
 
     >>> wire_map = {0:0, 1:1, 5:5}
-    >>> pauli_to_binary(qp.X(0) @ qp.X(5),  wire_map=wire_map)
+    >>> pauli_to_binary(qml.X(0) @ qml.X(5),  wire_map=wire_map)
     array([1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.])
     """
     wire_map = wire_map or {w: i for i, w in enumerate(pauli_word.wires)}
 
     if check_is_pauli_word and not is_pauli_word(pauli_word):
-        raise TypeError(f"Expected a Pauli word Operator instance, instead got {pauli_word}.")
+        raise TypeError(f"Expected a Pauli word Observable instance, instead got {pauli_word}.")
 
     pw = next(iter(pauli_word.pauli_rep))
 
@@ -275,7 +283,7 @@ def pauli_to_binary(pauli_word, n_qubits=None, wire_map=None, check_is_pauli_wor
 
 
 def binary_to_pauli(binary_vector, wire_map=None):  # pylint: disable=too-many-branches
-    """Converts a binary vector of even dimension to an Operator instance.
+    """Converts a binary vector of even dimension to an Observable instance.
 
     This functions follows the convention that the first half of binary vector components specify
     PauliX placements while the last half specify PauliZ placements.
@@ -287,9 +295,11 @@ def binary_to_pauli(binary_vector, wire_map=None):  # pylint: disable=too-many-b
             unique integer labels as their values
 
     Returns:
-        Union[Prod]: The Pauli word corresponding to the input binary vector.
+        Union[Tensor, Prod]: The Pauli word corresponding to the input binary vector.
         Note that if a zero vector is input, then the resulting Pauli word will be
-        an :class:`~.Identity` instance.
+        an :class:`~.Identity` instance. If new operator arithmetic is enabled via
+        :func:`~.pennylane.operation.enable_new_opmath`, a :class:`~.Prod` will be
+        returned, else a :class:`~.Tensor` will be returned.
 
     Raises:
         TypeError: if length of binary vector is not even, or if vector does not have strictly
@@ -301,13 +311,13 @@ def binary_to_pauli(binary_vector, wire_map=None):  # pylint: disable=too-many-b
     components, i.e., the ``i`` and ``N+i`` components specify the Pauli operation on wire ``i``,
 
     >>> binary_to_pauli([0,1,1,0,1,0])
-    Y(1) @ X(2)
+    Tensor(Y(1), X(2))
 
     An arbitrary labelling can be assigned by using ``wire_map``:
 
     >>> wire_map = {'a': 0, 'b': 1, 'c': 2}
     >>> binary_to_pauli([0,1,1,0,1,0], wire_map=wire_map)
-    Y('b') @ X('c')
+    Tensor(Y('b'), X('c'))
 
     Note that the values of ``wire_map``, if specified, must be ``0,1,..., N``,
     where ``N`` is the dimension of the vector divided by two, i.e.,
@@ -339,16 +349,28 @@ def binary_to_pauli(binary_vector, wire_map=None):  # pylint: disable=too-many-b
             )
         label_map = {explicit_index: wire_label for wire_label, explicit_index in wire_map.items()}
 
-    pauli_word = tuple(
-        _BINARY_PAULI_MAP[(binary_vector[i], binary_vector[n_qubits + i])](label_map[i])
-        for i in range(n_qubits)
-        if (binary_vector[i], binary_vector[n_qubits + i]) != (0, 0)
-    )
+    pauli_word = None
+    for i in range(n_qubits):
+        operation = None
+        if binary_vector[i] == 1 and binary_vector[n_qubits + i] == 0:
+            operation = PauliX(wires=Wires([label_map[i]]))
 
-    if len(pauli_word) == 0:
+        elif binary_vector[i] == 1 and binary_vector[n_qubits + i] == 1:
+            operation = PauliY(wires=Wires([label_map[i]]))
+
+        elif binary_vector[i] == 0 and binary_vector[n_qubits + i] == 1:
+            operation = PauliZ(wires=Wires([label_map[i]]))
+
+        if operation is not None:
+            if pauli_word is None:
+                pauli_word = operation
+            else:
+                pauli_word @= operation
+
+    if pauli_word is None:
         return Identity(wires=list(label_map.values())[0])
 
-    return qp.prod(*pauli_word)
+    return pauli_word
 
 
 def pauli_word_to_string(pauli_word, wire_map=None):
@@ -358,11 +380,13 @@ def pauli_word_to_string(pauli_word, wire_map=None):
 
     * A single pauli operator (see :class:`~.PauliX` for an example).
 
+    * A :class:`.Tensor` instance containing Pauli operators.
+
     * A :class:`.Prod` instance containing Pauli operators.
 
     * A :class:`.SProd` instance containing a Pauli operator.
 
-    * A :class:`.Sum` instance with only one term.
+    * A :class:`.Hamiltonian` instance with only one term.
 
     Given a Pauli in observable form, convert it into string of
     characters from ``['I', 'X', 'Y', 'Z']``. This representation is required for
@@ -372,7 +396,7 @@ def pauli_word_to_string(pauli_word, wire_map=None):
 
         This method ignores any potential coefficient multiplying the Pauli word:
 
-        >>> qp.pauli.pauli_word_to_string(3 * qp.X(0) @ qp.Y(1))
+        >>> qml.pauli.pauli_word_to_string(3 * qml.X(0) @ qml.Y(1))
         'XY'
 
     .. warning::
@@ -380,12 +404,12 @@ def pauli_word_to_string(pauli_word, wire_map=None):
         This method assumes all Pauli operators are acting on different wires, ignoring
         any extra operators:
 
-        >>> qp.pauli.pauli_word_to_string(qp.X(0) @ qp.Y(0) @ qp.Y(0))
+        >>> qml.pauli.pauli_word_to_string(qml.X(0) @ qml.Y(0) @ qml.Y(0))
         'X'
 
     Args:
-        pauli_word (Operator): an observable, either a single-qubit observable
-            representing a Pauli group element, or a tensor product of single-qubit observables.
+        pauli_word (Observable): an observable, either a :class:`~.Tensor` instance or
+            single-qubit observable representing a Pauli group element.
         wire_map (dict[Union[str, int], int]): dictionary containing all wire labels used in
             the Pauli word as keys, and unique integer labels as their values
 
@@ -399,15 +423,22 @@ def pauli_word_to_string(pauli_word, wire_map=None):
     **Example**
 
     >>> wire_map = {'a' : 0, 'b' : 1, 'c' : 2}
-    >>> pauli_word = qp.X('a') @ qp.Y('c')
+    >>> pauli_word = qml.X('a') @ qml.Y('c')
     >>> pauli_word_to_string(pauli_word, wire_map=wire_map)
     'XIY'
     """
 
     if not is_pauli_word(pauli_word):
         raise TypeError(f"Expected Pauli word observables, instead got {pauli_word}")
+    if isinstance(pauli_word, Hamiltonian):
+        # hamiltonian contains only one term
+        pauli_word = pauli_word.ops[0]
+    elif isinstance(pauli_word, SProd):
+        pauli_word = pauli_word.base
+    if isinstance(pauli_word, Prod):
+        pauli_word = Tensor(*pauli_word.operands)
 
-    pr = next(iter(pauli_word.pauli_rep.keys()))
+    character_map = {"Identity": "I", "PauliX": "X", "PauliY": "Y", "PauliZ": "Z"}
 
     # If there is no wire map, we must infer from the structure of Paulis
     if wire_map is None:
@@ -418,8 +449,16 @@ def pauli_word_to_string(pauli_word, wire_map=None):
     # Set default value of all characters to identity
     pauli_string = ["I"] * n_qubits
 
-    for wire, op_label in pr.items():
-        pauli_string[wire_map[wire]] = op_label
+    # Special case is when there is a single Pauli term
+    if not isinstance(pauli_word.name, list):
+        if pauli_word.name != "Identity":
+            wire_idx = wire_map[pauli_word.wires[0]]
+            pauli_string[wire_idx] = character_map[pauli_word.name]
+        return "".join(pauli_string)
+
+    for name, wire_label in zip(pauli_word.name, pauli_word.wires):
+        wire_idx = wire_map[wire_label]
+        pauli_string[wire_idx] = character_map[name]
 
     return "".join(pauli_string)
 
@@ -435,7 +474,7 @@ def string_to_pauli_word(pauli_string, wire_map=None):
             the Pauli word as keys, and unique integer labels as their values
 
     Returns:
-        .Operator: The Pauli word representing of ``pauli_string`` on the wires
+        .Observable: The Pauli word representing of ``pauli_string`` on the wires
         enumerated in the wire map.
 
     **Example**
@@ -444,15 +483,23 @@ def string_to_pauli_word(pauli_string, wire_map=None):
     >>> string_to_pauli_word('XIY', wire_map=wire_map)
     X('a') @ Y('c')
     """
+    character_map = {"I": Identity, "X": PauliX, "Y": PauliY, "Z": PauliZ}
 
     if not isinstance(pauli_string, str):
         raise TypeError(f"Input to string_to_pauli_word must be string, obtained {pauli_string}")
+
+    # String can only consist of I, X, Y, Z
+    if any(char not in character_map for char in pauli_string):
+        raise ValueError(
+            "Invalid characters encountered in string_to_pauli_word "
+            f"string {pauli_string}. Permitted characters are 'I', 'X', 'Y', and 'Z'"
+        )
 
     # If no wire map is provided, construct one using integers based on the length of the string
     if wire_map is None:
         wire_map = {x: x for x in range(len(pauli_string))}
 
-    elif len(pauli_string) != len(wire_map):
+    if len(pauli_string) != len(wire_map):
         raise ValueError(
             "Wire map and pauli_string must have the same length to convert "
             "from string to Pauli word."
@@ -463,33 +510,25 @@ def string_to_pauli_word(pauli_string, wire_map=None):
         first_wire = list(wire_map)[0]
         return Identity(first_wire)
 
-    if any(char not in _PAULI_STRING_SET for char in pauli_string):
-        raise ValueError(
-            "Invalid characters encountered in string_to_pauli_word "
-            f"string {pauli_string}. Permitted characters are 'I', 'X', 'Y', and 'Z'"
-        )
+    pauli_word = None
 
-    pauli_word = tuple(
-        _PAULI_MAP[pauli_string[wire_idx]](wire_name)
-        for wire_name, wire_idx in wire_map.items()
-        if pauli_string[wire_idx] != "I"
-    )
+    for wire_name, wire_idx in wire_map.items():
+        pauli_char = pauli_string[wire_idx]
 
-    return qp.prod(*pauli_word)
+        # Don't care about the identity
+        if pauli_char == "I":
+            continue
+
+        if pauli_word is not None:
+            pauli_word = pauli_word @ character_map[pauli_char](wire_name)
+        else:
+            pauli_word = character_map[pauli_char](wire_name)
+
+    return pauli_word
 
 
 def pauli_word_to_matrix(pauli_word, wire_map=None):
     """Convert a Pauli word from a tensor to its matrix representation.
-
-    A Pauli word can be either:
-
-    * A single pauli operator (see :class:`~.PauliX` for an example).
-
-    * A :class:`.Prod` instance containing Pauli operators.
-
-    * A :class:`.SProd` instance containing a Pauli operator.
-
-    * A :class:`.Sum` instance with only one term.
 
     The matrix representation of a Pauli word has dimension :math:`2^n \\times 2^n`,
     where :math:`n` is the number of qubits provided in ``wire_map``. For wires
@@ -497,8 +536,8 @@ def pauli_word_to_matrix(pauli_word, wire_map=None):
     product at the correct positions.
 
     Args:
-        pauli_word (Operator): an observable, either a single-qubit observable
-            representing a Pauli group element, or a tensor product of single-qubit observables.
+        pauli_word (Observable): an observable, either a :class:`~.Tensor`, :class:`~.Prod` or
+            single-qubit observable representing a Pauli group element.
         wire_map (dict[Union[str, int], int]): dictionary containing all wire labels used in
             the Pauli word as keys, and unique integer labels as their values
 
@@ -512,11 +551,11 @@ def pauli_word_to_matrix(pauli_word, wire_map=None):
     **Example**
 
     >>> wire_map = {'a' : 0, 'b' : 1}
-    >>> pauli_word = qp.X('a') @ qp.Y('b')
-    >>> pauli_word_to_matrix(pauli_word, wire_map=wire_map).astype(np.complex128)
-    array([[0.+0.j, 0.+0.j, 0.+0.j, 0.-1.j],
+    >>> pauli_word = qml.X('a') @ qml.Y('b')
+    >>> pauli_word_to_matrix(pauli_word, wire_map=wire_map)
+    array([[0.+0.j, 0.-0.j, 0.+0.j, 0.-1.j],
            [0.+0.j, 0.+0.j, 0.+1.j, 0.+0.j],
-           [0.+0.j, 0.-1.j, 0.+0.j, 0.+0.j],
+           [0.+0.j, 0.-1.j, 0.+0.j, 0.-0.j],
            [0.+1.j, 0.+0.j, 0.+0.j, 0.+0.j]])
     """
     if not is_pauli_word(pauli_word):
@@ -526,7 +565,31 @@ def pauli_word_to_matrix(pauli_word, wire_map=None):
     if wire_map is None:
         wire_map = {pauli_word.wires.labels[i]: i for i in range(len(pauli_word.wires))}
 
-    return pauli_word.matrix(wire_map)
+    n_qubits = len(wire_map)
+
+    # If there is only a single qubit, we can return the matrix directly
+    if n_qubits == 1:
+        return pauli_word.matrix()
+
+    # There may be more than one qubit in the Pauli but still only
+    # one of them with anything acting on it, so take that into account
+    pauli_names = [pauli_word.name] if isinstance(pauli_word.name, str) else pauli_word.name
+
+    # Special case: the identity Pauli
+    if pauli_names == ["Identity"]:
+        return np.eye(2**n_qubits)
+
+    # If there is more than one qubit, we must go through the wire map wire
+    # by wire and pick out the relevant matrices
+    pauli_mats = [ID_MAT for x in range(n_qubits)]
+
+    for wire_label, wire_idx in wire_map.items():
+        if wire_label in pauli_word.wires.labels:
+            op_idx = pauli_word.wires.labels.index(wire_label)
+            # compute_matrix() only works because we work with Paulis here
+            pauli_mats[wire_idx] = getattr(qml, pauli_names[op_idx]).compute_matrix()
+
+    return reduce(np.kron, pauli_mats)
 
 
 def is_qwc(pauli_vec_1, pauli_vec_2):
@@ -635,7 +698,7 @@ def are_pauli_words_qwc(lst_pauli_words):
     number of distinct wire labels used to represent the Pauli words.
 
     Args:
-        lst_pauli_words (list[Operator]): List of observables (assumed to be valid Pauli words).
+        lst_pauli_words (list[Observable]): List of observables (assumed to be valid Pauli words).
 
     Returns:
         (bool): True if they are all qubit-wise commuting, false otherwise. If any of the provided
@@ -650,9 +713,7 @@ def are_pauli_words_qwc(lst_pauli_words):
         op_names = [op.name] if not isinstance(op.name, list) else op.name
         op_wires = op.wires.tolist()
 
-        for op_name, wire in zip(
-            op_names, op_wires, strict=True
-        ):  # iterate over wires of the observable,
+        for op_name, wire in zip(op_names, op_wires):  # iterate over wires of the observable,
             latest_op_name = latest_op_name_per_wire.get(wire, "Identity")
             if latest_op_name != op_name and (
                 op_name != "Identity" and latest_op_name != "Identity"
@@ -666,14 +727,14 @@ def are_pauli_words_qwc(lst_pauli_words):
 
 
 def observables_to_binary_matrix(observables, n_qubits=None, wire_map=None):
-    """Converts a list of Pauli words into a matrix where each row is the binary vector (symplectic)
-    representation of the ``observables``.
+    """Converts a list of Pauli words to the binary vector representation and yields a row matrix
+    of the binary vectors.
 
-    The dimension of the binary vectors (the number of columns) will be implied from the highest wire
-    being acted on non-trivially by the Pauli words in observables.
+    The dimension of the binary vectors will be implied from the highest wire being acted on
+    non-trivially by the Pauli words in observables.
 
     Args:
-        observables (list[Union[Identity, PauliX, PauliY, PauliZ, Prod, SProd]]): the list
+        observables (list[Union[Identity, PauliX, PauliY, PauliZ, Tensor, Prod, SProd]]): the list
             of Pauli words
         n_qubits (int): number of qubits to specify dimension of binary vector representation
         wire_map (dict): dictionary containing all wire labels used in the Pauli words as keys, and
@@ -681,11 +742,11 @@ def observables_to_binary_matrix(observables, n_qubits=None, wire_map=None):
 
 
     Returns:
-        array[array[int]]: a matrix whose rows are Pauli words in binary vector (symplectic) representation.
+        array[array[int]]: a matrix whose rows are Pauli words in binary vector representation
 
     **Example**
 
-    >>> observables_to_binary_matrix([qp.X(0) @ qp.Y(2), qp.Z(0) @ qp.Z(1) @ qp.Z(2)])
+    >>> observables_to_binary_matrix([X(0) @ Y(2), Z(0) @ Z(1) @ Z(2)])
     array([[1., 1., 0., 0., 1., 0.],
            [0., 0., 0., 1., 1., 1.]])
     """
@@ -733,9 +794,11 @@ def qwc_complement_adj_matrix(binary_observables):
 
     **Example**
 
-    >>> binary_observables = np.array([[1,0,1,0,0,1],
-    ...                                [0,1,1,1,0,1],
-    ...                                [0,0,0,1,0,0]])
+    >>> binary_observables
+    array([[1., 0., 1., 0., 0., 1.],
+           [0., 1., 1., 1., 0., 1.],
+           [0., 0., 0., 1., 0., 0.]])
+
     >>> qwc_complement_adj_matrix(binary_observables)
     array([[0., 1., 1.],
            [1., 0., 0.],
@@ -820,12 +883,12 @@ def pauli_group(n_qubits, wire_map=None):
     >>> n_qubits = 3
     >>> for p in pauli_group(n_qubits):
     ...     print(p)
+    ...
     I(0)
     Z(2)
     Z(1)
     Z(1) @ Z(2)
     Z(0)
-    ...
 
     The full Pauli group can then be obtained like so:
 
@@ -839,12 +902,12 @@ def pauli_group(n_qubits, wire_map=None):
     >>> wire_map = {'a' : 0, 'b' : 1, 'c' : 2}
     >>> for p in pauli_group(n_qubits, wire_map=wire_map):
     ...     print(p)
+    ...
     I('a')
     Z('c')
     Z('b')
     Z('b') @ Z('c')
     Z('a')
-    ...
 
     """
     # Cover the case where n_qubits may be passed as a float
@@ -862,8 +925,8 @@ def pauli_group(n_qubits, wire_map=None):
     return _pauli_group_generator(n_qubits, wire_map=wire_map)
 
 
-@lru_cache
-def partition_pauli_group(n_qubits: int) -> list[list[str]]:
+@lru_cache()
+def partition_pauli_group(n_qubits: int) -> List[List[str]]:
     """Partitions the :math:`n`-qubit Pauli group into qubit-wise commuting terms.
 
     The :math:`n`-qubit Pauli group is composed of :math:`4^{n}` terms that can be partitioned into
@@ -878,7 +941,7 @@ def partition_pauli_group(n_qubits: int) -> list[list[str]]:
 
     **Example**
 
-    >>> qp.pauli.partition_pauli_group(3)
+    >>> qml.pauli.partition_pauli_group(3)
     [['III', 'IIZ', 'IZI', 'IZZ', 'ZII', 'ZIZ', 'ZZI', 'ZZZ'],
      ['IIX', 'IZX', 'ZIX', 'ZZX'],
      ['IIY', 'IZY', 'ZIY', 'ZZY'],
@@ -967,28 +1030,28 @@ def qwc_rotation(pauli_operators):
 
     **Example**
 
-    >>> pauli_operators = [qp.X('a'), qp.Y('b'), qp.Z('c')]
+    >>> pauli_operators = [qml.X('a'), qml.Y('b'), qml.Z('c')]
     >>> qwc_rotation(pauli_operators)
     [RY(-1.5707963267948966, wires=['a']), RX(1.5707963267948966, wires=['b'])]
     """
-    paulis_with_identity = (qp.Identity, qp.X, qp.Y, qp.Z)
+    paulis_with_identity = (qml.Identity, qml.X, qml.Y, qml.Z)
     if not all(isinstance(element, paulis_with_identity) for element in pauli_operators):
         raise TypeError(
             f"All values of input pauli_operators must be either Identity, PauliX, PauliY, or PauliZ instances,"
             f" instead got pauli_operators = {pauli_operators}."
         )
     ops = []
-    with qp.QueuingManager.stop_recording():
+    with qml.QueuingManager.stop_recording():
         for pauli in pauli_operators:
-            if isinstance(pauli, qp.X):
-                ops.append(qp.RY(-np.pi / 2, wires=pauli.wires))
+            if isinstance(pauli, qml.X):
+                ops.append(qml.RY(-np.pi / 2, wires=pauli.wires))
 
-            elif isinstance(pauli, qp.Y):
-                ops.append(qp.RX(np.pi / 2, wires=pauli.wires))
+            elif isinstance(pauli, qml.Y):
+                ops.append(qml.RX(np.pi / 2, wires=pauli.wires))
     return ops
 
 
-@qp.QueuingManager.stop_recording()
+@qml.QueuingManager.stop_recording()
 def diagonalize_pauli_word(pauli_word):
     """Transforms the Pauli word to diagonal form in the computational basis.
 
@@ -1000,11 +1063,11 @@ def diagonalize_pauli_word(pauli_word):
 
     Raises:
         TypeError: if the input is not a Pauli word, i.e., a Pauli operator,
-            :class:`~.Identity`, or tensor products thereof
+            :class:`~.Identity`, or :class:`~.Tensor` instances thereof
 
     **Example**
 
-    >>> diagonalize_pauli_word(qp.X('a') @ qp.Y('b') @ qp.Z('c'))
+    >>> diagonalize_pauli_word(qml.X('a') @ qml.Y('b') @ qml.Z('c'))
     Z('a') @ Z('b') @ Z('c')
     """
 
@@ -1014,23 +1077,26 @@ def diagonalize_pauli_word(pauli_word):
     pw = next(iter(pauli_word.pauli_rep))
 
     # ordered as pauli_word, with identities eliminated
-    components = [qp.Z(w) for w in pauli_word.wires if w in pw]
+    components = [qml.Z(w) for w in pauli_word.wires if w in pw]
     if not components:
-        return qp.Identity(wires=pauli_word.wires)
+        return qml.Identity(wires=pauli_word.wires)
 
-    prod = qp.prod(*components)
+    if isinstance(pauli_word, Tensor):
+        return components[0] if len(components) == 1 else Tensor(*components)
+
+    prod = qml.prod(*components)
     coeff = pauli_word.pauli_rep[pw]
-    return prod if qp.math.allclose(coeff, 1) else coeff * prod
+    return prod if qml.math.allclose(coeff, 1) else coeff * prod
 
 
-@qp.QueuingManager.stop_recording()
+@qml.QueuingManager.stop_recording()
 def diagonalize_qwc_pauli_words(
     qwc_grouping,
-):
+):  # pylint: disable=too-many-branches, isinstance-second-argument-not-valid-type
     """Diagonalizes a list of mutually qubit-wise commutative Pauli words.
 
     Args:
-        qwc_grouping (list[Operator]): a list of observables containing mutually
+        qwc_grouping (list[Observable]): a list of observables containing mutually
             qubit-wise commutative Pauli words
 
     Returns:
@@ -1038,7 +1104,7 @@ def diagonalize_qwc_pauli_words(
 
             * list[Operation]: an instance of the qwc_rotation template which
               diagonalizes the qubit-wise commuting grouping
-            * list[Operator]: list of Pauli string observables diagonal in
+            * list[Observable]: list of Pauli string observables diagonal in
               the computational basis
 
     Raises:
@@ -1046,9 +1112,9 @@ def diagonalize_qwc_pauli_words(
 
     **Example**
 
-    >>> qwc_group = [qp.X(0) @ qp.Z(1),
-    ...              qp.X(0) @ qp.Y(3),
-    ...              qp.Z(1) @ qp.Y(3)]
+    >>> qwc_group = [qml.X(0) @ qml.Z(1),
+                     qml.X(0) @ qml.Y(3),
+                     qml.Z(1) @ qml.Y(3)]
     >>> diagonalize_qwc_pauli_words(qwc_group)
     ([RY(-1.5707963267948966, wires=[0]), RX(1.5707963267948966, wires=[3])],
      [Z(0) @ Z(1),
@@ -1060,7 +1126,7 @@ def diagonalize_qwc_pauli_words(
     new_ops = []
     for term in qwc_grouping:
         pauli_rep = term.pauli_rep
-        if pauli_rep is None or len(pauli_rep) > 1:
+        if pauli_rep is None or len(pauli_rep) > 1 or term.name == "Hamiltonian":
             raise ValueError("This function only supports pauli words.")
         pw = next(iter(pauli_rep))
         for wire, pauli_type in pw.items():
@@ -1075,9 +1141,9 @@ def diagonalize_qwc_pauli_words(
     diag_gates = []
     for w, pauli_type in full_pauli_word.items():
         if pauli_type == "X":
-            diag_gates.append(qp.RY(-np.pi / 2, wires=w))
+            diag_gates.append(qml.RY(-np.pi / 2, wires=w))
         elif pauli_type == "Y":
-            diag_gates.append(qp.RX(np.pi / 2, wires=w))
+            diag_gates.append(qml.RX(np.pi / 2, wires=w))
     return diag_gates, new_ops
 
 
@@ -1085,7 +1151,7 @@ def diagonalize_qwc_groupings(qwc_groupings):
     """Diagonalizes a list of qubit-wise commutative groupings of Pauli strings.
 
     Args:
-        qwc_groupings (list[list[Operator]]): a list of mutually qubit-wise commutative groupings
+        qwc_groupings (list[list[Observable]]): a list of mutually qubit-wise commutative groupings
             of Pauli string observables
 
     Returns:
@@ -1094,17 +1160,17 @@ def diagonalize_qwc_groupings(qwc_groupings):
             * list[list[Operation]]: a list of instances of the qwc_rotation
               template which diagonalizes the qubit-wise commuting grouping,
               order corresponding to qwc_groupings
-            * list[list[Operator]]: a list of QWC groupings diagonalized in the
+            * list[list[Observable]]: a list of QWC groupings diagonalized in the
               computational basis, order corresponding to qwc_groupings
 
     **Example**
 
-    >>> qwc_group_1 = [qp.X(0) @ qp.Z(1),
-    ...                qp.X(0) @ qp.Y(3),
-    ...                   qp.Z(1) @ qp.Y(3)]
-    >>> qwc_group_2 = [qp.Y(0),
-    ...                qp.Y(0) @ qp.X(2),
-    ...                qp.X(1) @ qp.Z(3)]
+    >>> qwc_group_1 = [qml.X(0) @ qml.Z(1),
+                       qml.X(0) @ qml.Y(3),
+                       qml.Z(1) @ qml.Y(3)]
+    >>> qwc_group_2 = [qml.Y(0),
+                       qml.Y(0) @ qml.X(2),
+                       qml.X(1) @ qml.Z(3)]
     >>> post_rotations, diag_groupings = diagonalize_qwc_groupings([qwc_group_1, qwc_group_2])
     >>> post_rotations
     [[RY(-1.5707963267948966, wires=[0]), RX(1.5707963267948966, wires=[3])],
@@ -1130,6 +1196,54 @@ def diagonalize_qwc_groupings(qwc_groupings):
         diag_groupings.append(diag_grouping)
 
     return post_rotations, diag_groupings
+
+
+# from observable_hf.py -------------------------
+def simplify(h, cutoff=1.0e-12):
+    r"""Add together identical terms in the Hamiltonian.
+
+    The Hamiltonian terms with identical Pauli words are added together and eliminated if the
+    overall coefficient is smaller than a cutoff value.
+
+    Args:
+        h (Hamiltonian): PennyLane Hamiltonian
+        cutoff (float): cutoff value for discarding the negligible terms
+
+    Returns:
+        Hamiltonian: Simplified PennyLane Hamiltonian
+
+    **Example**
+
+    >>> c = np.array([0.5, 0.5])
+    >>> h = qml.Hamiltonian(c, [qml.X(0) @ qml.Y(1), qml.X(0) @ qml.Y(1)])
+    >>> print(simplify(h))
+    (1.0) [X0 Y1]
+    """
+    wiremap = dict(zip(h.wires, range(len(h.wires) + 1)))
+
+    c, o = [], []
+    for i, op in enumerate(h.ops):
+        op = qml.operation.Tensor(op).prune()
+        op = qml.pauli.pauli_word_to_string(op, wire_map=wiremap)
+        if op not in o:
+            c.append(h.coeffs[i])
+            o.append(op)
+        else:
+            c[o.index(op)] += h.coeffs[i]
+
+    coeffs, ops = [], []
+    c = qml.math.convert_like(c, c[0])
+    nonzero_ind = qml.math.argwhere(abs(c) > cutoff).flatten()
+    for i in nonzero_ind:
+        coeffs.append(c[i])
+        ops.append(qml.pauli.string_to_pauli_word(o[i], wire_map=wiremap))
+
+    try:
+        coeffs = qml.math.stack(coeffs)
+    except ValueError:
+        pass
+
+    return qml.Hamiltonian(qml.math.array(coeffs), ops)
 
 
 pauli_mult_dict = {
@@ -1192,7 +1306,7 @@ def _binary_matrix_from_pws(terms, num_qubits, wire_map=None):
            [0, 0, 0, 1, 1, 0, 0, 1]])
     """
     if wire_map is None:
-        all_wires = qp.wires.Wires.all_wires([term.wires for term in terms], sort=True)
+        all_wires = qml.wires.Wires.all_wires([term.wires for term in terms], sort=True)
         wire_map = {i: c for c, i in enumerate(all_wires)}
 
     binary_matrix = np.zeros((len(terms), 2 * num_qubits), dtype=int)
@@ -1204,21 +1318,3 @@ def _binary_matrix_from_pws(terms, num_qubits, wire_map=None):
                 binary_matrix[idx][wire_map[wire]] = 1
 
     return binary_matrix
-
-
-@lru_cache
-def pauli_eigs(n):
-    r"""Eigenvalues for :math:`A^{\otimes n}`, where :math:`A` is
-    Pauli operator, or shares its eigenvalues.
-
-    As an example if n==2, then the eigenvalues of a tensor product consisting
-    of two matrices sharing the eigenvalues with Pauli matrices is returned.
-
-    Args:
-        n (int): the number of qubits the matrix acts on
-    Returns:
-        list: the eigenvalues of the specified observable
-    """
-    if n == 1:
-        return np.array([1.0, -1.0])
-    return np.concatenate([pauli_eigs(n - 1), -pauli_eigs(n - 1)])
